@@ -6,10 +6,7 @@ mod quota;
 mod routes;
 mod xunfei;
 
-use axum::{
-    routing::get,
-    Router,
-};
+use axum::{routing::get, Router};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +46,11 @@ async fn main() {
             let old_len = records.len();
             *records = new_records;
             if records.len() != old_len {
-                tracing::info!("Refreshed data: {} records (was {})", records.len(), old_len);
+                tracing::info!(
+                    "Refreshed data: {} records (was {})",
+                    records.len(),
+                    old_len
+                );
             } else {
                 tracing::debug!("Refreshed data: {} records (unchanged)", records.len());
             }

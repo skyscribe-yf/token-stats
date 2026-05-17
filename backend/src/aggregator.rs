@@ -121,20 +121,20 @@ fn record_matches_bound(
     let from_ok = match from {
         Some(TimeBound::DateTime(f)) => {
             let from_utc = local_naive_to_utc(f);
-            record_dt.map_or(false, |rd| rd >= from_utc)
+            record_dt.is_some_and(|rd| rd >= from_utc)
         }
-        Some(TimeBound::Date(f)) => record_date.map_or(false, |rd| rd >= *f),
+        Some(TimeBound::Date(f)) => record_date.is_some_and(|rd| rd >= *f),
         None => true,
     };
 
     let to_ok = match to {
         Some(TimeBound::DateTime(t)) => {
             let to_utc = local_naive_to_utc(t);
-            record_dt.map_or(false, |rd| rd <= to_utc)
+            record_dt.is_some_and(|rd| rd <= to_utc)
         }
         Some(TimeBound::Date(t)) => {
             // For date-only upper bound, include the entire day
-            record_date.map_or(false, |rd| rd <= *t)
+            record_date.is_some_and(|rd| rd <= *t)
         }
         None => true,
     };
@@ -149,7 +149,7 @@ pub fn paginate_requests(
     tz: Option<&FixedOffset>,
 ) -> PaginatedRequests {
     let total = records.len();
-    let total_pages = (total + limit - 1) / limit;
+    let total_pages = total.div_ceil(limit);
     let start = (page - 1) * limit;
     let end = (start + limit).min(total);
 
@@ -264,7 +264,7 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
         }
     }
 
-    result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    result.sort_by_key(|v| std::cmp::Reverse(v.total_tokens));
     result
 }
 
@@ -360,7 +360,7 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         }
     }
 
-    result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    result.sort_by_key(|m| std::cmp::Reverse(m.total_tokens));
     result
 }
 
@@ -397,7 +397,7 @@ fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
         }
     }
 
-    result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    result.sort_by_key(|s| std::cmp::Reverse(s.total_tokens));
     result
 }
 
