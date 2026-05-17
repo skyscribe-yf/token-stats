@@ -11,7 +11,13 @@
 - System check: Rust 1.95.0, Node 24.15.0 available
 - Nginx not installed (no sudo access) - will provide config template
 
-## Next Steps
-- Phase 1: Create Rust backend
-- Phase 2: Create React frontend
-- Phase 3: Integration
+## Completed
+- ✅ Phase 1: Rust backend with Axum, JSONL parser, aggregation engine, REST API
+- ✅ Phase 2: React frontend with Vite, Tailwind CSS, Recharts, beautiful dashboard
+- ✅ Phase 3: Integration with nginx config, systemd service, setup script
+- ✅ Git repo initialized and pushed to https://github.com/skyscribe-yf/token-stats
+
+## Next Steps (for user)
+- Run `./setup.sh` to install nginx config and systemd service
+- Or run `./start.sh` for quick manual testing
+- Access dashboard at http://localhost:8080

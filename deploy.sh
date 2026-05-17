@@ -65,7 +65,7 @@ echo ""
 echo "🧪 Verifying deployment..."
 sleep 1
 
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/ 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
     echo "✅ Dashboard is LIVE at http://localhost:8080"
 else
@@ -75,7 +75,7 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📊  Dashboard:  http://localhost:8080"
+echo "📊  Dashboard:  http://localhost:8081"
 echo "🔧  Backend:    http://localhost:3000 (direct)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""

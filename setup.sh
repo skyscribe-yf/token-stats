@@ -117,7 +117,7 @@ fi
 echo ""
 echo "🎉 Setup complete!"
 echo ""
-echo "📊 Access your dashboard at: http://localhost:8080"
+echo "📊 Access your dashboard at: http://localhost:8081"
 echo ""
 echo "Useful commands:"
 echo "  sudo systemctl start token-stats   # Start backend"
