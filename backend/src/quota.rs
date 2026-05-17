@@ -12,12 +12,14 @@ use std::path::PathBuf;
 
 // ─── Error type ───────────────────────────────────────────────────────────────
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaError {
     pub provider: String,
     pub message: String,
 }
 
+#[cfg(test)]
 impl QuotaError {
     pub fn new(provider: &str, message: &str) -> Self {
         Self {
@@ -27,6 +29,7 @@ impl QuotaError {
     }
 }
 
+#[cfg(test)]
 impl std::fmt::Display for QuotaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}] {}", self.provider, self.message)
@@ -53,7 +56,7 @@ pub struct MoonshotBalanceData {
 
 /// Simplified Kimi quota info for the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuotaKimi{
+pub struct QuotaKimi {
     pub provider: String,
     pub available_balance: f64,
     pub voucher_balance: f64,
@@ -131,7 +134,9 @@ pub struct OpenCodeQuotaStatus {
 
 /// Read Moonshot API key from environment variable.
 pub fn get_moonshot_api_key() -> Option<String> {
-    std::env::var("MOONSHOT_API_KEY").ok().filter(|k| !k.is_empty())
+    std::env::var("MOONSHOT_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
 }
 
 /// Path to the OpenCode auth.json file.
@@ -141,7 +146,11 @@ pub fn get_opencode_auth_path() -> PathBuf {
         return PathBuf::from(path);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".local").join("share").join("opencode").join("auth.json")
+    PathBuf::from(home)
+        .join(".local")
+        .join("share")
+        .join("opencode")
+        .join("auth.json")
 }
 
 /// Read opencode-go API key from local auth.json or env var `OPENCODE_API_KEY`.
@@ -176,14 +185,12 @@ pub fn get_opencode_api_key() -> Option<String> {
 
 /// Get the OpenCode base URL for API calls.
 pub fn get_opencode_base_url() -> String {
-    std::env::var("OPENCODE_BASE_URL")
-        .unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
+    std::env::var("OPENCODE_BASE_URL").unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
 }
 
 /// Get the Moonshot API base URL.
 pub fn get_moonshot_base_url() -> String {
-    std::env::var("MOONSHOT_BASE_URL")
-        .unwrap_or_else(|_| "https://api.moonshot.ai".to_string())
+    std::env::var("MOONSHOT_BASE_URL").unwrap_or_else(|_| "https://api.moonshot.ai".to_string())
 }
 
 // ─── Fetcher ──────────────────────────────────────────────────────────────────
@@ -199,11 +206,6 @@ impl QuotaFetcher {
         Self {
             client: reqwest::Client::new(),
         }
-    }
-
-    /// Create a fetcher with a custom reqwest client (for testing).
-    pub fn with_client(client: reqwest::Client) -> Self {
-        Self { client }
     }
 
     /// Fetch Kimi balance from the Moonshot API.
@@ -264,7 +266,10 @@ impl QuotaFetcher {
             return KimiQuotaStatus {
                 available: false,
                 data: None,
-                error: Some(format!("API error code {}: {}", balance.code, balance.scode)),
+                error: Some(format!(
+                    "API error code {}: {}",
+                    balance.code, balance.scode
+                )),
             };
         }
 
@@ -292,7 +297,10 @@ impl QuotaFetcher {
                 return OpenCodeQuotaStatus {
                     available: false,
                     data: None,
-                    error: Some("opencode-go API key not found in auth.json or OPENCODE_API_KEY".to_string()),
+                    error: Some(
+                        "opencode-go API key not found in auth.json or OPENCODE_API_KEY"
+                            .to_string(),
+                    ),
                 };
             }
         };
@@ -367,24 +375,22 @@ impl QuotaFetcher {
             .send()
             .await
         {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<OpenAiUsageResponse>().await {
-                    Ok(usage) => {
-                        total_usage_usd = usage.total_usage;
-                        usage_percent = hard_limit_usd.and_then(|limit| {
-                            if limit > 0.0 {
-                                total_usage_usd.map(|used| (used / limit * 100.0).min(100.0))
-                            } else {
-                                None
-                            }
-                        });
-                    }
-                    Err(_) => {
-                        total_usage_usd = None;
-                        usage_percent = None;
-                    }
+            Ok(r) if r.status().is_success() => match r.json::<OpenAiUsageResponse>().await {
+                Ok(usage) => {
+                    total_usage_usd = usage.total_usage;
+                    usage_percent = hard_limit_usd.and_then(|limit| {
+                        if limit > 0.0 {
+                            total_usage_usd.map(|used| (used / limit * 100.0).min(100.0))
+                        } else {
+                            None
+                        }
+                    });
                 }
-            }
+                Err(_) => {
+                    total_usage_usd = None;
+                    usage_percent = None;
+                }
+            },
             _ => {
                 // Usage endpoint may not be available; that's OK
                 total_usage_usd = None;
@@ -555,8 +561,14 @@ mod tests {
         let resp: OpenAiSubscriptionResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.has_payment_method, Some(true));
         assert_eq!(resp.hard_limit_usd, Some(100.0));
-        assert_eq!(resp.plan.as_ref().and_then(|p| p.title.as_deref()), Some("Go Plan"));
-        assert_eq!(resp.plan.as_ref().and_then(|p| p.id.as_deref()), Some("opencode-go-monthly"));
+        assert_eq!(
+            resp.plan.as_ref().and_then(|p| p.title.as_deref()),
+            Some("Go Plan")
+        );
+        assert_eq!(
+            resp.plan.as_ref().and_then(|p| p.id.as_deref()),
+            Some("opencode-go-monthly")
+        );
     }
 
     #[test]
@@ -659,7 +671,10 @@ mod tests {
         reset_env_var("MOONSHOT_API_KEY", old_key);
 
         assert!(!status.available);
-        assert!(status.error.unwrap().contains("MOONSHOT_API_KEY not configured"));
+        assert!(status
+            .error
+            .unwrap()
+            .contains("MOONSHOT_API_KEY not configured"));
     }
 
     #[tokio::test]
@@ -668,7 +683,9 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/v1/users/me/balance"))
-            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"#))
+            .respond_with(ResponseTemplate::new(401).set_body_string(
+                r#"{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"#,
+            ))
             .mount(&mock_server)
             .await;
 
@@ -796,7 +813,10 @@ mod tests {
         reset_env_var("OPENCODE_AUTH_PATH", old_auth);
 
         assert!(!status.available);
-        assert!(status.error.unwrap().contains("opencode-go API key not found"));
+        assert!(status
+            .error
+            .unwrap()
+            .contains("opencode-go API key not found"));
     }
 
     #[tokio::test]
@@ -805,7 +825,10 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/v1/dashboard/billing/subscription"))
-            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"Invalid API key"}}"#))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string(r#"{"error":{"message":"Invalid API key"}}"#),
+            )
             .mount(&mock_server)
             .await;
 

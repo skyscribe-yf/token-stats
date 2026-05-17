@@ -146,9 +146,9 @@ providers = ["openai", "ainaiba"]
 
         apply_vendor_merge(&mut records, &map);
 
-        assert_eq!(records[0].provider, "kimi");      // unchanged (already kimi)
-        assert_eq!(records[1].provider, "kimi");      // remapped
-        assert_eq!(records[2].provider, "ainaba");    // remapped
+        assert_eq!(records[0].provider, "kimi"); // unchanged (already kimi)
+        assert_eq!(records[1].provider, "kimi"); // remapped
+        assert_eq!(records[2].provider, "ainaba"); // remapped
         assert_eq!(records[3].provider, "anthropic"); // unchanged
     }
 
