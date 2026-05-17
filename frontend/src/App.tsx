@@ -772,7 +772,7 @@ export default function App() {
                     ? "加载中..."
                     : [
                         xunfei?.available && xunfei.data
-                          ? "讯飞: " + (xunfei.data.usage.rp5h_limit > 0 ? "5h " + (xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + "月 " + (xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0) + "%"
+                          ? "讯飞: " + (xunfei.data.usage.rp5h_limit > 0 ? "5h " + (xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + (xunfei.data.usage.rpw_limit > 0 ? "周 " + (xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100).toFixed(0) + "%, " : "") + "月 " + (xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0) + "%"
                           : xunfei && !xunfeiLoading ? "讯飞: 获取失败" : null,
                         quota?.kimi?.available && quota.kimi.data
                           ? "Kimi: " + (quota.kimi.data.rp5h_limit > 0 ? "5h " + (quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + "周 " + (quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100).toFixed(0) + "%"
@@ -814,7 +814,7 @@ export default function App() {
                         <div>
                           <div className="flex justify-between text-[10px] text-slate-500">
                             <span>月度</span>
-                            <span>{(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0)}%</span>
+                            <span>{formatNumber(xunfei.data.usage.package_used)}/{formatNumber(xunfei.data.usage.package_limit)} ({(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0)}%)</span>
                           </div>
                           <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                             <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.package_used, xunfei.data.usage.package_limit)}
@@ -822,11 +822,24 @@ export default function App() {
                             />
                           </div>
                         </div>
+                        {xunfei.data.usage.rpw_limit > 0 && (
+                          <div>
+                            <div className="flex justify-between text-[10px] text-slate-500">
+                              <span>周限额</span>
+                              <span>{formatNumber(xunfei.data.usage.rpw_used)}/{formatNumber(xunfei.data.usage.rpw_limit)} ({(xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100).toFixed(0)}%)</span>
+                            </div>
+                            <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                              <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.rpw_used, xunfei.data.usage.rpw_limit)}
+                                style={{ width: (Math.min(xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100, 100)) + "%" }}
+                              />
+                            </div>
+                          </div>
+                        )}
                         {xunfei.data.usage.rp5h_limit > 0 && (
                           <div>
                             <div className="flex justify-between text-[10px] text-slate-500">
                               <span>5小时</span>
-                              <span>{(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0)}%</span>
+                              <span>{formatNumber(xunfei.data.usage.rp5h_used)}/{formatNumber(xunfei.data.usage.rp5h_limit)} ({(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0)}%)</span>
                             </div>
                             <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                               <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.rp5h_used, xunfei.data.usage.rp5h_limit)}
