@@ -18,6 +18,7 @@ toml = "0.8"
 
 [dev-dependencies]
 wiremock = "0.6"
+temp-env = "0.3"
 
 [profile.release]
 opt-level = 3
