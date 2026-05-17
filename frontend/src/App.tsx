@@ -788,7 +788,7 @@ export default function App() {
                   配额概览
                   <span className="text-[11px] text-slate-400 font-normal ml-1">
                     {!quotaLoading && quota?.kimi?.available && quota.kimi.data
-                      ? `Kimi: ¥${quota.kimi.data.available_balance.toFixed(2)}`
+                      ? `Kimi: ¥${quota.kimi.data.available_balance?.toFixed(2) ?? "?"}`
                       : !quotaLoading && quota?.opencode_go?.available && quota.opencode_go.data
                       ? `OpenCode: ${quota.opencode_go.data.usage_percent?.toFixed(0) ?? "?"}%已用`
                       : quotaLoading ? "加载中..." : ""}
@@ -814,11 +814,11 @@ export default function App() {
                     ) : quota?.kimi?.available && quota.kimi.data ? (
                       <div>
                         <p className="text-xl font-bold text-slate-800">
-                          ¥{quota.kimi.data.available_balance.toFixed(2)}
+                          ¥{quota.kimi.data.available_balance?.toFixed(2) ?? "?"}
                         </p>
                         <div className="flex gap-3 mt-1 text-xs text-slate-500">
-                          <span>现金: ¥{quota.kimi.data.cash_balance.toFixed(2)}</span>
-                          <span>赠送: ¥{quota.kimi.data.voucher_balance.toFixed(2)}</span>
+                          <span>现金: ¥{quota.kimi.data.cash_balance?.toFixed(2) ?? "?"}</span>
+                          <span>赠送: ¥{quota.kimi.data.voucher_balance?.toFixed(2) ?? "?"}</span>
                         </div>
                       </div>
                     ) : (
@@ -852,7 +852,7 @@ export default function App() {
                           </span>
                           {quota.opencode_go.data.hard_limit_usd != null && (
                             <span className="text-[11px] text-slate-400">
-                              上限 ${quota.opencode_go.data.hard_limit_usd.toFixed(0)}
+                              上限 ${quota.opencode_go.data.hard_limit_usd?.toFixed(0) ?? "?"}
                             </span>
                           )}
                         </div>
@@ -860,9 +860,9 @@ export default function App() {
                           <div className="mt-1">
                             <div className="flex justify-between text-xs text-slate-500 mb-0.5">
                               <span>
-                                已用 ${quota.opencode_go.data.total_usage_usd?.toFixed(2) || "?"}
+                                已用 ${quota.opencode_go.data.total_usage_usd?.toFixed(2) ?? "?"}
                               </span>
-                              <span>{quota.opencode_go.data.usage_percent.toFixed(1)}%</span>
+                              <span>{quota.opencode_go.data.usage_percent?.toFixed(1) ?? "?"}%</span>
                             </div>
                             <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                               <div
@@ -880,7 +880,7 @@ export default function App() {
                         )}
                         {quota.opencode_go.data.remaining_usd != null && (
                           <p className="text-xs text-slate-500 mt-1">
-                            剩余: ${quota.opencode_go.data.remaining_usd.toFixed(2)}
+                            剩余: ${quota.opencode_go.data.remaining_usd?.toFixed(2) ?? "?"}
                           </p>
                         )}
                       </div>
@@ -926,7 +926,7 @@ export default function App() {
                           {xunfei.data.status === "active" ? "有效" : xunfei.data.status}
                         </span>
                         <span className="text-slate-400">
-                          ¥{(xunfei.data.price / 100).toFixed(2)}/月
+                          ¥{xunfei.data.price != null ? (xunfei.data.price / 100).toFixed(2) : "?"}/月
                         </span>
                         <span className="text-slate-400">
                           到期: {xunfei.data.expires_at.replace(" ", "T")}
@@ -939,7 +939,7 @@ export default function App() {
                         <div>
                           <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
                             <span>月度请求</span>
-                            <span>{xunfei.data.usage.package_used.toLocaleString()} / {xunfei.data.usage.package_limit.toLocaleString()} ({(100 - xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0)}% 剩余)</span>
+                            <span>{xunfei.data.usage.package_used?.toLocaleString() ?? "?"} / {xunfei.data.usage.package_limit?.toLocaleString() ?? "?"} ({xunfei.data.usage.package_used != null && xunfei.data.usage.package_limit != null ? (100 - xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0) : "?"}% 剩余)</span>
                           </div>
                           <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                             <div
@@ -1000,8 +1000,8 @@ export default function App() {
 
                       {/* Balance & models footer */}
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                        <span>余额: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.cash / 100).toFixed(2)}</span></span>
-                        {xunfei.data.balance.virtual_balance > 0 && (
+                        <span>余额: <span className="font-medium text-slate-700">¥{xunfei.data.balance.cash != null ? (xunfei.data.balance.cash / 100).toFixed(2) : "?"}</span></span>
+                        {xunfei.data.balance.virtual_balance != null && xunfei.data.balance.virtual_balance > 0 && (
                           <span>赠送: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.virtual_balance / 100).toFixed(2)}</span></span>
                         )}
                         <span className="text-slate-300">|</span>
