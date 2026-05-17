@@ -101,12 +101,14 @@ export interface FilterOptions {
 export async function fetchStats(
   from?: string,
   to?: string,
-  source?: string
+  source?: string,
+  tzOffset?: number
 ): Promise<StatsResponse> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
   if (to) params.set("to", to);
   if (source) params.set("source", source);
+  if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
   const res = await fetch(`${API_BASE}/api/stats?${params}`);
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
@@ -119,7 +121,8 @@ export async function fetchRequests(
   model?: string,
   source?: string,
   page: number = 1,
-  limit: number = 50
+  limit: number = 50,
+  tzOffset?: number
 ): Promise<PaginatedRequests> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
@@ -129,6 +132,7 @@ export async function fetchRequests(
   if (source) params.set("source", source);
   params.set("page", String(page));
   params.set("limit", String(limit));
+  if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
   const res = await fetch(`${API_BASE}/api/requests?${params}`);
   if (!res.ok) throw new Error("Failed to fetch requests");
   return res.json();

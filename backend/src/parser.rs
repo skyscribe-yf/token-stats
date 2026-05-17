@@ -164,6 +164,21 @@ pub fn parse_ccswitch_db<P: AsRef<Path>>(path: P) -> Vec<TokenRecord> {
                         }
                     };
 
+                    // ── Cache semantics differ by API ──
+                    // OpenAI (Codex): input_tokens INCLUDES cache_read_tokens (cached is a subset)
+                    // Anthropic (Claude Code): input_tokens does NOT include cache tokens (separate)
+                    //
+                    // We normalize to the Anthropic convention where input_tokens = non-cached input only,
+                    // so that total_tokens = input + output + cache_read + cache_write is never double-counted.
+                    let (effective_input, effective_cache_read) = if data_source == "codex_session" {
+                        // OpenAI: input_tokens includes cached; subtract to get non-cached input
+                        let non_cached = (input_tokens - cache_read_tokens).max(0);
+                        (non_cached, cache_read_tokens)
+                    } else {
+                        // Anthropic / others: input_tokens already excludes cache
+                        (input_tokens, cache_read_tokens)
+                    };
+
                     let cost: f64 = total_cost_usd.parse().unwrap_or(0.0);
 
                     records.push(TokenRecord {
@@ -173,11 +188,11 @@ pub fn parse_ccswitch_db<P: AsRef<Path>>(path: P) -> Vec<TokenRecord> {
                         provider,
                         model: request_model, // request_model is what was actually requested
                         source: source.to_string(),
-                        input_tokens,
+                        input_tokens: effective_input,
                         output_tokens,
-                        cache_read_tokens,
+                        cache_read_tokens: effective_cache_read,
                         cache_write_tokens: cache_creation_tokens,
-                        total_tokens: input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens,
+                        total_tokens: effective_input + output_tokens + effective_cache_read + cache_creation_tokens,
                         cost,
                     });
                 }

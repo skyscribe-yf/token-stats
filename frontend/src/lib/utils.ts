@@ -17,8 +17,46 @@ export function formatPercent(pct: number): string {
   return pct.toFixed(1) + "%";
 }
 
+/** Format a date string (e.g. "2025-05-17") for display – keeps as-is since it's just a date */
 export function formatDate(dateStr: string): string {
   return dateStr;
+}
+
+/** Format a UTC RFC3339 timestamp to local time string for display */
+export function formatTime(utcTimeStr: string): string {
+  if (!utcTimeStr || utcTimeStr === "unknown") return utcTimeStr;
+  try {
+    const d = new Date(utcTimeStr);
+    if (isNaN(d.getTime())) return utcTimeStr;
+    // Format as local datetime: "2025-05-17 16:30:00"
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  } catch {
+    return utcTimeStr;
+  }
+}
+
+/** Get today's date in local timezone as YYYY-MM-DD */
+export function getLocalToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Get a Date offset by `days` from now, formatted as YYYY-MM-DD in local timezone */
+export function getLocalDateOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Get a datetime-local value (YYYY-MM-DDTHH:mm) offset by `days` from now in local timezone */
+export function getLocalDatetimeOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export const SOURCE_COLORS: Record<string, string> = {

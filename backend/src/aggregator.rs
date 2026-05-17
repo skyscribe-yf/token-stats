@@ -1,22 +1,37 @@
 use crate::models::*;
 use crate::routes::TimeBound;
+use chrono::FixedOffset;
 use std::collections::HashMap;
+
+/// Get the local date string for a record, given an optional timezone offset
+fn local_date_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> String {
+    if let Some(tz) = tz {
+        // Convert UTC time to local timezone and extract the date
+        if let Some(utc_dt) = record.parsed_time() {
+            let local_dt = utc_dt.with_timezone(tz);
+            return local_dt.format("%Y-%m-%d").to_string();
+        }
+    }
+    // Fallback: use the record's own date field (UTC-based)
+    record.date.clone()
+}
 
 pub fn aggregate_records(
     records: &[TokenRecord],
     from: Option<&TimeBound>,
     to: Option<&TimeBound>,
     source: Option<&str>,
+    tz: Option<&FixedOffset>,
 ) -> StatsResponse {
     let filtered: Vec<&TokenRecord> = records
         .iter()
-        .filter(|r| record_matches_bound(r, from, to))
+        .filter(|r| record_matches_bound(r, from, to, tz))
         .filter(|r| source.map(|s| r.source == s).unwrap_or(true))
         .collect();
 
     let overall = compute_overall_stats(&filtered);
     let by_vendor = compute_vendor_stats(&filtered);
-    let by_date = compute_date_stats(&filtered);
+    let by_date = compute_date_stats(&filtered, tz);
     let by_model = compute_model_stats(&filtered);
     let by_source = compute_source_stats(&filtered);
 
@@ -36,10 +51,11 @@ pub fn filter_records<'a>(
     provider: Option<&str>,
     model: Option<&str>,
     source: Option<&str>,
+    tz: Option<&FixedOffset>,
 ) -> Vec<&'a TokenRecord> {
     records
         .iter()
-        .filter(|r| record_matches_bound(r, from, to))
+        .filter(|r| record_matches_bound(r, from, to, tz))
         .filter(|r| {
             let provider_ok = provider.map(|p| r.provider == p).unwrap_or(true);
             let model_ok = model.map(|m| r.model == m).unwrap_or(true);
@@ -49,9 +65,14 @@ pub fn filter_records<'a>(
         .collect()
 }
 
-fn record_matches_bound(record: &TokenRecord, from: Option<&TimeBound>, to: Option<&TimeBound>) -> bool {
+fn record_matches_bound(record: &TokenRecord, from: Option<&TimeBound>, to: Option<&TimeBound>, tz: Option<&FixedOffset>) -> bool {
     let record_dt = record.parsed_time().map(|dt| dt.naive_utc());
-    let record_date = record.parsed_date();
+    // Use local date if tz is provided, otherwise use UTC date
+    let record_date = if let Some(tz) = tz {
+        record.parsed_time().map(|dt| dt.with_timezone(tz).date_naive())
+    } else {
+        record.parsed_date()
+    };
 
     let from_ok = match from {
         Some(TimeBound::DateTime(f)) => {
@@ -81,6 +102,7 @@ pub fn paginate_requests(
     records: Vec<&TokenRecord>,
     page: usize,
     limit: usize,
+    tz: Option<&FixedOffset>,
 ) -> PaginatedRequests {
     let total = records.len();
     let total_pages = (total + limit - 1) / limit;
@@ -89,19 +111,22 @@ pub fn paginate_requests(
 
     let data: Vec<DetailedRequest> = records[start..end]
         .iter()
-        .map(|r| DetailedRequest {
-            date: r.date.clone(),
-            time: r.time.clone(),
-            provider: r.provider.clone(),
-            model: r.model.clone(),
-            source: r.source.clone(),
-            input_tokens: r.input_tokens,
-            output_tokens: r.output_tokens,
-            cache_read_tokens: r.cache_read_tokens,
-            cache_write_tokens: r.cache_write_tokens,
-            total_tokens: r.total_tokens,
-            cost: r.cost,
-            cache_hit_ratio: r.cache_hit_ratio(),
+        .map(|r| {
+            let local_date = local_date_for_record(r, tz);
+            DetailedRequest {
+                date: local_date,
+                time: r.time.clone(),
+                provider: r.provider.clone(),
+                model: r.model.clone(),
+                source: r.source.clone(),
+                input_tokens: r.input_tokens,
+                output_tokens: r.output_tokens,
+                cache_read_tokens: r.cache_read_tokens,
+                cache_write_tokens: r.cache_write_tokens,
+                total_tokens: r.total_tokens,
+                cost: r.cost,
+                cache_hit_ratio: r.cache_hit_ratio(),
+            }
         })
         .collect();
 
@@ -197,12 +222,13 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
     result
 }
 
-fn compute_date_stats(records: &[&TokenRecord]) -> Vec<DateStats> {
+fn compute_date_stats(records: &[&TokenRecord], tz: Option<&FixedOffset>) -> Vec<DateStats> {
     let mut map: HashMap<String, DateStats> = HashMap::new();
 
     for r in records {
-        let entry = map.entry(r.date.clone()).or_insert_with(|| DateStats {
-            date: r.date.clone(),
+        let local_date = local_date_for_record(r, tz);
+        let entry = map.entry(local_date.clone()).or_insert_with(|| DateStats {
+            date: local_date,
             calls: 0,
             input_tokens: 0,
             output_tokens: 0,

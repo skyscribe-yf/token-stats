@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::NaiveDate;
+use chrono::{NaiveDate, FixedOffset};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -19,6 +19,9 @@ pub struct StatsQuery {
     pub from: Option<String>,
     pub to: Option<String>,
     pub source: Option<String>,
+    /// Timezone offset in minutes from UTC (e.g. 480 for UTC+8, -300 for UTC-5)
+    /// Used to compute local dates for by_date aggregation
+    pub tz_offset: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +31,8 @@ pub struct RequestsQuery {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub source: Option<String>,
+    /// Timezone offset in minutes from UTC
+    pub tz_offset: Option<i32>,
     #[serde(default = "default_page")]
     pub page: usize,
     #[serde(default = "default_limit")]
@@ -61,6 +66,11 @@ pub fn parse_time_bound(s: &str) -> Option<TimeBound> {
     None
 }
 
+/// Convert a tz_offset in minutes to a chrono FixedOffset
+fn tz_offset_to_fixed(offset_minutes: i32) -> FixedOffset {
+    FixedOffset::east_opt(offset_minutes * 60).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
+}
+
 pub async fn get_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StatsQuery>,
@@ -69,8 +79,9 @@ pub async fn get_stats(
     let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
+    let tz = query.tz_offset.map(tz_offset_to_fixed);
 
-    let response = aggregator::aggregate_records(&records, from.as_ref(), to.as_ref(), source);
+    let response = aggregator::aggregate_records(&records, from.as_ref(), to.as_ref(), source, tz.as_ref());
     Json(response)
 }
 
@@ -84,9 +95,10 @@ pub async fn get_requests(
     let provider = query.provider.as_deref().filter(|s| !s.is_empty());
     let model = query.model.as_deref().filter(|s| !s.is_empty());
     let source = query.source.as_deref().filter(|s| !s.is_empty());
+    let tz = query.tz_offset.map(tz_offset_to_fixed);
 
-    let filtered = aggregator::filter_records(&records, from.as_ref(), to.as_ref(), provider, model, source);
-    let paginated = aggregator::paginate_requests(filtered, query.page, query.limit);
+    let filtered = aggregator::filter_records(&records, from.as_ref(), to.as_ref(), provider, model, source, tz.as_ref());
+    let paginated = aggregator::paginate_requests(filtered, query.page, query.limit, tz.as_ref());
 
     Json(paginated)
 }

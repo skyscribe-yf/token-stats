@@ -39,6 +39,10 @@ import {
   formatCost,
   formatPercent,
   formatDate,
+  formatTime,
+  getLocalToday,
+  getLocalDateOffset,
+  getLocalDatetimeOffset,
   getSourceColor,
   getSourceLabel,
 } from "./lib/utils";
@@ -97,27 +101,21 @@ const ZH = {
 type DateMode = "day" | "range";
 
 function getDefaultDateRange() {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - 30);
   return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
+    from: getLocalDateOffset(30),
+    to: getLocalToday(),
   };
 }
 
 function getDefaultTimeRange() {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - 30);
   return {
-    from: from.toISOString().slice(0, 16),
-    to: to.toISOString().slice(0, 16),
+    from: getLocalDatetimeOffset(30),
+    to: getLocalDatetimeOffset(0),
   };
 }
 
 function getToday() {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalToday();
 }
 
 function SourceBadge({ source }: { source: string }) {
@@ -225,6 +223,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Compute timezone offset in minutes (e.g. +480 for UTC+8)
+  const tzOffset = useMemo(() => -new Date().getTimezoneOffset(), []);
+
   const effectiveRange = useMemo(() => {
     if (dateMode === "day") {
       return { from: selectedDay, to: selectedDay };
@@ -253,7 +254,7 @@ export default function App() {
     setError(null);
     try {
       const [s, f] = await Promise.all([
-        fetchStats(effectiveRange.from, effectiveRange.to, sourceFilter || undefined),
+        fetchStats(effectiveRange.from, effectiveRange.to, sourceFilter || undefined, tzOffset),
         fetchFilters(),
       ]);
       // Client-side filter if multiple sources selected
@@ -283,7 +284,8 @@ export default function App() {
         selectedModel || undefined,
         sourceFilter || undefined,
         page,
-        50
+        50,
+        tzOffset
       );
       // Client-side multi-source filter
       if (selectedSources.size > 0 && selectedSources.size < filters.sources.length && selectedSources.size !== 1) {
@@ -359,16 +361,13 @@ export default function App() {
   const applyPreset = (days: number) => {
     setDateMode("range");
     setUseTimeRange(false);
-    const to = new Date();
-    const from = new Date();
-    from.setDate(from.getDate() - days);
     setDateRange({
-      from: from.toISOString().slice(0, 10),
-      to: to.toISOString().slice(0, 10),
+      from: getLocalDateOffset(days),
+      to: getLocalToday(),
     });
     setTimeRange({
-      from: from.toISOString().slice(0, 16),
-      to: to.toISOString().slice(0, 16),
+      from: getLocalDatetimeOffset(days),
+      to: getLocalDatetimeOffset(0),
     });
   };
 
@@ -1075,7 +1074,7 @@ export default function App() {
                         className="hover:bg-slate-50 transition-colors"
                       >
                         <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
-                          {r.time}
+                          {formatTime(r.time)}
                         </td>
                         <td className="px-4 py-3">
                           <span
