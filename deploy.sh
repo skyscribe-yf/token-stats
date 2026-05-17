@@ -29,26 +29,35 @@ else
     echo "✅ Frontend already built"
 fi
 
-# ── 3. Install nginx config ──────────────────────────────────────────
+# ── 3. Deploy static files to nginx-accessible directory ────────────
+echo ""
+echo "📋 Deploying static files to /var/www/token-stats..."
+sudo rm -rf /var/www/token-stats
+sudo mkdir -p /var/www/token-stats
+sudo cp -r "$PROJECT_DIR/backend/static/"* /var/www/token-stats/
+sudo chmod -R 755 /var/www/token-stats
+echo "✅ Static files deployed to /var/www/token-stats"
+
+# ── 4. Install nginx config ──────────────────────────────────────────
 echo ""
 echo "📋 Installing nginx configuration..."
 sudo cp "$PROJECT_DIR/nginx/token-stats.conf" /etc/nginx/sites-available/token-stats
 sudo ln -sf /etc/nginx/sites-available/token-stats /etc/nginx/sites-enabled/token-stats
 echo "✅ nginx config installed to /etc/nginx/sites-available/token-stats"
 
-# ── 4. Test nginx ────────────────────────────────────────────────────
+# ── 5. Test nginx ────────────────────────────────────────────────────
 echo "🧪 Testing nginx configuration..."
 sudo nginx -t
 echo "✅ nginx config valid"
 
-# ── 5. Install systemd service ───────────────────────────────────────
+# ── 6. Install systemd service ───────────────────────────────────────
 echo ""
 echo "📋 Installing systemd service..."
 sudo cp "$PROJECT_DIR/nginx/token-stats.service" /etc/systemd/system/token-stats.service
 sudo systemctl daemon-reload
 echo "✅ systemd service installed"
 
-# ── 6. Start services ────────────────────────────────────────────────
+# ── 7. Start services ────────────────────────────────────────────────
 echo ""
 echo "🔄 Starting token-stats backend..."
 sudo systemctl enable token-stats
@@ -60,7 +69,7 @@ echo ""
 echo "🔄 Reloading nginx..."
 sudo nginx -s reload
 
-# ── 7. Verify ────────────────────────────────────────────────────────
+# ── 8. Verify ────────────────────────────────────────────────────────
 echo ""
 echo "🧪 Verifying deployment..."
 sleep 1
