@@ -32,6 +32,8 @@ import {
   type PaginatedRequests,
   type FilterOptions,
   type QuotaResponse,
+  type QuotaKimiCode,
+  type QuotaOpenCode,
   type XunfeiStatus,
 } from "./api";
 import {
@@ -106,33 +108,6 @@ const ZH = {
   updatedAt: "更新时间",
   updating: "更新中...",
 } as const;
-
-function QuotaCard({
-  title,
-  provider,
-  status,
-  children,
-}: {
-  title: string;
-  provider: string;
-  status: "available" | "unavailable" | "loading";
-  children: React.ReactNode;
-}) {
-  const borderColor = status === "available" ? "border-emerald-200" : "border-slate-200";
-  const indicatorColor = status === "available" ? "bg-emerald-500" : status === "loading" ? "bg-amber-400" : "bg-slate-300";
-  return (
-    <div className={`bg-white rounded-xl border ${borderColor} p-4 shadow-sm`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${indicatorColor}`} />
-          <span className="text-xs font-semibold text-slate-700">{title}</span>
-        </div>
-        <span className="text-[10px] text-slate-400">{provider}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
 
 function CustomTooltip({
   active,
@@ -289,6 +264,14 @@ export default function App() {
   const sourceFilter = useMemo(() => {
     return buildCsvFilterParam(selectedSources, filters.sources);
   }, [selectedSources, filters.sources]);
+
+  // Helper for progress bar colors based on usage ratio
+  const barColor = (used: number, limit: number) => {
+    const ratio = used / Math.max(limit, 1);
+    if (ratio > 0.8) return "bg-rose-500";
+    if (ratio > 0.5) return "bg-amber-500";
+    return "bg-emerald-500";
+  };
 
   const vendorFilter = useMemo(() => {
     return buildCsvFilterParam(selectedVendors, filters.vendors);
@@ -780,256 +763,95 @@ export default function App() {
               )}
             </div>
 
-            {/* Quota Overview - collapsible (collapsed by default) */}
-            {(quota || quotaLoading) && (
-              <details className="mb-3 group">
-                <summary className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-2.5 cursor-pointer select-none flex items-center gap-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors list-none">
-                  <svg className="w-3.5 h-3.5 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                  配额概览
-                  <span className="text-[11px] text-slate-400 font-normal ml-1">
-                    {!quotaLoading && quota?.kimi?.available && quota.kimi.data
-                      ? `Kimi: ¥${quota.kimi.data.available_balance?.toFixed(2) ?? "?"}`
-                      : !quotaLoading && quota?.opencode_go?.available && quota.opencode_go.data
-                      ? `OpenCode: ${quota.opencode_go.data.usage_percent?.toFixed(0) ?? "?"}%已用`
-                      : quotaLoading ? "加载中..." : ""}
-                  </span>
-                </summary>
-                <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Kimi balance */}
-                  <QuotaCard
-                    title="Kimi 余额"
-                    provider="kimi"
-                    status={
-                      quotaLoading
-                        ? "loading"
-                        : quota?.kimi?.available
-                        ? "available"
-                        : "unavailable"
-                    }
-                  >
-                    {quotaLoading ? (
-                      <div className="h-12 flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
-                      </div>
-                    ) : quota?.kimi?.available && quota.kimi.data ? (
-                      <div>
-                        <p className="text-xl font-bold text-slate-800">
-                          ¥{quota.kimi.data.available_balance?.toFixed(2) ?? "?"}
-                        </p>
-                        <div className="flex gap-3 mt-1 text-xs text-slate-500">
-                          <span>现金: ¥{quota.kimi.data.cash_balance?.toFixed(2) ?? "?"}</span>
-                          <span>赠送: ¥{quota.kimi.data.voucher_balance?.toFixed(2) ?? "?"}</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-400 italic">
-                        {quota?.kimi?.error || "不可用"}
-                      </p>
-                    )}
-                  </QuotaCard>
 
-                  {/* OpenCode-go quota */}
-                  <QuotaCard
-                    title="OpenCode-go 配额"
-                    provider="opencode-go"
-                    status={
-                      quotaLoading
-                        ? "loading"
-                        : quota?.opencode_go?.available
-                        ? "available"
-                        : "unavailable"
-                    }
-                  >
-                    {quotaLoading ? (
-                      <div className="h-12 flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
-                      </div>
-                    ) : quota?.opencode_go?.available && quota.opencode_go.data ? (
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs font-medium text-slate-600">
-                            {quota.opencode_go.data.plan_type || "No Plan"}
-                          </span>
-                          {quota.opencode_go.data.hard_limit_usd != null && (
-                            <span className="text-[11px] text-slate-400">
-                              上限 ${quota.opencode_go.data.hard_limit_usd?.toFixed(0) ?? "?"}
-                            </span>
-                          )}
-                        </div>
-                        {quota.opencode_go.data.usage_percent != null && (
-                          <div className="mt-1">
-                            <div className="flex justify-between text-xs text-slate-500 mb-0.5">
-                              <span>
-                                已用 ${quota.opencode_go.data.total_usage_usd?.toFixed(2) ?? "?"}
-                              </span>
-                              <span>{quota.opencode_go.data.usage_percent?.toFixed(1) ?? "?"}%</span>
-                            </div>
-                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  quota.opencode_go.data.usage_percent > 80
-                                    ? "bg-rose-500"
-                                    : quota.opencode_go.data.usage_percent > 50
-                                    ? "bg-amber-500"
-                                    : "bg-emerald-500"
-                                }`}
-                                style={{ width: `${Math.min(quota.opencode_go.data.usage_percent, 100)}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        {quota.opencode_go.data.remaining_usd != null && (
-                          <p className="text-xs text-slate-500 mt-1">
-                            剩余: ${quota.opencode_go.data.remaining_usd?.toFixed(2) ?? "?"}
-                          </p>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-400 italic">
-                        {quota?.opencode_go?.error || "不可用"}
-                      </p>
-                    )}
-                  </QuotaCard>
-                </div>
-              </details>
-            )}
+            {/* Vendor Subscriptions - collapsible (collapsed by default) */}
+            <details className="mb-3 group">
+              <summary className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-2.5 cursor-pointer select-none flex items-center gap-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors list-none">
+                <svg className="w-3.5 h-3.5 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                供应商订阅
+                <span className="text-[11px] text-slate-400 font-normal ml-1">
+                  {quotaLoading || xunfeiLoading
+                    ? "加载中..."
+                    : [
+                        xunfei?.available && xunfei.data
+                          ? "讯飞: " + (xunfei.data.status === "active" ? "✓" : "✗")
+                          : null,
+                        quota?.kimi?.available && quota.kimi.data
+                          ? "Kimi: " + quota.kimi.data.weekly_remaining + "/" + quota.kimi.data.weekly_limit
+                          : null,
+                        quota?.opencode_go?.available && quota.opencode_go.data
+                          ? "OpenCode: " + (quota.opencode_go.data.usage_percent?.toFixed(0) ?? "?") + "%已用"
+                          : quota?.opencode_go?.data?.workspace_url
+                            ? "OpenCode: " + "→" + "工作区"
+                            : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || "无可用订阅"}
+                </span>
+              </summary>
+              <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Xunfei */}
+                <div className={"bg-white rounded-xl border " + (xunfei?.available && xunfei.data?.status === "active" ? "border-emerald-200" : "border-slate-200") + " p-4 shadow-sm"}>
 
-
-            {/* Xunfei Coding Plan Subscription */}
-            {(xunfei || xunfeiLoading) && (
-              <div className="mb-6">
-                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${
-                        xunfeiLoading ? "bg-amber-400" :
-                        xunfei?.available && xunfei.data?.status === "active" ? "bg-emerald-500" : "bg-slate-300"
-                      }`} />
+                      <span className={"w-2 h-2 rounded-full " + (xunfeiLoading ? "bg-amber-400" : xunfei?.available && xunfei.data?.status === "active" ? "bg-emerald-500" : "bg-slate-300")} />
                       <span className="text-xs font-semibold text-slate-700">讯飞编程套餐</span>
                     </div>
                     <span className="text-[10px] text-slate-400">xfyun.cn</span>
                   </div>
                   {xunfeiLoading ? (
-                    <div className="h-16 flex items-center justify-center">
+                    <div className="h-12 flex items-center justify-center">
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
                     </div>
                   ) : xunfei?.available && xunfei.data ? (
                     <>
-                      {/* Plan info row */}
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs mb-3">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs mb-2">
                         <span className="font-bold text-slate-800">{xunfei.data.plan_name}</span>
-                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                          xunfei.data.status === "active"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-slate-100 text-slate-600"
-                        }`}>
+                        <span className={"px-1.5 py-0.5 rounded-full text-[10px] font-medium " + (xunfei.data.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
                           {xunfei.data.status === "active" ? "有效" : xunfei.data.status}
                         </span>
-                        <span className="text-slate-400">
-                          ¥{xunfei.data.price != null ? (xunfei.data.price / 100).toFixed(2) : "?"}/月
-                        </span>
-                        <span className="text-slate-400">
-                          到期: {xunfei.data.expires_at.replace(" ", "T")}
-                        </span>
-                      </div>
 
-                      {/* Usage bars */}
-                      <div className="space-y-2">
-                        {/* Monthly */}
+                        <span className="text-slate-400">¥{(xunfei.data.price / 100).toFixed(2)}/月</span>
+
+                      </div>
+                      <div className="space-y-1.5">
                         <div>
                           <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
-                            <span>月度请求</span>
-                            <span>{xunfei.data.usage.package_used?.toLocaleString() ?? "?"} / {xunfei.data.usage.package_limit?.toLocaleString() ?? "?"} ({xunfei.data.usage.package_used != null && xunfei.data.usage.package_limit != null ? (100 - xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0) : "?"}% 剩余)</span>
+
+                            <span>月度</span>
+                            <span>{xunfei.data.usage.package_used.toLocaleString()} / {xunfei.data.usage.package_limit.toLocaleString()}</span>
+
                           </div>
                           <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all ${
-                                xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) > 0.8
-                                  ? "bg-rose-500"
-                                  : xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) > 0.5
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
-                              }`}
-                              style={{ width: `${Math.min(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100, 100)}%` }}
+                            <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.package_used, xunfei.data.usage.package_limit)}
+                              style={{ width: (Math.min(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100, 100)) + "%" }}
                             />
                           </div>
                         </div>
-                        {/* Weekly */}
-                        {xunfei.data.usage.rpw_limit > 0 && (
-                          <div>
-                            <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
-                              <span>每周请求</span>
-                              <span>{xunfei.data.usage.rpw_used.toLocaleString()} / {xunfei.data.usage.rpw_limit.toLocaleString()}</span>
-                            </div>
-                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) > 0.8
-                                    ? "bg-rose-500"
-                                    : xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) > 0.5
-                                    ? "bg-amber-500"
-                                    : "bg-emerald-500"
-                                }`}
-                                style={{ width: `${Math.min(xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100, 100)}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                        {/* Per-5h */}
                         {xunfei.data.usage.rp5h_limit > 0 && (
                           <div>
                             <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
-                              <span>每5小时请求</span>
+                              <span>5小时</span>
                               <span>{xunfei.data.usage.rp5h_used.toLocaleString()} / {xunfei.data.usage.rp5h_limit.toLocaleString()}</span>
                             </div>
                             <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) > 0.8
-                                    ? "bg-rose-500"
-                                    : xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) > 0.5
-                                    ? "bg-amber-500"
-                                    : "bg-emerald-500"
-                                }`}
-                                style={{ width: `${Math.min(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100, 100)}%` }}
+                              <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.rp5h_used, xunfei.data.usage.rp5h_limit)}
+                                style={{ width: (Math.min(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100, 100)) + "%" }}
                               />
                             </div>
                           </div>
                         )}
                       </div>
 
-                      {/* Balance & models footer */}
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                        <span>余额: <span className="font-medium text-slate-700">¥{xunfei.data.balance.cash != null ? (xunfei.data.balance.cash / 100).toFixed(2) : "?"}</span></span>
-                        {xunfei.data.balance.virtual_balance != null && xunfei.data.balance.virtual_balance > 0 && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 pt-1.5 border-t border-slate-100 text-[11px] text-slate-500">
+                        <span>余额: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.cash / 100).toFixed(2)}</span></span>
+                        {xunfei.data.balance.virtual_balance > 0 && (
+
                           <span>赠送: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.virtual_balance / 100).toFixed(2)}</span></span>
                         )}
-                        <span className="text-slate-300">|</span>
-                        <span>模型: <span className="font-medium text-slate-700">{xunfei.data.model_list.length}个</span></span>
-                        <span className="text-slate-300">|</span>
-                        <span title={xunfei.data.app_id}>App: <span className="font-medium text-slate-700">{xunfei.data.app_id}</span></span>
-                        <span className="text-slate-300">|</span>
-                        <span title="API Key (masked)">Key: <span className="font-medium text-slate-700">{xunfei.data.api_key_masked}</span></span>
+                        <span>到期: {xunfei.data.expires_at.replace(" ", "T")}</span>
                       </div>
-
-                      {/* Model chips */}
-                      {xunfei.data.model_list.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {xunfei.data.model_list.map((m) => (
-                            <span
-                              key={m.model_id}
-                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                m.is_default
-                                  ? "bg-primary-100 text-primary-700"
-                                  : "bg-slate-100 text-slate-600"
-                              }`}
-                            >
-                              {m.name}
-                              <span className="text-slate-400">{m.context_length}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
                     </>
                   ) : (
                     <p className="text-xs text-slate-400 italic">
@@ -1038,10 +860,145 @@ export default function App() {
                     </p>
                   )}
                 </div>
+
+                {/* Kimi Code */}
+                <div className={"bg-white rounded-xl border " + (quota?.kimi?.available ? "border-emerald-200" : "border-slate-200") + " p-4 shadow-sm"}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className={"w-2 h-2 rounded-full " + (quotaLoading ? "bg-amber-400" : quota?.kimi?.available ? "bg-emerald-500" : "bg-slate-300")} />
+                      <span className="text-xs font-semibold text-slate-700">Kimi Code</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">kimi.com</span>
+                  </div>
+                  {quotaLoading ? (
+                    <div className="h-12 flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
+                    </div>
+                  ) : quota?.kimi?.available && quota.kimi.data ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-slate-600">
+                          {quota.kimi.data.sub_type === "TYPE_PURCHASE" ? "付费版" : quota.kimi.data.membership_level || "免费版"}
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          并发 {quota.kimi.data.parallel_limit}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        <div>
+                          <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
+                            <span>周限额</span>
+                            <span>{quota.kimi.data.weekly_used} / {quota.kimi.data.weekly_limit} ({quota.kimi.data.weekly_remaining} 剩余)</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={"h-full rounded-full transition-all " + barColor(quota.kimi.data.weekly_used, quota.kimi.data.weekly_limit)}
+                              style={{ width: (Math.min(quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100, 100)) + "%" }}
+                            />
+                          </div>
+                        </div>
+                        {quota.kimi.data.rp5h_limit > 0 && (
+                          <div>
+                            <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
+                              <span>5小时</span>
+                              <span>{quota.kimi.data.rp5h_used} / {quota.kimi.data.rp5h_limit}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div className={"h-full rounded-full transition-all " + barColor(quota.kimi.data.rp5h_used, quota.kimi.data.rp5h_limit)}
+                                style={{ width: (Math.min(quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100, 100)) + "%" }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {quota.kimi.data.total_limit > 0 && (
+                        <div className="mt-1.5 pt-1.5 border-t border-slate-100 text-[11px] text-slate-500">
+                          总配额: {quota.kimi.data.total_remaining} / {quota.kimi.data.total_limit} 剩余
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">
+                      {quota?.kimi?.error || "不可用"}
+                    </p>
+                  )}
+                </div>
+
+                {/* OpenCode-go */}
+                <div className={"bg-white rounded-xl border " + (quota?.opencode_go?.available ? "border-emerald-200" : "border-slate-200") + " p-4 shadow-sm"}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className={"w-2 h-2 rounded-full " + (quotaLoading ? "bg-amber-400" : quota?.opencode_go?.available ? "bg-emerald-500" : "bg-slate-300")} />
+                      <span className="text-xs font-semibold text-slate-700">OpenCode-go</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">opencode.ai</span>
+                  </div>
+                  {quotaLoading ? (
+                    <div className="h-12 flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
+                    </div>
+                  ) : quota?.opencode_go?.available && quota.opencode_go.data ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-slate-600">
+                          {quota.opencode_go.data.plan_type || "No Plan"}
+                        </span>
+                        {quota.opencode_go.data.hard_limit_usd != null && (
+                          <span className="text-[11px] text-slate-400">
+                            上限 ${quota.opencode_go.data.hard_limit_usd.toFixed(0)}
+                          </span>
+                        )}
+                      </div>
+                      {quota.opencode_go.data.usage_percent != null ? (
+                        <div className="mt-1">
+                          <div className="flex justify-between text-xs text-slate-500 mb-0.5">
+                            <span>已用 ${quota.opencode_go.data.total_usage_usd?.toFixed(2) || "?"}</span>
+                            <span>{quota.opencode_go.data.usage_percent.toFixed(1)}%</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={"h-full rounded-full transition-all " + (quota.opencode_go.data.usage_percent > 80 ? "bg-rose-500" : quota.opencode_go.data.usage_percent > 50 ? "bg-amber-500" : "bg-emerald-500")}
+                              style={{ width: (Math.min(quota.opencode_go.data.usage_percent, 100)) + "%" }}
+                            />
+                          </div>
+                          {quota.opencode_go.data.remaining_usd != null && (
+                            <p className="text-xs text-slate-500 mt-1">
+                              剩余: ${quota.opencode_go.data.remaining_usd.toFixed(2)}
+                            </p>
+                          )}
+                        </div>
+                      ) : quota.opencode_go.data.workspace_url ? (
+                        <a
+                          href={quota.opencode_go.data.workspace_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 mt-1"
+                        >
+                          查看工作区 {"→"}
+                        </a>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      {quota?.opencode_go?.data?.workspace_url ? (
+                        <a
+                          href={quota.opencode_go.data.workspace_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700"
+                        >
+                          查看工作区 {"→"}
+                        </a>
+                      ) : null}
+                      <p className="text-xs text-slate-400 italic mt-1">
+                        {quota?.opencode_go?.error || "不可用"}
+                      </p>
+                    </>
+                  )}
+                </div>
               </div>
-            )}
+            </details>
 
             {/* Charts Row - reduced height, pie merged into vendor card */}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
               {/* Daily Trends + Cache Hit Ratio */}
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">

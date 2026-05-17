@@ -152,7 +152,7 @@ pub async fn get_quota() -> impl IntoResponse {
     let fetcher = QuotaFetcher::new();
 
     let (kimi_result, opencode_result) =
-        tokio::join!(fetcher.fetch_kimi_balance(), fetcher.fetch_opencode_quota(),);
+        tokio::join!(fetcher.fetch_kimi_quota(), fetcher.fetch_opencode_quota(),);
 
     let response = QuotaResponse {
         kimi: Some(kimi_result),

@@ -141,12 +141,32 @@ export async function fetchRequests(
   return res.json();
 }
 
-export interface QuotaKimi {
+// ─── Kimi Code Quota ──────────────────────────────────────────────────────────
+
+export interface QuotaKimiCode {
   provider: string;
-  available_balance: number;
-  voucher_balance: number;
-  cash_balance: number;
+  weekly_limit: number;
+  weekly_used: number;
+  weekly_remaining: number;
+  weekly_reset_time: string | null;
+  rp5h_limit: number;
+  rp5h_used: number;
+  rp5h_remaining: number;
+  rp5h_reset_time: string | null;
+  total_limit: number;
+  total_remaining: number;
+  parallel_limit: number;
+  membership_level: string | null;
+  sub_type: string | null;
 }
+
+export interface KimiQuotaStatus {
+  available: boolean;
+  data: QuotaKimiCode | null;
+  error: string | null;
+}
+
+// ─── OpenCode-go Quota ────────────────────────────────────────────────────────
 
 export interface QuotaOpenCode {
   provider: string;
@@ -155,12 +175,7 @@ export interface QuotaOpenCode {
   total_usage_usd: number | null;
   usage_percent: number | null;
   remaining_usd: number | null;
-}
-
-export interface KimiQuotaStatus {
-  available: boolean;
-  data: QuotaKimi | null;
-  error: string | null;
+  workspace_url: string | null;
 }
 
 export interface OpenCodeQuotaStatus {
@@ -168,6 +183,8 @@ export interface OpenCodeQuotaStatus {
   data: QuotaOpenCode | null;
   error: string | null;
 }
+
+// ─── Unified quota response ───────────────────────────────────────────────────
 
 export interface QuotaResponse {
   kimi: KimiQuotaStatus | null;
@@ -186,7 +203,7 @@ export async function fetchFilters(): Promise<FilterOptions> {
   return res.json();
 }
 
-// ─── Xunfei (iFlytek) Coding Plan ───────────────────────────────────────────
+// ─── Xunfei (iFlytek) Coding Plan ─────────────────────────────────────────────
 
 export interface XunfeiUsage {
   package_used: number;
