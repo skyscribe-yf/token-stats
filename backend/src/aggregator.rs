@@ -6,22 +6,26 @@ pub fn aggregate_records(
     records: &[TokenRecord],
     from: Option<&TimeBound>,
     to: Option<&TimeBound>,
+    source: Option<&str>,
 ) -> StatsResponse {
     let filtered: Vec<&TokenRecord> = records
         .iter()
         .filter(|r| record_matches_bound(r, from, to))
+        .filter(|r| source.map(|s| r.source == s).unwrap_or(true))
         .collect();
 
     let overall = compute_overall_stats(&filtered);
     let by_vendor = compute_vendor_stats(&filtered);
     let by_date = compute_date_stats(&filtered);
     let by_model = compute_model_stats(&filtered);
+    let by_source = compute_source_stats(&filtered);
 
     StatsResponse {
         overall,
         by_vendor,
         by_date,
         by_model,
+        by_source,
     }
 }
 
@@ -31,6 +35,7 @@ pub fn filter_records<'a>(
     to: Option<&TimeBound>,
     provider: Option<&str>,
     model: Option<&str>,
+    source: Option<&str>,
 ) -> Vec<&'a TokenRecord> {
     records
         .iter()
@@ -38,7 +43,8 @@ pub fn filter_records<'a>(
         .filter(|r| {
             let provider_ok = provider.map(|p| r.provider == p).unwrap_or(true);
             let model_ok = model.map(|m| r.model == m).unwrap_or(true);
-            provider_ok && model_ok
+            let source_ok = source.map(|s| r.source == s).unwrap_or(true);
+            provider_ok && model_ok && source_ok
         })
         .collect()
 }
@@ -88,6 +94,7 @@ pub fn paginate_requests(
             time: r.time.clone(),
             provider: r.provider.clone(),
             model: r.model.clone(),
+            source: r.source.clone(),
             input_tokens: r.input_tokens,
             output_tokens: r.output_tokens,
             cache_read_tokens: r.cache_read_tokens,
@@ -259,6 +266,43 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         let total_input = m.input_tokens + m.cache_read_tokens;
         if total_input > 0 {
             m.cache_hit_ratio = m.cache_read_tokens as f64 / total_input as f64 * 100.0;
+        }
+    }
+
+    result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+    result
+}
+
+fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
+    let mut map: HashMap<String, SourceStats> = HashMap::new();
+
+    for r in records {
+        let entry = map.entry(r.source.clone()).or_insert_with(|| SourceStats {
+            source: r.source.clone(),
+            calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens: 0,
+            cost: 0.0,
+            cache_hit_ratio: 0.0,
+        });
+
+        entry.calls += 1;
+        entry.input_tokens += r.input_tokens;
+        entry.output_tokens += r.output_tokens;
+        entry.cache_read_tokens += r.cache_read_tokens;
+        entry.cache_write_tokens += r.cache_write_tokens;
+        entry.total_tokens += r.total_tokens;
+        entry.cost += r.cost;
+    }
+
+    let mut result: Vec<SourceStats> = map.into_values().collect();
+    for s in &mut result {
+        let total_input = s.input_tokens + s.cache_read_tokens;
+        if total_input > 0 {
+            s.cache_hit_ratio = s.cache_read_tokens as f64 / total_input as f64 * 100.0;
         }
     }
 

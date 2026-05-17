@@ -9,11 +9,13 @@ use axum::{
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
-use crate::parser::{get_log_path, parse_jsonl_file};
-use crate::routes::{get_filters, get_requests, get_stats, AppState};
+use crate::parser::load_all_sources;
+use crate::routes::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -21,13 +23,33 @@ async fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let log_path = get_log_path();
-    tracing::info!("Loading token usage data from: {:?}", log_path);
+    let records = load_all_sources();
+    tracing::info!("Initial load: {} records", records.len());
 
-    let records = parse_jsonl_file(&log_path);
-    tracing::info!("Loaded {} records", records.len());
+    let state = Arc::new(AppState {
+        records: RwLock::new(records),
+    });
 
-    let state = Arc::new(AppState { records });
+    // Background refresh task
+    let refresh_state = state.clone();
+    let refresh_interval = std::env::var("REFRESH_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30);
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
+        loop {
+            interval.tick().await;
+            let new_records = load_all_sources();
+            let mut records = refresh_state.records.write().await;
+            let old_len = records.len();
+            *records = new_records;
+            if records.len() != old_len {
+                tracing::info!("Refreshed data: {} records (was {})", records.len(), old_len);
+            }
+        }
+    });
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -35,9 +57,9 @@ async fn main() {
         .allow_headers(Any);
 
     let api_routes = Router::new()
-        .route("/api/stats", get(get_stats))
-        .route("/api/requests", get(get_requests))
-        .route("/api/filters", get(get_filters));
+        .route("/api/stats", get(routes::get_stats))
+        .route("/api/requests", get(routes::get_requests))
+        .route("/api/filters", get(routes::get_filters));
 
     let app = Router::new()
         .merge(api_routes)

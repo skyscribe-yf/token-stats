@@ -9,6 +9,8 @@ pub struct TokenRecord {
     pub api_key_prefix: String,
     pub provider: String,
     pub model: String,
+    #[serde(default)]
+    pub source: String,
     #[serde(rename = "inputTokens")]
     pub input_tokens: i64,
     #[serde(rename = "outputTokens")]
@@ -97,11 +99,25 @@ pub struct ModelStats {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SourceStats {
+    pub source: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DetailedRequest {
     pub date: String,
     pub time: String,
     pub provider: String,
     pub model: String,
+    pub source: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
@@ -126,10 +142,12 @@ pub struct StatsResponse {
     pub by_vendor: Vec<VendorStats>,
     pub by_date: Vec<DateStats>,
     pub by_model: Vec<ModelStats>,
+    pub by_source: Vec<SourceStats>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FilterOptions {
     pub vendors: Vec<String>,
     pub models: Vec<String>,
+    pub sources: Vec<String>,
 }

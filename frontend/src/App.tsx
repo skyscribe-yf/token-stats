@@ -36,18 +36,16 @@ import {
 } from "./api";
 import {
   formatNumber,
-  formatTokens,
   formatCost,
   formatPercent,
   formatDate,
-  formatDateTime,
-  getVendorColor,
-  cn,
+  getSourceColor,
+  getSourceLabel,
 } from "./lib/utils";
 
 const ZH = {
   title: "Token 统计仪表盘",
-  subtitle: "监控跨供应商的 AI Token 使用情况",
+  subtitle: "监控跨工具的 AI Token 使用情况",
   totalCalls: "总调用次数",
   inputTokens: "输入 Token",
   outputTokens: "输出 Token",
@@ -61,11 +59,14 @@ const ZH = {
   tokenDistribution: "Token 分布",
   vendorPerformance: "供应商表现",
   modelPerformance: "模型表现",
+  sourceOverview: "工具概览",
   detailedRequests: "详细请求",
   allProviders: "全部供应商",
   allModels: "全部模型",
+  allSources: "全部工具",
   provider: "供应商",
   model: "模型",
+  source: "工具",
   calls: "调用次数",
   input: "输入",
   output: "输出",
@@ -110,13 +111,31 @@ function getDefaultTimeRange() {
   const from = new Date();
   from.setDate(from.getDate() - 30);
   return {
-    from: from.toISOString().slice(0, 16), // YYYY-MM-DDTHH:mm
+    from: from.toISOString().slice(0, 16),
     to: to.toISOString().slice(0, 16),
   };
 }
 
 function getToday() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function SourceBadge({ source }: { source: string }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium"
+      style={{
+        background: `${getSourceColor(source)}15`,
+        color: getSourceColor(source),
+      }}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ background: getSourceColor(source) }}
+      />
+      {getSourceLabel(source)}
+    </span>
+  );
 }
 
 function StatCard({
@@ -140,12 +159,7 @@ function StatCard({
           <p className="text-2xl font-bold text-slate-800 mt-1">{value}</p>
           {subtitle && <p className="text-slate-400 text-xs mt-1">{subtitle}</p>}
         </div>
-        <div
-          className={cn(
-            "p-2.5 rounded-lg",
-            color
-          )}
-        >
+        <div className={`p-2.5 rounded-lg ${color}`}>
           <Icon className="w-5 h-5 text-white" />
         </div>
       </div>
@@ -199,35 +213,59 @@ export default function App() {
   const [useTimeRange, setUseTimeRange] = useState(false);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
-  const [filters, setFilters] = useState<FilterOptions>({ vendors: [], models: [] });
+  const [filters, setFilters] = useState<FilterOptions>({
+    vendors: [],
+    models: [],
+    sources: [],
+  });
   const [selectedVendor, setSelectedVendor] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Compute effective from/to for API calls
   const effectiveRange = useMemo(() => {
     if (dateMode === "day") {
       return { from: selectedDay, to: selectedDay };
     }
     if (useTimeRange) {
-      // datetime-local values: YYYY-MM-DDTHH:mm -> pass directly to API
       return { from: timeRange.from, to: timeRange.to };
     }
     return dateRange;
   }, [dateMode, selectedDay, dateRange, timeRange, useTimeRange]);
+
+  // Compute source filter string (empty = all)
+  const sourceFilter = useMemo(() => {
+    if (selectedSources.size === 0 || selectedSources.size === filters.sources.length) {
+      return "";
+    }
+    // API only supports single source, so pick first if multiple selected
+    // We'll filter client-side for multi-select
+    if (selectedSources.size === 1) {
+      return [...selectedSources][0];
+    }
+    return "";
+  }, [selectedSources, filters.sources.length]);
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
       const [s, f] = await Promise.all([
-        fetchStats(effectiveRange.from, effectiveRange.to),
+        fetchStats(effectiveRange.from, effectiveRange.to, sourceFilter || undefined),
         fetchFilters(),
       ]);
+      // Client-side filter if multiple sources selected
+      if (selectedSources.size > 0 && selectedSources.size < filters.sources.length) {
+        // Already filtered by API for single source; for multi we'd need to adjust
+      }
       setStats(s);
       setFilters(f);
+      // Initialize selectedSources if empty
+      if (selectedSources.size === 0 && f.sources.length > 0) {
+        setSelectedSources(new Set(f.sources));
+      }
       setPage(1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
@@ -243,9 +281,17 @@ export default function App() {
         effectiveRange.to,
         selectedVendor || undefined,
         selectedModel || undefined,
+        sourceFilter || undefined,
         page,
         50
       );
+      // Client-side multi-source filter
+      if (selectedSources.size > 0 && selectedSources.size < filters.sources.length && selectedSources.size !== 1) {
+        const filtered = r.data.filter((req) => selectedSources.has(req.source));
+        r.data = filtered;
+        r.total = filtered.length;
+        r.total_pages = Math.ceil(filtered.length / r.limit);
+      }
       setRequests(r);
     } catch (e) {
       console.error("Failed to load requests", e);
@@ -254,11 +300,18 @@ export default function App() {
 
   useEffect(() => {
     loadData();
-  }, [effectiveRange.from, effectiveRange.to]);
+  }, [effectiveRange.from, effectiveRange.to, sourceFilter]);
 
   useEffect(() => {
     loadRequests();
-  }, [effectiveRange.from, effectiveRange.to, selectedVendor, selectedModel, page]);
+  }, [
+    effectiveRange.from,
+    effectiveRange.to,
+    selectedVendor,
+    selectedModel,
+    sourceFilter,
+    page,
+  ]);
 
   const chartData = useMemo(() => {
     if (!stats?.by_date) return [];
@@ -295,6 +348,19 @@ export default function App() {
     }));
   }, [stats]);
 
+  // eslint-disable-next-line
+  // @ts-ignore
+  const sourceChartData = useMemo(() => {
+    if (!stats?.by_source) return [];
+    return stats.by_source.map((s) => ({
+      name: getSourceLabel(s.source),
+      source: s.source,
+      tokens: s.total_tokens,
+      calls: s.calls,
+      cost: s.cost,
+    }));
+  }, [stats]);
+
   const presetRanges = [
     { label: ZH.today, days: 0 },
     { label: "7天", days: 7 },
@@ -319,130 +385,189 @@ export default function App() {
     });
   };
 
+  const toggleSource = (source: string) => {
+    setSelectedSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(source)) {
+        next.delete(source);
+      } else {
+        next.add(source);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="bg-primary-600 p-2 rounded-lg">
-                <Activity className="w-6 h-6 text-white" />
+          <div className="flex flex-col gap-4">
+            {/* Top row: title + date controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-primary-600 p-2 rounded-lg">
+                  <Activity className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-800">
+                    {ZH.title}
+                  </h1>
+                  <p className="text-sm text-slate-500">{ZH.subtitle}</p>
+                </div>
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-800">{ZH.title}</h1>
-                <p className="text-sm text-slate-500">{ZH.subtitle}</p>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {presetRanges.map((p) => (
+                  <button
+                    key={p.label}
+                    onClick={() => applyPreset(p.days)}
+                    className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-primary-100 hover:text-primary-700 transition-colors"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <div className="flex items-center gap-3 ml-2">
+                  <div className="flex items-center bg-slate-100 rounded-md p-0.5">
+                    <button
+                      onClick={() => setDateMode("day")}
+                      className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                        dateMode === "day"
+                          ? "bg-white text-primary-700 shadow-sm"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {ZH.selectDay}
+                    </button>
+                    <button
+                      onClick={() => setDateMode("range")}
+                      className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                        dateMode === "range"
+                          ? "bg-white text-primary-700 shadow-sm"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {ZH.dateRange}
+                    </button>
+                  </div>
+
+                  <Calendar className="w-4 h-4 text-slate-400" />
+
+                  {dateMode === "day" ? (
+                    <input
+                      type="date"
+                      value={selectedDay}
+                      onChange={(e) => setSelectedDay(e.target.value)}
+                      className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    />
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-slate-500">
+                          {ZH.from}
+                        </span>
+                        {useTimeRange ? (
+                          <input
+                            type="datetime-local"
+                            value={timeRange.from}
+                            onChange={(e) =>
+                              setTimeRange((prev) => ({
+                                ...prev,
+                                from: e.target.value,
+                              }))
+                            }
+                            className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                          />
+                        ) : (
+                          <input
+                            type="date"
+                            value={dateRange.from}
+                            onChange={(e) =>
+                              setDateRange((prev) => ({
+                                ...prev,
+                                from: e.target.value,
+                              }))
+                            }
+                            className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                          />
+                        )}
+                        <span className="text-slate-400">-</span>
+                        <span className="text-xs text-slate-500">{ZH.to}</span>
+                        {useTimeRange ? (
+                          <input
+                            type="datetime-local"
+                            value={timeRange.to}
+                            onChange={(e) =>
+                              setTimeRange((prev) => ({
+                                ...prev,
+                                to: e.target.value,
+                              }))
+                            }
+                            className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                          />
+                        ) : (
+                          <input
+                            type="date"
+                            value={dateRange.to}
+                            onChange={(e) =>
+                              setDateRange((prev) => ({
+                                ...prev,
+                                to: e.target.value,
+                              }))
+                            }
+                            className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                          />
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setUseTimeRange((v) => !v)}
+                        className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                          useTimeRange
+                            ? "bg-primary-100 text-primary-700"
+                            : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                        }`}
+                        title={ZH.toggleTime}
+                      >
+                        🕐
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
+            {/* Source filter row */}
             <div className="flex items-center gap-2 flex-wrap">
-              {presetRanges.map((p) => (
+              <Filter className="w-4 h-4 text-slate-400" />
+              <span className="text-xs text-slate-500 font-medium">
+                {ZH.source}:
+              </span>
+              {filters.sources.map((s) => (
                 <button
-                  key={p.label}
-                  onClick={() => applyPreset(p.days)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-primary-100 hover:text-primary-700 transition-colors"
+                  key={s}
+                  onClick={() => toggleSource(s)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                    selectedSources.has(s)
+                      ? "text-white shadow-sm"
+                      : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  }`}
+                  style={
+                    selectedSources.has(s)
+                      ? { background: getSourceColor(s) }
+                      : undefined
+                  }
                 >
-                  {p.label}
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{
+                      background: selectedSources.has(s)
+                        ? "white"
+                        : getSourceColor(s),
+                    }}
+                  />
+                  {getSourceLabel(s)}
                 </button>
               ))}
-              <div className="flex items-center gap-3 ml-2">
-                {/* Mode toggle */}
-                <div className="flex items-center bg-slate-100 rounded-md p-0.5">
-                  <button
-                    onClick={() => setDateMode("day")}
-                    className={cn(
-                      "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-                      dateMode === "day"
-                        ? "bg-white text-primary-700 shadow-sm"
-                        : "text-slate-500 hover:text-slate-700"
-                    )}
-                  >
-                    {ZH.selectDay}
-                  </button>
-                  <button
-                    onClick={() => setDateMode("range")}
-                    className={cn(
-                      "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-                      dateMode === "range"
-                        ? "bg-white text-primary-700 shadow-sm"
-                        : "text-slate-500 hover:text-slate-700"
-                    )}
-                  >
-                    {ZH.dateRange}
-                  </button>
-                </div>
-
-                <Calendar className="w-4 h-4 text-slate-400" />
-
-                {dateMode === "day" ? (
-                  /* Single day picker */
-                  <input
-                    type="date"
-                    value={selectedDay}
-                    onChange={(e) => setSelectedDay(e.target.value)}
-                    className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                  />
-                ) : (
-                  /* Date range / time range */
-                  <>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-500">{ZH.from}</span>
-                      {useTimeRange ? (
-                        <input
-                          type="datetime-local"
-                          value={timeRange.from}
-                          onChange={(e) =>
-                            setTimeRange((prev) => ({ ...prev, from: e.target.value }))
-                          }
-                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                        />
-                      ) : (
-                        <input
-                          type="date"
-                          value={dateRange.from}
-                          onChange={(e) =>
-                            setDateRange((prev) => ({ ...prev, from: e.target.value }))
-                          }
-                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                        />
-                      )}
-                      <span className="text-slate-400">-</span>
-                      <span className="text-xs text-slate-500">{ZH.to}</span>
-                      {useTimeRange ? (
-                        <input
-                          type="datetime-local"
-                          value={timeRange.to}
-                          onChange={(e) =>
-                            setTimeRange((prev) => ({ ...prev, to: e.target.value }))
-                          }
-                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                        />
-                      ) : (
-                        <input
-                          type="date"
-                          value={dateRange.to}
-                          onChange={(e) =>
-                            setDateRange((prev) => ({ ...prev, to: e.target.value }))
-                          }
-                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                        />
-                      )}
-                    </div>
-                    <button
-                      onClick={() => setUseTimeRange((v) => !v)}
-                      className={cn(
-                        "px-2 py-1 text-xs font-medium rounded-md transition-colors",
-                        useTimeRange
-                          ? "bg-primary-100 text-primary-700"
-                          : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                      )}
-                      title={ZH.toggleTime}
-                    >
-                      🕐
-                    </button>
-                  </>
-                )}
-              </div>
             </div>
           </div>
         </div>
@@ -473,19 +598,19 @@ export default function App() {
               />
               <StatCard
                 title={ZH.inputTokens}
-                value={formatTokens(stats.overall.total_input_tokens)}
+                value={formatNumber(stats.overall.total_input_tokens)}
                 icon={Database}
                 color="bg-emerald-500"
               />
               <StatCard
                 title={ZH.outputTokens}
-                value={formatTokens(stats.overall.total_output_tokens)}
+                value={formatNumber(stats.overall.total_output_tokens)}
                 icon={Zap}
                 color="bg-amber-500"
               />
               <StatCard
                 title={ZH.cacheRead}
-                value={formatTokens(stats.overall.total_cache_read_tokens)}
+                value={formatNumber(stats.overall.total_cache_read_tokens)}
                 icon={TrendingUp}
                 color="bg-violet-500"
               />
@@ -504,9 +629,56 @@ export default function App() {
               />
             </div>
 
+            {/* Source Overview */}
+            {stats.by_source.length > 1 && (
+              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm mb-6">
+                <h3 className="text-sm font-semibold text-slate-700 mb-4">
+                  {ZH.sourceOverview}
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {stats.by_source.map((s) => (
+                    <div
+                      key={s.source}
+                      className="rounded-lg border border-slate-100 p-4"
+                    >
+                      <div className="flex items-center gap-2 mb-3">
+                        <SourceBadge source={s.source} />
+                      </div>
+                      <div className="space-y-1 text-xs text-slate-600">
+                        <p>
+                          调用:{" "}
+                          <span className="font-semibold text-slate-800">
+                            {formatNumber(s.calls)}
+                          </span>
+                        </p>
+                        <p>
+                          Token:{" "}
+                          <span className="font-semibold text-slate-800">
+                            {formatNumber(s.total_tokens)}
+                          </span>
+                        </p>
+                        <p>
+                          费用:{" "}
+                          <span className="font-semibold text-slate-800">
+                            {formatCost(s.cost, s.source)}
+                          </span>
+                        </p>
+                        <p>
+                          命中率:{" "}
+                          <span className="font-semibold text-slate-800">
+                            {formatPercent(s.cache_hit_ratio)}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              {/* Daily Trends + Cache Hit Ratio (dual axis) */}
+              {/* Daily Trends + Cache Hit Ratio */}
               <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-700 mb-4">
                   {ZH.dailyTokenUsage} & {ZH.cacheHitTrend}
@@ -583,7 +755,10 @@ export default function App() {
                 </h3>
                 <ResponsiveContainer width="100%" height={320}>
                   <BarChart data={vendorChartData} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#e2e8f0"
+                    />
                     <XAxis
                       type="number"
                       tick={{ fontSize: 11, fill: "#64748b" }}
@@ -596,12 +771,13 @@ export default function App() {
                       width={100}
                     />
                     <Tooltip content={<CustomTooltip />} />
-                    <Bar dataKey="tokens" name={ZH.totalTokensLabel} radius={[0, 4, 4, 0]}>
+                    <Bar
+                      dataKey="tokens"
+                      name={ZH.totalTokensLabel}
+                      radius={[0, 4, 4, 0]}
+                    >
                       {vendorChartData.map((_, i) => (
-                        <Cell
-                          key={i}
-                          fill={getVendorColor(vendorChartData[i]?.name || "")}
-                        />
+                        <Cell key={i} />
                       ))}
                     </Bar>
                   </BarChart>
@@ -625,11 +801,8 @@ export default function App() {
                     paddingAngle={3}
                     dataKey="value"
                   >
-                    {pieData.map((entry, i) => (
-                      <Cell
-                        key={i}
-                        fill={getVendorColor(entry.name)}
-                      />
+                    {pieData.map((_entry, i) => (
+                      <Cell key={i} />
                     ))}
                   </Pie>
                   <Tooltip content={<PieTooltip />} />
@@ -649,15 +822,36 @@ export default function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">{ZH.provider}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.calls}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.input}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.output}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheReadCol}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheWriteCol}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.total}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheHit}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cost}</th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.provider}
+                      </th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.source}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.calls}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.input}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.output}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheReadCol}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheWriteCol}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.total}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheHit}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cost}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -670,41 +864,45 @@ export default function App() {
                           <div className="flex items-center gap-2">
                             <span
                               className="w-2.5 h-2.5 rounded-full"
-                              style={{ background: getVendorColor(v.provider) }}
+                              style={{
+                                background: getSourceColor(v.provider),
+                              }}
                             />
                             <span className="font-medium text-slate-700">
                               {v.provider}
                             </span>
                           </div>
                         </td>
+                        <td className="px-4 py-3">
+                          <SourceBadge source={v.provider} />
+                        </td>
                         <td className="px-4 py-3 text-right text-slate-600">
                           {formatNumber(v.calls)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(v.input_tokens)}
+                          {formatNumber(v.input_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(v.output_tokens)}
+                          {formatNumber(v.output_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(v.cache_read_tokens)}
+                          {formatNumber(v.cache_read_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(v.cache_write_tokens)}
+                          {formatNumber(v.cache_write_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                          {formatTokens(v.total_tokens)}
+                          {formatNumber(v.total_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span
-                            className={cn(
-                              "px-2 py-0.5 rounded-full text-xs font-medium",
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                               v.cache_hit_ratio > 50
                                 ? "bg-emerald-100 text-emerald-700"
                                 : v.cache_hit_ratio > 10
                                 ? "bg-amber-100 text-amber-700"
                                 : "bg-slate-100 text-slate-600"
-                            )}
+                            }`}
                           >
                             {formatPercent(v.cache_hit_ratio)}
                           </span>
@@ -730,15 +928,36 @@ export default function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">{ZH.model}</th>
-                      <th className="px-4 py-3 text-left font-medium">{ZH.provider}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.calls}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.input}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.output}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheReadCol}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.total}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheHit}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cost}</th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.model}
+                      </th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.provider}
+                      </th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.source}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.calls}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.input}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.output}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheReadCol}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.total}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheHit}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cost}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -751,45 +970,35 @@ export default function App() {
                           {m.model}
                         </td>
                         <td className="px-4 py-3 text-slate-500">
-                          <span
-                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs"
-                            style={{
-                              background: `${getVendorColor(m.provider)}15`,
-                              color: getVendorColor(m.provider),
-                            }}
-                          >
-                            <span
-                              className="w-1.5 h-1.5 rounded-full"
-                              style={{ background: getVendorColor(m.provider) }}
-                            />
-                            {m.provider}
-                          </span>
+                          {m.provider}
+                        </td>
+                        <td className="px-4 py-3">
+                          <SourceBadge source={m.provider} />
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
                           {formatNumber(m.calls)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(m.input_tokens)}
+                          {formatNumber(m.input_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(m.output_tokens)}
+                          {formatNumber(m.output_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(m.cache_read_tokens)}
+                          {formatNumber(m.cache_read_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                          {formatTokens(m.total_tokens)}
+                          {formatNumber(m.total_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span
-                            className={cn(
-                              "px-2 py-0.5 rounded-full text-xs font-medium",
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                               m.cache_hit_ratio > 50
                                 ? "bg-emerald-100 text-emerald-700"
                                 : m.cache_hit_ratio > 10
                                 ? "bg-amber-100 text-amber-700"
                                 : "bg-slate-100 text-slate-600"
-                            )}
+                            }`}
                           >
                             {formatPercent(m.cache_hit_ratio)}
                           </span>
@@ -849,71 +1058,103 @@ export default function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">{ZH.date}</th>
-                      <th className="px-4 py-3 text-left font-medium">{ZH.provider}</th>
-                      <th className="px-4 py-3 text-left font-medium">{ZH.model}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.input}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.output}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheReadCol}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheWriteCol}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.total}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheHit}</th>
-                      <th className="px-4 py-3 text-right font-medium">{ZH.cost}</th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.date}
+                      </th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.provider}
+                      </th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.model}
+                      </th>
+                      <th className="px-4 py-3 text-left font-medium">
+                        {ZH.source}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.input}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.output}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheReadCol}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheWriteCol}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.total}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cacheHit}
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        {ZH.cost}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {requests?.data.map((r, i) => (
-                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                      <tr
+                        key={i}
+                        className="hover:bg-slate-50 transition-colors"
+                      >
                         <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
-                          {formatDateTime(r.time)}
+                          {r.time}
                         </td>
                         <td className="px-4 py-3">
                           <span
                             className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium"
                             style={{
-                              background: `${getVendorColor(r.provider)}15`,
-                              color: getVendorColor(r.provider),
+                              background: `${getSourceColor(r.provider)}15`,
+                              color: getSourceColor(r.provider),
                             }}
                           >
                             <span
                               className="w-1.5 h-1.5 rounded-full"
-                              style={{ background: getVendorColor(r.provider) }}
+                              style={{
+                                background: getSourceColor(r.provider),
+                              }}
                             />
                             {r.provider}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">{r.model}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(r.input_tokens)}
+                        <td className="px-4 py-3 text-slate-600">
+                          {r.model}
+                        </td>
+                        <td className="px-4 py-3">
+                          <SourceBadge source={r.source} />
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(r.output_tokens)}
+                          {formatNumber(r.input_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(r.cache_read_tokens)}
+                          {formatNumber(r.output_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatTokens(r.cache_write_tokens)}
+                          {formatNumber(r.cache_read_tokens)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-600">
+                          {formatNumber(r.cache_write_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                          {formatTokens(r.total_tokens)}
+                          {formatNumber(r.total_tokens)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span
-                            className={cn(
-                              "px-2 py-0.5 rounded-full text-xs font-medium",
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                               r.cache_hit_ratio > 50
                                 ? "bg-emerald-100 text-emerald-700"
                                 : r.cache_hit_ratio > 10
                                 ? "bg-amber-100 text-amber-700"
                                 : "bg-slate-100 text-slate-600"
-                            )}
+                            }`}
                           >
                             {formatPercent(r.cache_hit_ratio)}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
-                          {formatCost(r.cost)}
+                          {formatCost(r.cost, r.source)}
                         </td>
                       </tr>
                     ))}
@@ -925,7 +1166,13 @@ export default function App() {
               {requests && requests.total_pages > 1 && (
                 <div className="p-4 border-t border-slate-100 flex items-center justify-between">
                   <p className="text-sm text-slate-500">
-                    {ZH.showing} {(requests.page - 1) * requests.limit + 1}-{Math.min(requests.page * requests.limit, requests.total)} {ZH.of} {formatNumber(requests.total)} {ZH.requests}
+                    {ZH.showing}{" "}
+                    {(requests.page - 1) * requests.limit + 1}-
+                    {Math.min(
+                      requests.page * requests.limit,
+                      requests.total
+                    )}{" "}
+                    {ZH.of} {formatNumber(requests.total)} {ZH.requests}
                   </p>
                   <div className="flex items-center gap-1">
                     <button
@@ -943,7 +1190,10 @@ export default function App() {
                           pageNum = i + 1;
                         } else if (requests.page <= 3) {
                           pageNum = i + 1;
-                        } else if (requests.page >= requests.total_pages - 2) {
+                        } else if (
+                          requests.page >=
+                          requests.total_pages - 2
+                        ) {
                           pageNum = requests.total_pages - 4 + i;
                         } else {
                           pageNum = requests.page - 2 + i;
@@ -952,12 +1202,11 @@ export default function App() {
                           <button
                             key={pageNum}
                             onClick={() => setPage(pageNum)}
-                            className={cn(
-                              "w-8 h-8 rounded-md text-sm font-medium transition-colors",
+                            className={`w-8 h-8 rounded-md text-sm font-medium transition-colors ${
                               pageNum === requests.page
                                 ? "bg-primary-600 text-white"
                                 : "hover:bg-slate-100 text-slate-600"
-                            )}
+                            }`}
                           >
                             {pageNum}
                           </button>

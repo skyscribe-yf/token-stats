@@ -49,11 +49,24 @@ export interface ModelStats {
   cache_hit_ratio: number;
 }
 
+export interface SourceStats {
+  source: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  cost: number;
+  cache_hit_ratio: number;
+}
+
 export interface StatsResponse {
   overall: AggregatedStats;
   by_vendor: VendorStats[];
   by_date: DateStats[];
   by_model: ModelStats[];
+  by_source: SourceStats[];
 }
 
 export interface DetailedRequest {
@@ -61,6 +74,7 @@ export interface DetailedRequest {
   time: string;
   provider: string;
   model: string;
+  source: string;
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
@@ -81,12 +95,18 @@ export interface PaginatedRequests {
 export interface FilterOptions {
   vendors: string[];
   models: string[];
+  sources: string[];
 }
 
-export async function fetchStats(from?: string, to?: string): Promise<StatsResponse> {
+export async function fetchStats(
+  from?: string,
+  to?: string,
+  source?: string
+): Promise<StatsResponse> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
   if (to) params.set("to", to);
+  if (source) params.set("source", source);
   const res = await fetch(`${API_BASE}/api/stats?${params}`);
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
@@ -97,6 +117,7 @@ export async function fetchRequests(
   to?: string,
   provider?: string,
   model?: string,
+  source?: string,
   page: number = 1,
   limit: number = 50
 ): Promise<PaginatedRequests> {
@@ -105,6 +126,7 @@ export async function fetchRequests(
   if (to) params.set("to", to);
   if (provider) params.set("provider", provider);
   if (model) params.set("model", model);
+  if (source) params.set("source", source);
   params.set("page", String(page));
   params.set("limit", String(limit));
   const res = await fetch(`${API_BASE}/api/requests?${params}`);
