@@ -348,19 +348,6 @@ export default function App() {
     }));
   }, [stats]);
 
-  // eslint-disable-next-line
-  // @ts-ignore
-  const sourceChartData = useMemo(() => {
-    if (!stats?.by_source) return [];
-    return stats.by_source.map((s) => ({
-      name: getSourceLabel(s.source),
-      source: s.source,
-      tokens: s.total_tokens,
-      calls: s.calls,
-      cost: s.cost,
-    }));
-  }, [stats]);
-
   const presetRanges = [
     { label: ZH.today, days: 0 },
     { label: "7天", days: 7 },
@@ -825,9 +812,6 @@ export default function App() {
                       <th className="px-4 py-3 text-left font-medium">
                         {ZH.provider}
                       </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.source}
-                      </th>
                       <th className="px-4 py-3 text-right font-medium">
                         {ZH.calls}
                       </th>
@@ -872,9 +856,6 @@ export default function App() {
                               {v.provider}
                             </span>
                           </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <SourceBadge source={v.provider} />
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
                           {formatNumber(v.calls)}
@@ -934,9 +915,6 @@ export default function App() {
                       <th className="px-4 py-3 text-left font-medium">
                         {ZH.provider}
                       </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.source}
-                      </th>
                       <th className="px-4 py-3 text-right font-medium">
                         {ZH.calls}
                       </th>
@@ -971,9 +949,6 @@ export default function App() {
                         </td>
                         <td className="px-4 py-3 text-slate-500">
                           {m.provider}
-                        </td>
-                        <td className="px-4 py-3">
-                          <SourceBadge source={m.provider} />
                         </td>
                         <td className="px-4 py-3 text-right text-slate-600">
                           {formatNumber(m.calls)}

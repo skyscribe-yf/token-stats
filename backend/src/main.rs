@@ -47,6 +47,8 @@ async fn main() {
             *records = new_records;
             if records.len() != old_len {
                 tracing::info!("Refreshed data: {} records (was {})", records.len(), old_len);
+            } else {
+                tracing::debug!("Refreshed data: {} records (unchanged)", records.len());
             }
         }
     });
