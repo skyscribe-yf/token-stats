@@ -73,8 +73,8 @@ parser.rs
   - `token_usage.input_cache_read` → `cache_read_tokens`
   - `token_usage.input_cache_creation` → `cache_write_tokens`
   - `cost` = 0.0 (no cost data available)
-  - `provider` = "kimi" (from session config or hardcoded)
-  - `model` = "kimi-for-coding" (from session config or nearest model hint)
+  - `provider` = "kimi" (hardcoded, since Kimi CLI only uses kimi provider)
+  - `model` = resolved from session's `state.json` or nearest `StepBegin` message containing model info; fallback = "kimi-for-coding"
   - `source` = "kimi-cli"
   - `timestamp` (Unix epoch float) → `date` + `time`
 - Dedup key: `(file_path, timestamp)`
