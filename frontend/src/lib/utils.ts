@@ -59,6 +59,14 @@ export function getLocalDatetimeOffset(days: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** Get a datetime-local value (YYYY-MM-DDTHH:mm) offset by `hours` from now in local timezone */
+export function getLocalDatetimeOffsetHours(hours: number): string {
+  const d = new Date();
+  d.setHours(d.getHours() - hours);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export const SOURCE_COLORS: Record<string, string> = {
   pi: "#3b82f6",          // blue
   "claude-code": "#f59e0b", // amber

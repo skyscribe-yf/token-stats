@@ -39,6 +39,7 @@ export interface DateStats {
 export interface ModelStats {
   model: string;
   provider: string;
+  sources: string[];
   calls: number;
   input_tokens: number;
   output_tokens: number;
@@ -102,12 +103,14 @@ export async function fetchStats(
   from?: string,
   to?: string,
   source?: string,
+  provider?: string,
   tzOffset?: number
 ): Promise<StatsResponse> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
   if (to) params.set("to", to);
   if (source) params.set("source", source);
+  if (provider) params.set("provider", provider);
   if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
   const res = await fetch(`${API_BASE}/api/stats?${params}`);
   if (!res.ok) throw new Error("Failed to fetch stats");

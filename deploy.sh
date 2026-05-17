@@ -7,28 +7,25 @@ echo "🚀 Token Stats Dashboard — Deploy"
 echo "=================================="
 echo ""
 
-# ── 1. Build backend (if needed) ──────────────────────────────────────
-if [ ! -f "$PROJECT_DIR/backend/target/release/token-stats-backend" ]; then
-    echo "🔧 Building Rust backend..."
-    cd "$PROJECT_DIR/backend"
-    cargo build --release
-    echo "✅ Backend built"
-else
-    echo "✅ Backend already built"
-fi
+# ── 1. Stop old backend ──────────────────────────────────────────────
+echo "🛑 Stopping old backend..."
+sudo systemctl stop token-stats 2>/dev/null || true
+sleep 1
 
-# ── 2. Build frontend (if needed) ────────────────────────────────────
-if [ ! -f "$PROJECT_DIR/backend/static/index.html" ]; then
-    echo "🔧 Building React frontend..."
-    cd "$PROJECT_DIR/frontend"
-    npm install
-    npm run build
-    echo "✅ Frontend built → $PROJECT_DIR/backend/static"
-else
-    echo "✅ Frontend already built"
-fi
+# ── 2. Build backend ─────────────────────────────────────────────────
+echo "🔧 Building Rust backend..."
+cd "$PROJECT_DIR/backend"
+cargo build --release
+echo "✅ Backend built"
 
-# ── 3. Deploy static files ───────────────────────────────────────────
+# ── 3. Build frontend ────────────────────────────────────────────────
+echo "🔧 Building React frontend..."
+cd "$PROJECT_DIR/frontend"
+npm install
+npm run build
+echo "✅ Frontend built → $PROJECT_DIR/backend/static"
+
+# ── 4. Deploy static files ───────────────────────────────────────────
 echo ""
 echo "📋 Deploying static files to /var/www/token-stats..."
 sudo rm -rf /var/www/token-stats
@@ -37,26 +34,26 @@ sudo cp -r "$PROJECT_DIR/backend/static/"* /var/www/token-stats/
 sudo chmod -R 755 /var/www/token-stats
 echo "✅ Static files deployed"
 
-# ── 4. Install nginx config ──────────────────────────────────────────
+# ── 5. Install nginx config ──────────────────────────────────────────
 echo ""
 echo "📋 Installing nginx configuration..."
 sudo cp "$PROJECT_DIR/nginx/token-stats.conf" /etc/nginx/sites-available/token-stats
 sudo ln -sf /etc/nginx/sites-available/token-stats /etc/nginx/sites-enabled/token-stats
 echo "✅ nginx config installed"
 
-# ── 5. Test nginx ────────────────────────────────────────────────────
+# ── 6. Test nginx ────────────────────────────────────────────────────
 echo "🧪 Testing nginx configuration..."
 sudo nginx -t
 echo "✅ nginx config valid"
 
-# ── 6. Install systemd service ───────────────────────────────────────
+# ── 7. Install systemd service ───────────────────────────────────────
 echo ""
 echo "📋 Installing systemd service..."
 sudo cp "$PROJECT_DIR/nginx/token-stats.service" /etc/systemd/system/token-stats.service
 sudo systemctl daemon-reload
 echo "✅ systemd service installed"
 
-# ── 7. Start services ────────────────────────────────────────────────
+# ── 8. Start services ────────────────────────────────────────────────
 echo ""
 echo "🔄 Starting token-stats backend..."
 sudo systemctl enable token-stats
@@ -68,7 +65,7 @@ echo ""
 echo "🔄 Reloading nginx..."
 sudo nginx -s reload
 
-# ── 8. Verify ────────────────────────────────────────────────────────
+# ── 9. Verify ────────────────────────────────────────────────────────
 echo ""
 echo "🧪 Verifying deployment..."
 sleep 1

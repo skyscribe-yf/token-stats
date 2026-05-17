@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -88,6 +88,7 @@ pub struct DateStats {
 pub struct ModelStats {
     pub model: String,
     pub provider: String,
+    pub sources: Vec<String>,
     pub calls: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,

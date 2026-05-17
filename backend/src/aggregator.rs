@@ -1,7 +1,7 @@
 use crate::models::*;
 use crate::routes::TimeBound;
-use chrono::FixedOffset;
-use std::collections::HashMap;
+use chrono::{FixedOffset, Utc};
+use std::collections::{HashMap, HashSet};
 
 /// Get the local date string for a record, given an optional timezone offset
 fn local_date_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> String {
@@ -16,17 +16,26 @@ fn local_date_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Stri
     record.date.clone()
 }
 
+fn parse_csv_filter(s: Option<&str>) -> Vec<&str> {
+    s.map(|v| v.split(',').filter(|x| !x.is_empty()).collect())
+        .unwrap_or_default()
+}
+
 pub fn aggregate_records(
     records: &[TokenRecord],
     from: Option<&TimeBound>,
     to: Option<&TimeBound>,
     source: Option<&str>,
+    provider: Option<&str>,
     tz: Option<&FixedOffset>,
 ) -> StatsResponse {
+    let sources = parse_csv_filter(source);
+    let providers = parse_csv_filter(provider);
     let filtered: Vec<&TokenRecord> = records
         .iter()
         .filter(|r| record_matches_bound(r, from, to, tz))
-        .filter(|r| source.map(|s| r.source == s).unwrap_or(true))
+        .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
+        .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .collect();
 
     let overall = compute_overall_stats(&filtered);
@@ -53,40 +62,75 @@ pub fn filter_records<'a>(
     source: Option<&str>,
     tz: Option<&FixedOffset>,
 ) -> Vec<&'a TokenRecord> {
-    records
+    let sources = parse_csv_filter(source);
+    let providers = parse_csv_filter(provider);
+    let mut filtered: Vec<&'a TokenRecord> = records
         .iter()
         .filter(|r| record_matches_bound(r, from, to, tz))
         .filter(|r| {
-            let provider_ok = provider.map(|p| r.provider == p).unwrap_or(true);
+            let provider_ok = providers.is_empty() || providers.contains(&r.provider.as_str());
             let model_ok = model.map(|m| r.model == m).unwrap_or(true);
-            let source_ok = source.map(|s| r.source == s).unwrap_or(true);
+            let source_ok = sources.is_empty() || sources.contains(&r.source.as_str());
             provider_ok && model_ok && source_ok
         })
-        .collect()
+        .collect();
+
+    // Sort by time descending, then source asc, provider asc, model asc
+    filtered.sort_by(|a, b| {
+        let time_order = match (a.parsed_time(), b.parsed_time()) {
+            (Some(at), Some(bt)) => bt.cmp(&at),
+            _ => b.time.cmp(&a.time),
+        };
+        time_order
+            .then_with(|| a.source.cmp(&b.source))
+            .then_with(|| a.provider.cmp(&b.provider))
+            .then_with(|| a.model.cmp(&b.model))
+    });
+
+    filtered
 }
 
-fn record_matches_bound(record: &TokenRecord, from: Option<&TimeBound>, to: Option<&TimeBound>, tz: Option<&FixedOffset>) -> bool {
+fn record_matches_bound(
+    record: &TokenRecord,
+    from: Option<&TimeBound>,
+    to: Option<&TimeBound>,
+    tz: Option<&FixedOffset>,
+) -> bool {
     let record_dt = record.parsed_time().map(|dt| dt.naive_utc());
     // Use local date if tz is provided, otherwise use UTC date
     let record_date = if let Some(tz) = tz {
-        record.parsed_time().map(|dt| dt.with_timezone(tz).date_naive())
+        record
+            .parsed_time()
+            .map(|dt| dt.with_timezone(tz).date_naive())
     } else {
         record.parsed_date()
     };
 
+    // Frontend datetime-local inputs are in the user's local timezone.
+    // Convert them to UTC using the tz_offset so we compare apples to apples.
+    let local_naive_to_utc = |naive: &chrono::NaiveDateTime| -> chrono::NaiveDateTime {
+        tz.and_then(|tz| {
+            naive
+                .and_local_timezone(*tz)
+                .single()
+                .map(|dt| dt.with_timezone(&Utc).naive_utc())
+        })
+        .unwrap_or(*naive)
+    };
+
     let from_ok = match from {
         Some(TimeBound::DateTime(f)) => {
-            record_dt.map_or(false, |rd| rd >= *f)
+            let from_utc = local_naive_to_utc(f);
+            record_dt.map_or(false, |rd| rd >= from_utc)
         }
-        Some(TimeBound::Date(f)) => {
-            record_date.map_or(false, |rd| rd >= *f)
-        }
+        Some(TimeBound::Date(f)) => record_date.map_or(false, |rd| rd >= *f),
         None => true,
     };
 
     let to_ok = match to {
         Some(TimeBound::DateTime(t)) => {
-            record_dt.map_or(false, |rd| rd <= *t)
+            let to_utc = local_naive_to_utc(t);
+            record_dt.map_or(false, |rd| rd <= to_utc)
         }
         Some(TimeBound::Date(t)) => {
             // For date-only upper bound, include the entire day
@@ -189,17 +233,19 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
     let mut map: HashMap<String, VendorStats> = HashMap::new();
 
     for r in records {
-        let entry = map.entry(r.provider.clone()).or_insert_with(|| VendorStats {
-            provider: r.provider.clone(),
-            calls: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: 0,
-            cost: 0.0,
-            cache_hit_ratio: 0.0,
-        });
+        let entry = map
+            .entry(r.provider.clone())
+            .or_insert_with(|| VendorStats {
+                provider: r.provider.clone(),
+                calls: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: 0,
+                cost: 0.0,
+                cache_hit_ratio: 0.0,
+            });
 
         entry.calls += 1;
         entry.input_tokens += r.input_tokens;
@@ -261,33 +307,52 @@ fn compute_date_stats(records: &[&TokenRecord], tz: Option<&FixedOffset>) -> Vec
 }
 
 fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
-    let mut map: HashMap<(String, String), ModelStats> = HashMap::new();
+    struct Agg {
+        stats: ModelStats,
+        source_set: HashSet<String>,
+    }
+
+    let mut map: HashMap<(String, String), Agg> = HashMap::new();
 
     for r in records {
         let key = (r.provider.clone(), r.model.clone());
-        let entry = map.entry(key).or_insert_with(|| ModelStats {
-            model: r.model.clone(),
-            provider: r.provider.clone(),
-            calls: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: 0,
-            cost: 0.0,
-            cache_hit_ratio: 0.0,
+        let agg = map.entry(key).or_insert_with(|| Agg {
+            stats: ModelStats {
+                model: r.model.clone(),
+                provider: r.provider.clone(),
+                sources: Vec::new(),
+                calls: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: 0,
+                cost: 0.0,
+                cache_hit_ratio: 0.0,
+            },
+            source_set: HashSet::new(),
         });
 
-        entry.calls += 1;
-        entry.input_tokens += r.input_tokens;
-        entry.output_tokens += r.output_tokens;
-        entry.cache_read_tokens += r.cache_read_tokens;
-        entry.cache_write_tokens += r.cache_write_tokens;
-        entry.total_tokens += r.total_tokens;
-        entry.cost += r.cost;
+        agg.stats.calls += 1;
+        agg.stats.input_tokens += r.input_tokens;
+        agg.stats.output_tokens += r.output_tokens;
+        agg.stats.cache_read_tokens += r.cache_read_tokens;
+        agg.stats.cache_write_tokens += r.cache_write_tokens;
+        agg.stats.total_tokens += r.total_tokens;
+        agg.stats.cost += r.cost;
+        agg.source_set.insert(r.source.clone());
     }
 
-    let mut result: Vec<ModelStats> = map.into_values().collect();
+    let mut result: Vec<ModelStats> = map
+        .into_values()
+        .map(|mut agg| {
+            let mut sources: Vec<String> = agg.source_set.into_iter().collect();
+            sources.sort();
+            agg.stats.sources = sources;
+            agg.stats
+        })
+        .collect();
+
     for m in &mut result {
         let total_input = m.input_tokens + m.cache_read_tokens;
         if total_input > 0 {
@@ -334,4 +399,96 @@ fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
 
     result.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, NaiveDateTime};
+
+    fn record(
+        source: &str,
+        provider: &str,
+        model: &str,
+        time: &str,
+        total_tokens: i64,
+    ) -> TokenRecord {
+        TokenRecord {
+            date: time[..10].to_string(),
+            time: time.to_string(),
+            api_key_prefix: "test".to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            source: source.to_string(),
+            input_tokens: total_tokens / 2,
+            output_tokens: total_tokens / 2,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens,
+            cost: 0.0,
+        }
+    }
+
+    #[test]
+    fn aggregate_records_accepts_comma_separated_source_and_provider_filters() {
+        let records = vec![
+            record("pi", "openai", "gpt-5.5", "2026-05-17T10:00:00Z", 100),
+            record("codex", "openai", "gpt-5.5", "2026-05-17T11:00:00Z", 200),
+            record("kimi-cli", "kimi", "kimi-k2", "2026-05-17T12:00:00Z", 300),
+            record(
+                "claude-code",
+                "anthropic",
+                "claude-sonnet",
+                "2026-05-17T13:00:00Z",
+                400,
+            ),
+        ];
+
+        let stats = aggregate_records(&records, None, None, Some("pi,codex"), Some("openai"), None);
+
+        assert_eq!(stats.overall.total_calls, 2);
+        assert_eq!(stats.overall.total_tokens, 300);
+        assert_eq!(stats.by_source.len(), 2);
+        assert!(stats.by_source.iter().any(|s| s.source == "pi"));
+        assert!(stats.by_source.iter().any(|s| s.source == "codex"));
+    }
+
+    #[test]
+    fn datetime_bounds_are_interpreted_in_requested_local_timezone() {
+        let records = vec![
+            record("pi", "openai", "before", "2026-05-17T11:30:00Z", 100),
+            record("pi", "openai", "inside", "2026-05-17T12:30:00Z", 200),
+            record("pi", "openai", "after", "2026-05-17T13:30:00Z", 300),
+        ];
+        let tz = FixedOffset::east_opt(8 * 60 * 60).unwrap();
+        let from = TimeBound::DateTime(local_dt(2026, 5, 17, 20, 0, 0));
+        let to = TimeBound::DateTime(local_dt(2026, 5, 17, 21, 0, 0));
+
+        let filtered = filter_records(
+            &records,
+            Some(&from),
+            Some(&to),
+            None,
+            None,
+            Some("pi"),
+            Some(&tz),
+        );
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].model, "inside");
+    }
+
+    fn local_dt(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_opt(hour, minute, second)
+            .unwrap()
+    }
 }

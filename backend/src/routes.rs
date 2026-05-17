@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::{NaiveDate, FixedOffset};
+use chrono::{FixedOffset, NaiveDate};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -19,6 +19,7 @@ pub struct StatsQuery {
     pub from: Option<String>,
     pub to: Option<String>,
     pub source: Option<String>,
+    pub provider: Option<String>,
     /// Timezone offset in minutes from UTC (e.g. 480 for UTC+8, -300 for UTC-5)
     /// Used to compute local dates for by_date aggregation
     pub tz_offset: Option<i32>,
@@ -60,6 +61,10 @@ pub fn parse_time_bound(s: &str) -> Option<TimeBound> {
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
         return Some(TimeBound::DateTime(dt));
     }
+    // Support datetime-local input format without seconds (HTML default)
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M") {
+        return Some(TimeBound::DateTime(dt));
+    }
     if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         return Some(TimeBound::Date(d));
     }
@@ -79,9 +84,17 @@ pub async fn get_stats(
     let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
+    let provider = query.provider.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
 
-    let response = aggregator::aggregate_records(&records, from.as_ref(), to.as_ref(), source, tz.as_ref());
+    let response = aggregator::aggregate_records(
+        &records,
+        from.as_ref(),
+        to.as_ref(),
+        source,
+        provider,
+        tz.as_ref(),
+    );
     Json(response)
 }
 
@@ -97,15 +110,21 @@ pub async fn get_requests(
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
 
-    let filtered = aggregator::filter_records(&records, from.as_ref(), to.as_ref(), provider, model, source, tz.as_ref());
+    let filtered = aggregator::filter_records(
+        &records,
+        from.as_ref(),
+        to.as_ref(),
+        provider,
+        model,
+        source,
+        tz.as_ref(),
+    );
     let paginated = aggregator::paginate_requests(filtered, query.page, query.limit, tz.as_ref());
 
     Json(paginated)
 }
 
-pub async fn get_filters(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let records = state.records.read().await;
 
     let mut vendors: Vec<String> = records.iter().map(|r| r.provider.clone()).collect();
