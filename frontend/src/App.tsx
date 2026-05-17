@@ -45,6 +45,56 @@ import {
   cn,
 } from "./lib/utils";
 
+const ZH = {
+  title: "Token 统计仪表盘",
+  subtitle: "监控跨供应商的 AI Token 使用情况",
+  totalCalls: "总调用次数",
+  inputTokens: "输入 Token",
+  outputTokens: "输出 Token",
+  cacheRead: "缓存读取",
+  cacheHitRatio: "缓存命中率",
+  weighted: "加权",
+  totalCost: "总费用",
+  dailyTokenUsage: "每日 Token 用量",
+  vendorBreakdown: "供应商分布",
+  cacheHitTrend: "缓存命中率趋势",
+  tokenDistribution: "Token 分布",
+  vendorPerformance: "供应商表现",
+  modelPerformance: "模型表现",
+  detailedRequests: "详细请求",
+  allProviders: "全部供应商",
+  allModels: "全部模型",
+  provider: "供应商",
+  model: "模型",
+  calls: "调用次数",
+  input: "输入",
+  output: "输出",
+  cacheReadCol: "缓存读取",
+  cacheWriteCol: "缓存写入",
+  total: "合计",
+  cacheHit: "缓存命中",
+  cost: "费用",
+  date: "日期",
+  showing: "显示",
+  of: "/",
+  requests: "条请求",
+  footer: "Token 统计仪表盘 · 基于 Rust + React 构建",
+  selectDay: "选择日期",
+  dateRange: "日期范围",
+  from: "从",
+  to: "至",
+  inputLabel: "输入",
+  outputLabel: "输出",
+  cacheReadLabel: "缓存读取",
+  cacheHitLabel: "缓存命中率",
+  totalTokensLabel: "总 Token",
+  tokens: "Token",
+  today: "今天",
+  toggleTime: "切换精确时间",
+} as const;
+
+type DateMode = "day" | "range";
+
 function getDefaultDateRange() {
   const to = new Date();
   const from = new Date();
@@ -53,6 +103,20 @@ function getDefaultDateRange() {
     from: from.toISOString().slice(0, 10),
     to: to.toISOString().slice(0, 10),
   };
+}
+
+function getDefaultTimeRange() {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 30);
+  return {
+    from: from.toISOString().slice(0, 16), // YYYY-MM-DDTHH:mm
+    to: to.toISOString().slice(0, 16),
+  };
+}
+
+function getToday() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function StatCard({
@@ -121,14 +185,18 @@ function PieTooltip({ active, payload }: { active?: boolean; payload?: any[] }) 
   return (
     <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
       <p className="font-semibold text-slate-700">{p.name}</p>
-      <p className="text-slate-600">{formatNumber(p.value)} tokens</p>
+      <p className="text-slate-600">{formatNumber(p.value)} {ZH.tokens}</p>
       <p className="text-slate-500">{p.percent?.toFixed(1)}%</p>
     </div>
   );
 }
 
 export default function App() {
+  const [dateMode, setDateMode] = useState<DateMode>("range");
+  const [selectedDay, setSelectedDay] = useState(getToday);
   const [dateRange, setDateRange] = useState(getDefaultDateRange);
+  const [timeRange, setTimeRange] = useState(getDefaultTimeRange);
+  const [useTimeRange, setUseTimeRange] = useState(false);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
   const [filters, setFilters] = useState<FilterOptions>({ vendors: [], models: [] });
@@ -138,12 +206,24 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Compute effective from/to for API calls
+  const effectiveRange = useMemo(() => {
+    if (dateMode === "day") {
+      return { from: selectedDay, to: selectedDay };
+    }
+    if (useTimeRange) {
+      // datetime-local values: YYYY-MM-DDTHH:mm -> pass directly to API
+      return { from: timeRange.from, to: timeRange.to };
+    }
+    return dateRange;
+  }, [dateMode, selectedDay, dateRange, timeRange, useTimeRange]);
+
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
       const [s, f] = await Promise.all([
-        fetchStats(dateRange.from, dateRange.to),
+        fetchStats(effectiveRange.from, effectiveRange.to),
         fetchFilters(),
       ]);
       setStats(s);
@@ -159,8 +239,8 @@ export default function App() {
   const loadRequests = async () => {
     try {
       const r = await fetchRequests(
-        dateRange.from,
-        dateRange.to,
+        effectiveRange.from,
+        effectiveRange.to,
         selectedVendor || undefined,
         selectedModel || undefined,
         page,
@@ -174,11 +254,11 @@ export default function App() {
 
   useEffect(() => {
     loadData();
-  }, [dateRange.from, dateRange.to]);
+  }, [effectiveRange.from, effectiveRange.to]);
 
   useEffect(() => {
     loadRequests();
-  }, [dateRange.from, dateRange.to, selectedVendor, selectedModel, page]);
+  }, [effectiveRange.from, effectiveRange.to, selectedVendor, selectedModel, page]);
 
   const chartData = useMemo(() => {
     if (!stats?.by_date) return [];
@@ -216,19 +296,26 @@ export default function App() {
   }, [stats]);
 
   const presetRanges = [
-    { label: "7D", days: 7 },
-    { label: "30D", days: 30 },
-    { label: "90D", days: 90 },
-    { label: "All", days: 365 * 10 },
+    { label: ZH.today, days: 0 },
+    { label: "7天", days: 7 },
+    { label: "30天", days: 30 },
+    { label: "90天", days: 90 },
+    { label: "全部", days: 365 * 10 },
   ];
 
   const applyPreset = (days: number) => {
+    setDateMode("range");
+    setUseTimeRange(false);
     const to = new Date();
     const from = new Date();
     from.setDate(from.getDate() - days);
     setDateRange({
       from: from.toISOString().slice(0, 10),
       to: to.toISOString().slice(0, 10),
+    });
+    setTimeRange({
+      from: from.toISOString().slice(0, 16),
+      to: to.toISOString().slice(0, 16),
     });
   };
 
@@ -243,8 +330,8 @@ export default function App() {
                 <Activity className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-slate-800">Token Stats Dashboard</h1>
-                <p className="text-sm text-slate-500">Monitor your AI token usage across providers</p>
+                <h1 className="text-xl font-bold text-slate-800">{ZH.title}</h1>
+                <p className="text-sm text-slate-500">{ZH.subtitle}</p>
               </div>
             </div>
 
@@ -258,25 +345,103 @@ export default function App() {
                   {p.label}
                 </button>
               ))}
-              <div className="flex items-center gap-1.5 ml-2">
+              <div className="flex items-center gap-3 ml-2">
+                {/* Mode toggle */}
+                <div className="flex items-center bg-slate-100 rounded-md p-0.5">
+                  <button
+                    onClick={() => setDateMode("day")}
+                    className={cn(
+                      "px-2.5 py-1 text-xs font-medium rounded transition-colors",
+                      dateMode === "day"
+                        ? "bg-white text-primary-700 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    {ZH.selectDay}
+                  </button>
+                  <button
+                    onClick={() => setDateMode("range")}
+                    className={cn(
+                      "px-2.5 py-1 text-xs font-medium rounded transition-colors",
+                      dateMode === "range"
+                        ? "bg-white text-primary-700 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    {ZH.dateRange}
+                  </button>
+                </div>
+
                 <Calendar className="w-4 h-4 text-slate-400" />
-                <input
-                  type="date"
-                  value={dateRange.from}
-                  onChange={(e) =>
-                    setDateRange((prev) => ({ ...prev, from: e.target.value }))
-                  }
-                  className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                />
-                <span className="text-slate-400">-</span>
-                <input
-                  type="date"
-                  value={dateRange.to}
-                  onChange={(e) =>
-                    setDateRange((prev) => ({ ...prev, to: e.target.value }))
-                  }
-                  className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                />
+
+                {dateMode === "day" ? (
+                  /* Single day picker */
+                  <input
+                    type="date"
+                    value={selectedDay}
+                    onChange={(e) => setSelectedDay(e.target.value)}
+                    className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  />
+                ) : (
+                  /* Date range / time range */
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500">{ZH.from}</span>
+                      {useTimeRange ? (
+                        <input
+                          type="datetime-local"
+                          value={timeRange.from}
+                          onChange={(e) =>
+                            setTimeRange((prev) => ({ ...prev, from: e.target.value }))
+                          }
+                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                        />
+                      ) : (
+                        <input
+                          type="date"
+                          value={dateRange.from}
+                          onChange={(e) =>
+                            setDateRange((prev) => ({ ...prev, from: e.target.value }))
+                          }
+                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                        />
+                      )}
+                      <span className="text-slate-400">-</span>
+                      <span className="text-xs text-slate-500">{ZH.to}</span>
+                      {useTimeRange ? (
+                        <input
+                          type="datetime-local"
+                          value={timeRange.to}
+                          onChange={(e) =>
+                            setTimeRange((prev) => ({ ...prev, to: e.target.value }))
+                          }
+                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                        />
+                      ) : (
+                        <input
+                          type="date"
+                          value={dateRange.to}
+                          onChange={(e) =>
+                            setDateRange((prev) => ({ ...prev, to: e.target.value }))
+                          }
+                          className="px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                        />
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setUseTimeRange((v) => !v)}
+                      className={cn(
+                        "px-2 py-1 text-xs font-medium rounded-md transition-colors",
+                        useTimeRange
+                          ? "bg-primary-100 text-primary-700"
+                          : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                      )}
+                      title={ZH.toggleTime}
+                    >
+                      🕐
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -301,38 +466,38 @@ export default function App() {
             {/* Summary Cards */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
               <StatCard
-                title="Total Calls"
+                title={ZH.totalCalls}
                 value={formatNumber(stats.overall.total_calls)}
                 icon={Server}
                 color="bg-primary-500"
               />
               <StatCard
-                title="Input Tokens"
+                title={ZH.inputTokens}
                 value={formatTokens(stats.overall.total_input_tokens)}
                 icon={Database}
                 color="bg-emerald-500"
               />
               <StatCard
-                title="Output Tokens"
+                title={ZH.outputTokens}
                 value={formatTokens(stats.overall.total_output_tokens)}
                 icon={Zap}
                 color="bg-amber-500"
               />
               <StatCard
-                title="Cache Read"
+                title={ZH.cacheRead}
                 value={formatTokens(stats.overall.total_cache_read_tokens)}
                 icon={TrendingUp}
                 color="bg-violet-500"
               />
               <StatCard
-                title="Cache Hit Ratio"
+                title={ZH.cacheHitRatio}
                 value={formatPercent(stats.overall.weighted_cache_hit_ratio)}
-                subtitle="weighted"
+                subtitle={ZH.weighted}
                 icon={Activity}
                 color="bg-rose-500"
               />
               <StatCard
-                title="Total Cost"
+                title={ZH.totalCost}
                 value={formatCost(stats.overall.total_cost)}
                 icon={Coins}
                 color="bg-slate-700"
@@ -341,12 +506,12 @@ export default function App() {
 
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              {/* Daily Trends */}
+              {/* Daily Trends + Cache Hit Ratio (dual axis) */}
               <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                  Daily Token Usage
+                  {ZH.dailyTokenUsage} & {ZH.cacheHitTrend}
                 </h3>
-                <ResponsiveContainer width="100%" height={280}>
+                <ResponsiveContainer width="100%" height={320}>
                   <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis
@@ -356,32 +521,56 @@ export default function App() {
                       textAnchor="end"
                       height={60}
                     />
-                    <YAxis tick={{ fontSize: 11, fill: "#64748b" }} />
+                    <YAxis
+                      yAxisId="tokens"
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickFormatter={(v: number) => formatNumber(v)}
+                    />
+                    <YAxis
+                      yAxisId="ratio"
+                      orientation="right"
+                      tick={{ fontSize: 11, fill: "#f43f5e" }}
+                      domain={[0, 100]}
+                      unit="%"
+                    />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend />
                     <Line
+                      yAxisId="tokens"
                       type="monotone"
                       dataKey="input"
-                      name="Input"
+                      name={ZH.inputLabel}
                       stroke="#10b981"
                       strokeWidth={2}
                       dot={false}
                     />
                     <Line
+                      yAxisId="tokens"
                       type="monotone"
                       dataKey="output"
-                      name="Output"
+                      name={ZH.outputLabel}
                       stroke="#f59e0b"
                       strokeWidth={2}
                       dot={false}
                     />
                     <Line
+                      yAxisId="tokens"
                       type="monotone"
                       dataKey="cacheRead"
-                      name="Cache Read"
+                      name={ZH.cacheReadLabel}
                       stroke="#8b5cf6"
                       strokeWidth={2}
                       dot={false}
+                    />
+                    <Line
+                      yAxisId="ratio"
+                      type="monotone"
+                      dataKey="cacheHitRatio"
+                      name={ZH.cacheHitLabel}
+                      stroke="#f43f5e"
+                      strokeWidth={2}
+                      strokeDasharray="6 3"
+                      dot={{ r: 2 }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -390,14 +579,15 @@ export default function App() {
               {/* Vendor Breakdown */}
               <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                  Vendor Breakdown
+                  {ZH.vendorBreakdown}
                 </h3>
-                <ResponsiveContainer width="100%" height={280}>
+                <ResponsiveContainer width="100%" height={320}>
                   <BarChart data={vendorChartData} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis
                       type="number"
                       tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickFormatter={(v: number) => formatNumber(v)}
                     />
                     <YAxis
                       type="category"
@@ -406,7 +596,7 @@ export default function App() {
                       width={100}
                     />
                     <Tooltip content={<CustomTooltip />} />
-                    <Bar dataKey="tokens" name="Total Tokens" radius={[0, 4, 4, 0]}>
+                    <Bar dataKey="tokens" name={ZH.totalTokensLabel} radius={[0, 4, 4, 0]}>
                       {vendorChartData.map((_, i) => (
                         <Cell
                           key={i}
@@ -419,91 +609,55 @@ export default function App() {
               </div>
             </div>
 
-            {/* Second Row Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              {/* Cache Hit Ratio by Date */}
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                  Cache Hit Ratio Trend
-                </h3>
-                <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      angle={-30}
-                      textAnchor="end"
-                      height={60}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      domain={[0, 100]}
-                      unit="%"
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Line
-                      type="monotone"
-                      dataKey="cacheHitRatio"
-                      name="Cache Hit %"
-                      stroke="#f43f5e"
-                      strokeWidth={2}
-                      dot={{ r: 3 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Token Distribution Pie */}
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                  Token Distribution
-                </h3>
-                <ResponsiveContainer width="100%" height={250}>
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={90}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
-                      {pieData.map((entry, i) => (
-                        <Cell
-                          key={i}
-                          fill={getVendorColor(entry.name)}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<PieTooltip />} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+            {/* Token Distribution Pie */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm mb-6">
+              <h3 className="text-sm font-semibold text-slate-700 mb-4">
+                {ZH.tokenDistribution}
+              </h3>
+              <ResponsiveContainer width="100%" height={250}>
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={90}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {pieData.map((entry, i) => (
+                      <Cell
+                        key={i}
+                        fill={getVendorColor(entry.name)}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<PieTooltip />} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
 
             {/* Vendor Detail Table */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-6">
               <div className="p-5 border-b border-slate-100">
                 <h3 className="text-sm font-semibold text-slate-700">
-                  Vendor Performance
+                  {ZH.vendorPerformance}
                 </h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">Provider</th>
-                      <th className="px-4 py-3 text-right font-medium">Calls</th>
-                      <th className="px-4 py-3 text-right font-medium">Input</th>
-                      <th className="px-4 py-3 text-right font-medium">Output</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Read</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Write</th>
-                      <th className="px-4 py-3 text-right font-medium">Total</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Hit</th>
-                      <th className="px-4 py-3 text-right font-medium">Cost</th>
+                      <th className="px-4 py-3 text-left font-medium">{ZH.provider}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.calls}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.input}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.output}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheReadCol}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheWriteCol}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.total}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheHit}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cost}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -569,22 +723,22 @@ export default function App() {
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-6">
               <div className="p-5 border-b border-slate-100">
                 <h3 className="text-sm font-semibold text-slate-700">
-                  Model Performance
+                  {ZH.modelPerformance}
                 </h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">Model</th>
-                      <th className="px-4 py-3 text-left font-medium">Provider</th>
-                      <th className="px-4 py-3 text-right font-medium">Calls</th>
-                      <th className="px-4 py-3 text-right font-medium">Input</th>
-                      <th className="px-4 py-3 text-right font-medium">Output</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Read</th>
-                      <th className="px-4 py-3 text-right font-medium">Total</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Hit</th>
-                      <th className="px-4 py-3 text-right font-medium">Cost</th>
+                      <th className="px-4 py-3 text-left font-medium">{ZH.model}</th>
+                      <th className="px-4 py-3 text-left font-medium">{ZH.provider}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.calls}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.input}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.output}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheReadCol}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.total}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheHit}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cost}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -654,7 +808,7 @@ export default function App() {
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
               <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <h3 className="text-sm font-semibold text-slate-700">
-                  Detailed Requests
+                  {ZH.detailedRequests}
                 </h3>
                 <div className="flex items-center gap-2">
                   <Filter className="w-4 h-4 text-slate-400" />
@@ -666,7 +820,7 @@ export default function App() {
                     }}
                     className="px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 outline-none bg-white"
                   >
-                    <option value="">All Providers</option>
+                    <option value="">{ZH.allProviders}</option>
                     {filters.vendors.map((v) => (
                       <option key={v} value={v}>
                         {v}
@@ -681,7 +835,7 @@ export default function App() {
                     }}
                     className="px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 outline-none bg-white"
                   >
-                    <option value="">All Models</option>
+                    <option value="">{ZH.allModels}</option>
                     {filters.models.map((m) => (
                       <option key={m} value={m}>
                         {m}
@@ -695,16 +849,16 @@ export default function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">Date</th>
-                      <th className="px-4 py-3 text-left font-medium">Provider</th>
-                      <th className="px-4 py-3 text-left font-medium">Model</th>
-                      <th className="px-4 py-3 text-right font-medium">Input</th>
-                      <th className="px-4 py-3 text-right font-medium">Output</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Read</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Write</th>
-                      <th className="px-4 py-3 text-right font-medium">Total</th>
-                      <th className="px-4 py-3 text-right font-medium">Cache Hit</th>
-                      <th className="px-4 py-3 text-right font-medium">Cost</th>
+                      <th className="px-4 py-3 text-left font-medium">{ZH.date}</th>
+                      <th className="px-4 py-3 text-left font-medium">{ZH.provider}</th>
+                      <th className="px-4 py-3 text-left font-medium">{ZH.model}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.input}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.output}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheReadCol}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheWriteCol}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.total}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cacheHit}</th>
+                      <th className="px-4 py-3 text-right font-medium">{ZH.cost}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -771,12 +925,7 @@ export default function App() {
               {requests && requests.total_pages > 1 && (
                 <div className="p-4 border-t border-slate-100 flex items-center justify-between">
                   <p className="text-sm text-slate-500">
-                    Showing {(requests.page - 1) * requests.limit + 1}-
-                    {Math.min(
-                      requests.page * requests.limit,
-                      requests.total
-                    )}{" "}
-                    of {formatNumber(requests.total)} requests
+                    {ZH.showing} {(requests.page - 1) * requests.limit + 1}-{Math.min(requests.page * requests.limit, requests.total)} {ZH.of} {formatNumber(requests.total)} {ZH.requests}
                   </p>
                   <div className="flex items-center gap-1">
                     <button
@@ -832,7 +981,7 @@ export default function App() {
             </div>
 
             <footer className="mt-8 text-center text-sm text-slate-400 pb-6">
-              Token Stats Dashboard · Built with Rust + React
+              {ZH.footer}
             </footer>
           </>
         )}

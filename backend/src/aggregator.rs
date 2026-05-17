@@ -1,19 +1,15 @@
 use crate::models::*;
-use chrono::NaiveDate;
+use crate::routes::TimeBound;
 use std::collections::HashMap;
 
-pub fn aggregate_records(records: &[TokenRecord], from: Option<NaiveDate>, to: Option<NaiveDate>) -> StatsResponse {
+pub fn aggregate_records(
+    records: &[TokenRecord],
+    from: Option<&TimeBound>,
+    to: Option<&TimeBound>,
+) -> StatsResponse {
     let filtered: Vec<&TokenRecord> = records
         .iter()
-        .filter(|r| {
-            let date = r.parsed_date();
-            match (from, to, date) {
-                (Some(f), Some(t), Some(d)) => d >= f && d <= t,
-                (Some(f), None, Some(d)) => d >= f,
-                (None, Some(t), Some(d)) => d <= t,
-                _ => true,
-            }
-        })
+        .filter(|r| record_matches_bound(r, from, to))
         .collect();
 
     let overall = compute_overall_stats(&filtered);
@@ -31,26 +27,48 @@ pub fn aggregate_records(records: &[TokenRecord], from: Option<NaiveDate>, to: O
 
 pub fn filter_records<'a>(
     records: &'a [TokenRecord],
-    from: Option<NaiveDate>,
-    to: Option<NaiveDate>,
-    provider: Option<&'a str>,
-    model: Option<&'a str>,
+    from: Option<&TimeBound>,
+    to: Option<&TimeBound>,
+    provider: Option<&str>,
+    model: Option<&str>,
 ) -> Vec<&'a TokenRecord> {
     records
         .iter()
+        .filter(|r| record_matches_bound(r, from, to))
         .filter(|r| {
-            let date = r.parsed_date();
-            let date_ok = match (from, to, date) {
-                (Some(f), Some(t), Some(d)) => d >= f && d <= t,
-                (Some(f), None, Some(d)) => d >= f,
-                (None, Some(t), Some(d)) => d <= t,
-                _ => true,
-            };
             let provider_ok = provider.map(|p| r.provider == p).unwrap_or(true);
             let model_ok = model.map(|m| r.model == m).unwrap_or(true);
-            date_ok && provider_ok && model_ok
+            provider_ok && model_ok
         })
         .collect()
+}
+
+fn record_matches_bound(record: &TokenRecord, from: Option<&TimeBound>, to: Option<&TimeBound>) -> bool {
+    let record_dt = record.parsed_time().map(|dt| dt.naive_utc());
+    let record_date = record.parsed_date();
+
+    let from_ok = match from {
+        Some(TimeBound::DateTime(f)) => {
+            record_dt.map_or(false, |rd| rd >= *f)
+        }
+        Some(TimeBound::Date(f)) => {
+            record_date.map_or(false, |rd| rd >= *f)
+        }
+        None => true,
+    };
+
+    let to_ok = match to {
+        Some(TimeBound::DateTime(t)) => {
+            record_dt.map_or(false, |rd| rd <= *t)
+        }
+        Some(TimeBound::Date(t)) => {
+            // For date-only upper bound, include the entire day
+            record_date.map_or(false, |rd| rd <= *t)
+        }
+        None => true,
+    };
+
+    from_ok && to_ok
 }
 
 pub fn paginate_requests(
