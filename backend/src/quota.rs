@@ -1,10 +1,12 @@
 //! Quota/balance fetchers for external AI API providers.
 //!
 //! Supports:
-//! - **Kimi (Moonshot)**: Balance via `GET /v1/users/me/balance`
+//! - **Kimi Code**: Usage via `GET /usages` on the Kimi Code platform (OAuth access token)
 //! - **OpenCode-go**: Usage/quota via OpenAI-compatible billing endpoints
 //!
 //! Auth keys are read from environment variables or local config files.
+//! For Kimi, the system reads the OAuth access token from
+//! `~/.kimi/credentials/kimi-code.json` for the Kimi Code platform.
 
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
@@ -36,31 +38,175 @@ impl std::fmt::Display for QuotaError {
     }
 }
 
-// ─── Kimi (Moonshot) ─────────────────────────────────────────────────────────
+// ─── Kimi Code (OAuth) ────────────────────────────────────────────────────────
 
-/// Raw response from `GET /v1/users/me/balance` on the Moonshot API.
+/// Raw response from `GET /usages` on the Kimi Code platform API.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MoonshotBalanceResponse {
-    pub code: i64,
-    pub data: MoonshotBalanceData,
-    pub scode: String,
-    pub status: bool,
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeUsageResponse {
+    #[serde(default)]
+    pub usage: Option<KimiCodeUsageData>,
+    #[serde(default)]
+    pub limits: Vec<KimiCodeLimit>,
+    #[serde(default)]
+    pub total_quota: Option<KimiCodeTotalQuota>,
+    #[serde(default)]
+    pub user: Option<KimiCodeUser>,
+    #[serde(default)]
+    pub parallel: Option<KimiCodeParallel>,
+    #[serde(default)]
+    pub sub_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MoonshotBalanceData {
-    pub available_balance: f64,
-    pub voucher_balance: f64,
-    pub cash_balance: f64,
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeUsageData {
+    #[serde(deserialize_with = "deserialize_flexible_number", default)]
+    pub limit: f64,
+    #[serde(deserialize_with = "deserialize_flexible_number", default)]
+    pub used: f64,
+    #[serde(deserialize_with = "deserialize_flexible_number", default)]
+    pub remaining: f64,
+    #[serde(default)]
+    pub reset_time: Option<String>,
 }
 
-/// Simplified Kimi quota info for the dashboard.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeLimit {
+    #[serde(default)]
+    pub window: Option<KimiCodeWindow>,
+    #[serde(default)]
+    pub detail: Option<KimiCodeUsageData>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeWindow {
+    #[serde(default)]
+    pub duration: Option<i64>,
+    #[serde(default)]
+    pub time_unit: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeTotalQuota {
+    #[serde(deserialize_with = "deserialize_flexible_number", default)]
+    pub limit: f64,
+    #[serde(deserialize_with = "deserialize_flexible_number", default)]
+    pub remaining: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeUser {
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub membership: Option<KimiCodeMembership>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KimiCodeMembership {
+    #[serde(default)]
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct KimiCodeParallel {
+    #[serde(deserialize_with = "deserialize_flexible_number", default)]
+    pub limit: f64,
+}
+
+/// Deserializer that accepts both string and numeric values for number fields.
+/// The Kimi Code API returns numbers as strings (e.g. "100" instead of 100).
+fn deserialize_flexible_number<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct FlexibleNumberVisitor;
+
+    impl<'de> de::Visitor<'de> for FlexibleNumberVisitor {
+        type Value = f64;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a number or a string containing a number")
+        }
+
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v)
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v as f64)
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v as f64)
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            v.parse::<f64>()
+                .map_err(|_| de::Error::custom(format!("invalid number string: {}", v)))
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(0.0)
+        }
+    }
+
+    deserializer.deserialize_any(FlexibleNumberVisitor)
+}
+
+/// Simplified Kimi Code quota info for the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuotaKimi {
+pub struct QuotaKimiCode {
     pub provider: String,
-    pub available_balance: f64,
-    pub voucher_balance: f64,
-    pub cash_balance: f64,
+    /// Weekly request limit
+    pub weekly_limit: i64,
+    /// Weekly requests used
+    pub weekly_used: i64,
+    /// Weekly requests remaining
+    pub weekly_remaining: i64,
+    /// Weekly reset time (ISO 8601)
+    pub weekly_reset_time: Option<String>,
+    /// 5-hour rolling window limit
+    pub rp5h_limit: i64,
+    /// 5-hour rolling window used
+    pub rp5h_used: i64,
+    /// 5-hour remaining
+    pub rp5h_remaining: i64,
+    /// 5-hour reset time
+    pub rp5h_reset_time: Option<String>,
+    /// Total quota limit
+    pub total_limit: i64,
+    /// Total quota remaining
+    pub total_remaining: i64,
+    /// Parallel request limit
+    pub parallel_limit: i64,
+    /// Membership level
+    pub membership_level: Option<String>,
+    /// Subscription type
+    pub sub_type: Option<String>,
 }
 
 // ─── OpenCode-go ──────────────────────────────────────────────────────────────
@@ -105,6 +251,8 @@ pub struct QuotaOpenCode {
     pub total_usage_usd: Option<f64>,
     pub usage_percent: Option<f64>,
     pub remaining_usd: Option<f64>,
+    /// Link to the OpenCode-go workspace dashboard (when billing API returns 404)
+    pub workspace_url: Option<String>,
 }
 
 // ─── Unified quota response ───────────────────────────────────────────────────
@@ -119,7 +267,7 @@ pub struct QuotaResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KimiQuotaStatus {
     pub available: bool,
-    pub data: Option<QuotaKimi>,
+    pub data: Option<QuotaKimiCode>,
     pub error: Option<String>,
 }
 
@@ -132,11 +280,58 @@ pub struct OpenCodeQuotaStatus {
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
-/// Read Moonshot API key from environment variable.
-pub fn get_moonshot_api_key() -> Option<String> {
-    std::env::var("MOONSHOT_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+/// Path to the Kimi Code credentials file.
+/// Can be overridden via the `KIMI_CREDENTIALS_PATH` env var.
+pub fn get_kimi_credentials_path() -> PathBuf {
+    if let Ok(path) = std::env::var("KIMI_CREDENTIALS_PATH") {
+        return PathBuf::from(path);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".kimi")
+        .join("credentials")
+        .join("kimi-code.json")
+}
+
+/// Read Kimi Code OAuth access token from `~/.kimi/credentials/kimi-code.json`.
+pub fn get_kimi_code_access_token() -> Option<String> {
+    let path = get_kimi_credentials_path();
+    if !path.exists() {
+        tracing::debug!("Kimi credentials file not found at {:?}", path);
+        return None;
+    }
+
+    let content = std::fs::read_to_string(path).ok()?;
+    let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let token = creds.get("access_token").and_then(|v| v.as_str())?;
+    if token.is_empty() {
+        return None;
+    }
+
+    // Check if token is expired
+    if let Some(expires_at) = creds.get("expires_at").and_then(|v| v.as_f64()) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as f64;
+        if now > expires_at {
+            tracing::warn!(
+                "Kimi Code access token expired at {}, current time {}",
+                expires_at,
+                now
+            );
+            return None;
+        }
+    }
+
+    Some(token.to_string())
+}
+
+/// Get the Kimi Code API base URL.
+pub fn get_kimi_code_base_url() -> String {
+    std::env::var("KIMI_CODE_BASE_URL")
+        .unwrap_or_else(|_| "https://api.kimi.com/coding/v1".to_string())
 }
 
 /// Path to the OpenCode auth.json file.
@@ -185,12 +380,16 @@ pub fn get_opencode_api_key() -> Option<String> {
 
 /// Get the OpenCode base URL for API calls.
 pub fn get_opencode_base_url() -> String {
-    std::env::var("OPENCODE_BASE_URL").unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
+    std::env::var("OPENCODE_BASE_URL")
+        .unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
 }
 
-/// Get the Moonshot API base URL.
-pub fn get_moonshot_base_url() -> String {
-    std::env::var("MOONSHOT_BASE_URL").unwrap_or_else(|_| "https://api.moonshot.ai".to_string())
+/// Get the OpenCode-go workspace URL from env var.
+pub fn get_opencode_workspace_url() -> Option<String> {
+    std::env::var("OPENCODE_GO_WORKSPACE_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .map(|id| format!("https://opencode.ai/workspace/{}/go", id))
 }
 
 // ─── Fetcher ──────────────────────────────────────────────────────────────────
@@ -208,26 +407,31 @@ impl QuotaFetcher {
         }
     }
 
-    /// Fetch Kimi balance from the Moonshot API.
-    pub async fn fetch_kimi_balance(&self) -> KimiQuotaStatus {
-        let api_key = match get_moonshot_api_key() {
-            Some(k) => k,
+    /// Fetch Kimi Code usage from the Kimi Code platform API.
+    pub async fn fetch_kimi_quota(&self) -> KimiQuotaStatus {
+        let access_token = match get_kimi_code_access_token() {
+            Some(t) => t,
             None => {
                 return KimiQuotaStatus {
                     available: false,
                     data: None,
-                    error: Some("MOONSHOT_API_KEY not configured".to_string()),
+                    error: Some(
+                        "Kimi Code access token not found. \
+                         Log in with `kimi` CLI or set KIMI_CREDENTIALS_PATH"
+                            .to_string(),
+                    ),
                 };
             }
         };
 
-        let base_url = get_moonshot_base_url();
-        let url = format!("{}/v1/users/me/balance", base_url.trim_end_matches('/'));
+        let base_url = get_kimi_code_base_url();
+        let url = format!("{}/usages", base_url.trim_end_matches('/'));
 
         let response = match self
             .client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
         {
@@ -251,7 +455,7 @@ impl QuotaFetcher {
             };
         }
 
-        let balance: MoonshotBalanceResponse = match response.json().await {
+        let body: KimiCodeUsageResponse = match response.json().await {
             Ok(b) => b,
             Err(e) => {
                 return KimiQuotaStatus {
@@ -262,24 +466,85 @@ impl QuotaFetcher {
             }
         };
 
-        if balance.code != 0 {
-            return KimiQuotaStatus {
-                available: false,
-                data: None,
-                error: Some(format!(
-                    "API error code {}: {}",
-                    balance.code, balance.scode
-                )),
-            };
+        // Extract weekly and 5-hour limits from the response
+        let mut weekly_limit: i64 = 0;
+        let mut weekly_used: i64 = 0;
+        let mut weekly_remaining: i64 = 0;
+        let mut weekly_reset_time: Option<String> = None;
+        let mut rp5h_limit: i64 = 0;
+        let mut rp5h_used: i64 = 0;
+        let mut rp5h_remaining: i64 = 0;
+        let mut rp5h_reset_time: Option<String> = None;
+
+        // Top-level usage is the primary (weekly) rate limit
+        if let Some(usage) = &body.usage {
+            weekly_limit = usage.limit as i64;
+            weekly_used = usage.used as i64;
+            weekly_remaining = usage.remaining as i64;
+            weekly_reset_time = usage.reset_time.clone();
         }
+
+        // Scan limits array for the 5-hour rolling window
+        for limit in &body.limits {
+            if let Some(detail) = &limit.detail {
+                let window_duration = limit.window.as_ref().and_then(|w| w.duration);
+                let time_unit = limit
+                    .window
+                    .as_ref()
+                    .and_then(|w| w.time_unit.as_deref());
+
+                // Identify the 5-hour rolling window
+                let is_5h = (window_duration == Some(5)
+                    && time_unit == Some("TIME_UNIT_HOUR"))
+                    || (window_duration == Some(300) && time_unit == Some("TIME_UNIT_MINUTE"));
+
+                if is_5h {
+                    rp5h_limit = detail.limit as i64;
+                    rp5h_used = detail.used as i64;
+                    rp5h_remaining = detail.remaining as i64;
+                    rp5h_reset_time = detail.reset_time.clone();
+                }
+            }
+        }
+
+        let total_limit = body
+            .total_quota
+            .as_ref()
+            .map(|q| q.limit as i64)
+            .unwrap_or(0);
+        let total_remaining = body
+            .total_quota
+            .as_ref()
+            .map(|q| q.remaining as i64)
+            .unwrap_or(0);
+        let parallel_limit = body
+            .parallel
+            .as_ref()
+            .map(|p| p.limit as i64)
+            .unwrap_or(0);
+        let membership_level = body
+            .user
+            .as_ref()
+            .and_then(|u| u.membership.as_ref().and_then(|m| m.level.clone()));
+        let sub_type = body.sub_type.clone();
 
         KimiQuotaStatus {
             available: true,
-            data: Some(QuotaKimi {
-                provider: "kimi".to_string(),
-                available_balance: balance.data.available_balance,
-                voucher_balance: balance.data.voucher_balance,
-                cash_balance: balance.data.cash_balance,
+            data: Some(QuotaKimiCode {
+                provider: "kimi-code".to_string(),
+                weekly_limit,
+                weekly_used,
+                weekly_remaining,
+                weekly_reset_time,
+                rp5h_limit,
+                rp5h_used,
+                rp5h_remaining,
+                rp5h_reset_time,
+                total_limit,
+                total_remaining,
+                parallel_limit,
+                membership_level,
+                sub_type,
             }),
             error: None,
         }
@@ -290,10 +555,31 @@ impl QuotaFetcher {
     /// Calls the OpenAI-compatible billing endpoints at the configured base URL.
     /// First tries `/v1/dashboard/billing/subscription` for plan info and limits,
     /// then `/v1/dashboard/billing/usage` for current usage.
+    ///
+    /// If the subscription endpoint returns 404, provides a workspace link
+    /// (from `OPENCODE_GO_WORKSPACE_ID` env var) for the user to check manually.
     pub async fn fetch_opencode_quota(&self) -> OpenCodeQuotaStatus {
         let api_key = match get_opencode_api_key() {
             Some(k) => k,
             None => {
+                // No API key — try providing workspace link if available
+                if let Some(url) = get_opencode_workspace_url() {
+                    return OpenCodeQuotaStatus {
+                        available: false,
+                        data: Some(QuotaOpenCode {
+                            provider: "opencode-go".to_string(),
+                            plan_type: None,
+                            hard_limit_usd: None,
+                            total_usage_usd: None,
+                            usage_percent: None,
+                            remaining_usd: None,
+                            workspace_url: Some(url),
+                        }),
+                        error: Some(
+                            "API key not found. Visit workspace to check usage.".to_string(),
+                        ),
+                    };
+                }
                 return OpenCodeQuotaStatus {
                     available: false,
                     data: None,
@@ -314,6 +600,7 @@ impl QuotaFetcher {
             .client
             .get(&sub_url)
             .header("Authorization", format!("Bearer {}", api_key))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await;
 
@@ -324,12 +611,35 @@ impl QuotaFetcher {
                     return OpenCodeQuotaStatus {
                         available: false,
                         data: None,
-                        error: Some(format!("Failed to parse subscription response: {}", e)),
+                        error: Some(format!(
+                            "Failed to parse subscription response: {}",
+                            e
+                        )),
                     };
                 }
             },
             Ok(r) => {
                 let status = r.status();
+                // For 404, provide workspace link gracefully
+                if status.as_u16() == 404 {
+                    let workspace_url = get_opencode_workspace_url();
+                    return OpenCodeQuotaStatus {
+                        available: false,
+                        data: Some(QuotaOpenCode {
+                            provider: "opencode-go".to_string(),
+                            plan_type: None,
+                            hard_limit_usd: None,
+                            total_usage_usd: None,
+                            usage_percent: None,
+                            remaining_usd: None,
+                            workspace_url,
+                        }),
+                        error: Some(
+                            "Billing API not available. Visit workspace to check usage."
+                                .to_string(),
+                        ),
+                    };
+                }
                 let body = r.text().await.unwrap_or_default();
                 return OpenCodeQuotaStatus {
                     available: false,
@@ -372,6 +682,7 @@ impl QuotaFetcher {
             .client
             .get(&usage_url)
             .header("Authorization", format!("Bearer {}", api_key))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
         {
@@ -412,6 +723,7 @@ impl QuotaFetcher {
                 total_usage_usd,
                 usage_percent,
                 remaining_usd,
+                workspace_url: None,
             }),
             error: None,
         }
@@ -432,6 +744,9 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Mutex to serialize env-var-modifying tests (prevents race conditions).
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn reset_env_var(name: &str, old: Option<String>) {
         match old {
             Some(v) => std::env::set_var(name, v),
@@ -442,24 +757,24 @@ mod tests {
     // ── Auth helpers ────────────────────────────────────────────────────
 
     #[test]
-    fn test_get_moonshot_api_key_from_env() {
-        temp_env::with_var("MOONSHOT_API_KEY", Some("sk-test-key-123"), || {
-            assert_eq!(get_moonshot_api_key(), Some("sk-test-key-123".to_string()));
+    fn test_get_kimi_code_base_url_default() {
+        temp_env::with_var("KIMI_CODE_BASE_URL", None::<&str>, || {
+            assert_eq!(
+                get_kimi_code_base_url(),
+                "https://api.kimi.com/coding/v1"
+            );
         });
     }
 
     #[test]
-    fn test_get_moonshot_api_key_empty() {
-        temp_env::with_var("MOONSHOT_API_KEY", Some(""), || {
-            assert_eq!(get_moonshot_api_key(), None);
-        });
-    }
-
-    #[test]
-    fn test_get_moonshot_api_key_unset() {
-        temp_env::with_var("MOONSHOT_API_KEY", None::<&str>, || {
-            assert_eq!(get_moonshot_api_key(), None);
-        });
+    fn test_get_kimi_code_base_url_custom() {
+        temp_env::with_var(
+            "KIMI_CODE_BASE_URL",
+            Some("https://custom.kimi.api/v1"),
+            || {
+                assert_eq!(get_kimi_code_base_url(), "https://custom.kimi.api/v1");
+            },
+        );
     }
 
     #[test]
@@ -470,70 +785,77 @@ mod tests {
     }
 
     #[test]
-    fn test_get_opencode_base_url_custom() {
-        temp_env::with_var("OPENCODE_BASE_URL", Some("https://custom.url/v1"), || {
-            assert_eq!(get_opencode_base_url(), "https://custom.url/v1");
+    fn test_get_opencode_workspace_url() {
+        temp_env::with_var(
+            "OPENCODE_GO_WORKSPACE_ID",
+            Some("wrk_01KP0TEMM33PV08MR37JCC2F9G"),
+            || {
+                assert_eq!(
+                    get_opencode_workspace_url(),
+                    Some(
+                        "https://opencode.ai/workspace/wrk_01KP0TEMM33PV08MR37JCC2F9G/go"
+                            .to_string()
+                    )
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_get_opencode_workspace_url_unset() {
+        temp_env::with_var("OPENCODE_GO_WORKSPACE_ID", None::<&str>, || {
+            assert_eq!(get_opencode_workspace_url(), None);
         });
     }
 
-    // ── Kimi balance parsing ────────────────────────────────────────────
+    // ── Kimi Code usage parsing ────────────────────────────────────────
 
     #[test]
-    fn test_parse_kimi_balance_success() {
+    fn test_parse_kimi_code_usage_success() {
         let json = r#"{
-            "code": 0,
-            "data": {
-                "available_balance": 49.58894,
-                "voucher_balance": 46.58893,
-                "cash_balance": 3.00001
+            "usage": {
+                "limit": "100",
+                "used": "8",
+                "remaining": "92",
+                "resetTime": "2026-05-23T14:00:42.150347Z"
             },
-            "scode": "0x0",
-            "status": true
+            "limits": [{
+                "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                "detail": {
+                    "limit": "100",
+                    "used": "4",
+                    "remaining": "96",
+                    "resetTime": "2026-05-17T17:00:42.150347Z"
+                }
+            }],
+            "totalQuota": {"limit": "100", "remaining": "99"},
+            "user": {"userId": "abc123", "membership": {"level": "LEVEL_INTERMEDIATE"}},
+            "parallel": {"limit": "20"},
+            "subType": "TYPE_PURCHASE"
         }"#;
 
-        let resp: MoonshotBalanceResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.code, 0);
-        assert!((resp.data.available_balance - 49.58894).abs() < 0.001);
-        assert!((resp.data.voucher_balance - 46.58893).abs() < 0.001);
-        assert!((resp.data.cash_balance - 3.00001).abs() < 0.001);
-        assert_eq!(resp.scode, "0x0");
-        assert!(resp.status);
+        let resp: KimiCodeUsageResponse = serde_json::from_str(json).unwrap();
+        let usage = resp.usage.unwrap();
+        assert_eq!(usage.limit as i64, 100);
+        assert_eq!(usage.used as i64, 8);
+        assert_eq!(usage.remaining as i64, 92);
+        assert_eq!(resp.limits.len(), 1);
+        let limit = &resp.limits[0];
+        let detail = limit.detail.as_ref().unwrap();
+        assert_eq!(detail.limit as i64, 100);
+        assert_eq!(detail.used as i64, 4);
+        assert_eq!(detail.remaining as i64, 96);
+        let tq = resp.total_quota.unwrap();
+        assert_eq!(tq.limit as i64, 100);
+        assert_eq!(tq.remaining as i64, 99);
     }
 
     #[test]
-    fn test_parse_kimi_balance_zero() {
-        let json = r#"{
-            "code": 0,
-            "data": {
-                "available_balance": 0.0,
-                "voucher_balance": 0.0,
-                "cash_balance": 0.0
-            },
-            "scode": "0x0",
-            "status": true
-        }"#;
-
-        let resp: MoonshotBalanceResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.code, 0);
-        assert!((resp.data.available_balance - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_parse_kimi_balance_error_code() {
-        let json = r#"{
-            "code": 401,
-            "data": {
-                "available_balance": 0.0,
-                "voucher_balance": 0.0,
-                "cash_balance": 0.0
-            },
-            "scode": "0x1",
-            "status": false
-        }"#;
-
-        let resp: MoonshotBalanceResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.code, 401);
-        assert!(!resp.status);
+    fn test_parse_kimi_code_usage_empty() {
+        let json = "{}";
+        let resp: KimiCodeUsageResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.usage.is_none());
+        assert!(resp.limits.is_empty());
     }
 
     // ── OpenAI subscription parsing ─────────────────────────────────────
@@ -542,16 +864,7 @@ mod tests {
     fn test_parse_openai_subscription_with_plan() {
         let json = r#"{
             "has_payment_method": true,
-            "canceled": false,
-            "canceled_at": null,
-            "delinquent": null,
-            "access_until": 1777777777,
-            "soft_limit": 0,
-            "hard_limit": 0,
-            "system_hard_limit": 0,
-            "soft_limit_usd": 0.0,
             "hard_limit_usd": 100.0,
-            "system_hard_limit_usd": 200.0,
             "plan": {
                 "title": "Go Plan",
                 "id": "opencode-go-monthly"
@@ -565,21 +878,6 @@ mod tests {
             resp.plan.as_ref().and_then(|p| p.title.as_deref()),
             Some("Go Plan")
         );
-        assert_eq!(
-            resp.plan.as_ref().and_then(|p| p.id.as_deref()),
-            Some("opencode-go-monthly")
-        );
-    }
-
-    #[test]
-    fn test_parse_openai_subscription_no_plan() {
-        let json = r#"{
-            "hard_limit_usd": 50.0
-        }"#;
-
-        let resp: OpenAiSubscriptionResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.hard_limit_usd, Some(50.0));
-        assert!(resp.plan.is_none());
     }
 
     #[test]
@@ -596,269 +894,164 @@ mod tests {
     fn test_parse_openai_usage() {
         let json = r#"{
             "object": "list",
-            "total_usage": 25.50,
-            "total_tokens_used": 150000
+            "total_usage": 25.50
         }"#;
 
         let resp: OpenAiUsageResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.object, Some("list".to_string()));
         assert!((resp.total_usage.unwrap() - 25.50).abs() < 0.01);
-        assert_eq!(resp.total_tokens_used, Some(150000));
-    }
-
-    #[test]
-    fn test_parse_openai_usage_empty() {
-        let json = "{}";
-        let resp: OpenAiUsageResponse = serde_json::from_str(json).unwrap();
-        assert!(resp.total_usage.is_none());
-        assert!(resp.total_tokens_used.is_none());
     }
 
     // ── QuotaError ──────────────────────────────────────────────────────
 
     #[test]
     fn test_quota_error_display() {
-        let err = QuotaError::new("kimi", "API key missing");
-        assert_eq!(format!("{}", err), "[kimi] API key missing");
+        let err = QuotaError::new("kimi", "token expired");
+        assert_eq!(format!("{}", err), "[kimi] token expired");
     }
 
-    // ── Integration: Kimi balance ───────────────────────────────────────
+    // ── Integration: Kimi Code quota ────────────────────────────────────
 
     #[tokio::test]
-    async fn test_fetch_kimi_balance_success() {
+    async fn test_fetch_kimi_quota_success() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/users/me/balance"))
+            .and(path("/usages"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "code": 0,
-                "data": {
-                    "available_balance": 100.0,
-                    "voucher_balance": 50.0,
-                    "cash_balance": 50.0
+                "usage": {
+                    "limit": "100",
+                    "used": "8",
+                    "remaining": "92",
+                    "resetTime": "2026-05-23T14:00:42Z"
                 },
-                "scode": "0x0",
-                "status": true
+                "limits": [{
+                    "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                    "detail": {
+                        "limit": "100",
+                        "used": "4",
+                        "remaining": "96",
+                        "resetTime": "2026-05-17T17:00:42Z"
+                    }
+                }],
+                "totalQuota": {"limit": "100", "remaining": "99"},
+                "parallel": {"limit": "20"},
+                "subType": "TYPE_PURCHASE"
             })))
             .mount(&mock_server)
             .await;
 
-        let old_key = std::env::var("MOONSHOT_API_KEY").ok();
-        let old_url = std::env::var("MOONSHOT_BASE_URL").ok();
-        std::env::set_var("MOONSHOT_API_KEY", "sk-test");
-        std::env::set_var("MOONSHOT_BASE_URL", mock_server.uri());
+        // Write a temp credentials file
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let cred_path = tmp_dir.path().join("kimi-code.json");
+        std::fs::write(
+            &cred_path,
+            serde_json::json!({
+                "access_token": "test-token-123",
+                "expires_at": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as f64 + 3600.0
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
+        let old_url = std::env::var("KIMI_CODE_BASE_URL").ok();
+        std::env::set_var("KIMI_CREDENTIALS_PATH", cred_path.to_str().unwrap());
+        std::env::set_var("KIMI_CODE_BASE_URL", mock_server.uri());
 
         let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_kimi_balance().await;
+        let status = fetcher.fetch_kimi_quota().await;
 
-        reset_env_var("MOONSHOT_API_KEY", old_key);
-        reset_env_var("MOONSHOT_BASE_URL", old_url);
+        reset_env_var("KIMI_CREDENTIALS_PATH", old_path);
+        reset_env_var("KIMI_CODE_BASE_URL", old_url);
 
         assert!(status.available);
         let data = status.data.unwrap();
-        assert!((data.available_balance - 100.0).abs() < 0.001);
-        assert_eq!(data.provider, "kimi");
+        assert_eq!(data.provider, "kimi-code");
+        assert_eq!(data.weekly_limit, 100);
+        assert_eq!(data.weekly_used, 8);
+        assert_eq!(data.weekly_remaining, 92);
+        assert_eq!(data.rp5h_limit, 100);
+        assert_eq!(data.rp5h_used, 4);
+        assert_eq!(data.rp5h_remaining, 96);
+        assert_eq!(data.total_limit, 100);
+        assert_eq!(data.total_remaining, 99);
+        assert_eq!(data.parallel_limit, 20);
+        assert_eq!(data.sub_type, Some("TYPE_PURCHASE".to_string()));
     }
 
     #[tokio::test]
-    async fn test_fetch_kimi_balance_no_api_key() {
-        let old_key = std::env::var("MOONSHOT_API_KEY").ok();
-        std::env::remove_var("MOONSHOT_API_KEY");
+    async fn test_fetch_kimi_quota_no_token() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
+        std::env::set_var(
+            "KIMI_CREDENTIALS_PATH",
+            "/tmp/nonexistent-kimi-creds-test.json",
+        );
 
         let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_kimi_balance().await;
+        let status = fetcher.fetch_kimi_quota().await;
 
-        reset_env_var("MOONSHOT_API_KEY", old_key);
+        reset_env_var("KIMI_CREDENTIALS_PATH", old_path);
 
         assert!(!status.available);
-        assert!(status
-            .error
-            .unwrap()
-            .contains("MOONSHOT_API_KEY not configured"));
+        assert!(status.error.unwrap().contains("access token not found"));
     }
 
     #[tokio::test]
-    async fn test_fetch_kimi_balance_api_error() {
+    async fn test_fetch_kimi_quota_api_error() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/users/me/balance"))
+            .and(path("/usages"))
             .respond_with(ResponseTemplate::new(401).set_body_string(
-                r#"{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"#,
+                r#"{"error":{"message":"Invalid token","type":"invalid_authentication_error"}}"#,
             ))
             .mount(&mock_server)
             .await;
 
-        let old_key = std::env::var("MOONSHOT_API_KEY").ok();
-        let old_url = std::env::var("MOONSHOT_BASE_URL").ok();
-        std::env::set_var("MOONSHOT_API_KEY", "sk-bad");
-        std::env::set_var("MOONSHOT_BASE_URL", mock_server.uri());
+        // Write a temp credentials file
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let cred_path = tmp_dir.path().join("kimi-code.json");
+        std::fs::write(
+            &cred_path,
+            serde_json::json!({
+                "access_token": "bad-token",
+                "expires_at": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as f64 + 3600.0
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
+        let old_url = std::env::var("KIMI_CODE_BASE_URL").ok();
+        std::env::set_var("KIMI_CREDENTIALS_PATH", cred_path.to_str().unwrap());
+        std::env::set_var("KIMI_CODE_BASE_URL", mock_server.uri());
 
         let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_kimi_balance().await;
+        let status = fetcher.fetch_kimi_quota().await;
 
-        reset_env_var("MOONSHOT_API_KEY", old_key);
-        reset_env_var("MOONSHOT_BASE_URL", old_url);
-
-        assert!(!status.available);
-        let err = status.error.unwrap();
-        assert!(err.contains("401"));
-    }
-
-    #[tokio::test]
-    async fn test_fetch_kimi_balance_business_error() {
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/users/me/balance"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "code": 401,
-                "data": {
-                    "available_balance": 0.0,
-                    "voucher_balance": 0.0,
-                    "cash_balance": 0.0
-                },
-                "scode": "0x1",
-                "status": false
-            })))
-            .mount(&mock_server)
-            .await;
-
-        let old_key = std::env::var("MOONSHOT_API_KEY").ok();
-        let old_url = std::env::var("MOONSHOT_BASE_URL").ok();
-        std::env::set_var("MOONSHOT_API_KEY", "sk-test");
-        std::env::set_var("MOONSHOT_BASE_URL", mock_server.uri());
-
-        let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_kimi_balance().await;
-
-        reset_env_var("MOONSHOT_API_KEY", old_key);
-        reset_env_var("MOONSHOT_BASE_URL", old_url);
+        reset_env_var("KIMI_CREDENTIALS_PATH", old_path);
+        reset_env_var("KIMI_CODE_BASE_URL", old_url);
 
         assert!(!status.available);
-        let err = status.error.unwrap();
-        assert!(err.contains("API error code 401"));
+        assert!(status.error.unwrap().contains("401"));
     }
 
     // ── Integration: OpenCode-go quota ──────────────────────────────────
 
     #[tokio::test]
     async fn test_fetch_opencode_quota_success() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
 
-        // Mock subscription endpoint
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/subscription"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "has_payment_method": true,
-                "hard_limit_usd": 100.0,
-                "plan": {
-                    "title": "Go Plan",
-                    "id": "opencode-go-monthly"
-                }
-            })))
-            .mount(&mock_server)
-            .await;
-
-        // Mock usage endpoint
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/usage"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "object": "list",
-                "total_usage": 25.50
-            })))
-            .mount(&mock_server)
-            .await;
-
-        // Set env vars directly since temp_env::with_var doesn't work in async context
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
-
-        std::env::set_var("OPENCODE_API_KEY", "sk-test-opencode");
-        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
-
-        let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_opencode_quota().await;
-
-        match old_key {
-            Some(k) => std::env::set_var("OPENCODE_API_KEY", k),
-            None => std::env::remove_var("OPENCODE_API_KEY"),
-        }
-        match old_url {
-            Some(u) => std::env::set_var("OPENCODE_BASE_URL", u),
-            None => std::env::remove_var("OPENCODE_BASE_URL"),
-        }
-
-        assert!(status.available);
-        let data = status.data.unwrap();
-        assert_eq!(data.provider, "opencode-go");
-        assert_eq!(data.plan_type, Some("Go Plan".to_string()));
-        assert_eq!(data.hard_limit_usd, Some(100.0));
-        assert!((data.total_usage_usd.unwrap() - 25.50).abs() < 0.01);
-        assert!((data.usage_percent.unwrap() - 25.5).abs() < 0.01);
-        assert!((data.remaining_usd.unwrap() - 74.5).abs() < 0.01);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_opencode_quota_no_api_key() {
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_auth = std::env::var("OPENCODE_AUTH_PATH").ok();
-        std::env::remove_var("OPENCODE_API_KEY");
-        std::env::set_var("OPENCODE_AUTH_PATH", "/tmp/nonexistent-opencode-auth.json");
-
-        let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_opencode_quota().await;
-
-        reset_env_var("OPENCODE_API_KEY", old_key);
-        reset_env_var("OPENCODE_AUTH_PATH", old_auth);
-
-        assert!(!status.available);
-        assert!(status
-            .error
-            .unwrap()
-            .contains("opencode-go API key not found"));
-    }
-
-    #[tokio::test]
-    async fn test_fetch_opencode_quota_subscription_error() {
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/subscription"))
-            .respond_with(
-                ResponseTemplate::new(401)
-                    .set_body_string(r#"{"error":{"message":"Invalid API key"}}"#),
-            )
-            .mount(&mock_server)
-            .await;
-
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
-
-        std::env::set_var("OPENCODE_API_KEY", "sk-bad");
-        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
-
-        let fetcher = QuotaFetcher::new();
-        let status = fetcher.fetch_opencode_quota().await;
-
-        match old_key {
-            Some(k) => std::env::set_var("OPENCODE_API_KEY", k),
-            None => std::env::remove_var("OPENCODE_API_KEY"),
-        }
-        match old_url {
-            Some(u) => std::env::set_var("OPENCODE_BASE_URL", u),
-            None => std::env::remove_var("OPENCODE_BASE_URL"),
-        }
-
-        assert!(!status.available);
-        assert!(status.error.unwrap().contains("401"));
-    }
-
-    #[tokio::test]
-    async fn test_fetch_opencode_quota_usage_unavailable() {
-        let mock_server = MockServer::start().await;
-
-        // Subscription endpoint works
         Mock::given(method("GET"))
             .and(path("/v1/dashboard/billing/subscription"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -868,7 +1061,132 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        // Usage endpoint returns error (some providers don't expose it)
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/billing/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_usage": 25.50
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let old_key = std::env::var("OPENCODE_API_KEY").ok();
+        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
+        std::env::set_var("OPENCODE_API_KEY", "sk-test-opencode");
+        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
+
+        let fetcher = QuotaFetcher::new();
+        let status = fetcher.fetch_opencode_quota().await;
+
+        reset_env_var("OPENCODE_API_KEY", old_key);
+        reset_env_var("OPENCODE_BASE_URL", old_url);
+
+        assert!(status.available);
+        let data = status.data.unwrap();
+        assert_eq!(data.provider, "opencode-go");
+        assert_eq!(data.plan_type, Some("Go Plan".to_string()));
+        assert_eq!(data.hard_limit_usd, Some(100.0));
+        assert!((data.total_usage_usd.unwrap() - 25.50).abs() < 0.01);
+        assert!((data.usage_percent.unwrap() - 25.5).abs() < 0.01);
+        assert!((data.remaining_usd.unwrap() - 74.5).abs() < 0.01);
+        assert!(data.workspace_url.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_opencode_quota_404_with_workspace() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/billing/subscription"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let old_key = std::env::var("OPENCODE_API_KEY").ok();
+        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
+        let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
+        std::env::set_var("OPENCODE_API_KEY", "sk-test");
+        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
+        std::env::set_var("OPENCODE_GO_WORKSPACE_ID", "wrk_TEST123");
+
+        let fetcher = QuotaFetcher::new();
+        let status = fetcher.fetch_opencode_quota().await;
+
+        reset_env_var("OPENCODE_API_KEY", old_key);
+        reset_env_var("OPENCODE_BASE_URL", old_url);
+        reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
+
+        assert!(!status.available);
+        // Should have data with workspace_url
+        let data = status.data.unwrap();
+        assert_eq!(
+            data.workspace_url,
+            Some("https://opencode.ai/workspace/wrk_TEST123/go".to_string())
+        );
+        assert!(status.error.unwrap().contains("Billing API not available"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_opencode_quota_no_api_key_with_workspace() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let old_key = std::env::var("OPENCODE_API_KEY").ok();
+        let old_auth = std::env::var("OPENCODE_AUTH_PATH").ok();
+        let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
+        std::env::remove_var("OPENCODE_API_KEY");
+        std::env::set_var("OPENCODE_AUTH_PATH", "/tmp/nonexistent-opencode-auth.json");
+        std::env::set_var("OPENCODE_GO_WORKSPACE_ID", "wrk_NOKEY");
+
+        let fetcher = QuotaFetcher::new();
+        let status = fetcher.fetch_opencode_quota().await;
+
+        reset_env_var("OPENCODE_API_KEY", old_key);
+        reset_env_var("OPENCODE_AUTH_PATH", old_auth);
+        reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
+
+        assert!(!status.available);
+        let data = status.data.unwrap();
+        assert_eq!(
+            data.workspace_url,
+            Some("https://opencode.ai/workspace/wrk_NOKEY/go".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_opencode_quota_no_api_key_no_workspace() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let old_key = std::env::var("OPENCODE_API_KEY").ok();
+        let old_auth = std::env::var("OPENCODE_AUTH_PATH").ok();
+        let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
+        std::env::remove_var("OPENCODE_API_KEY");
+        std::env::set_var("OPENCODE_AUTH_PATH", "/tmp/nonexistent-opencode-auth.json");
+        std::env::remove_var("OPENCODE_GO_WORKSPACE_ID");
+
+        let fetcher = QuotaFetcher::new();
+        let status = fetcher.fetch_opencode_quota().await;
+
+        reset_env_var("OPENCODE_API_KEY", old_key);
+        reset_env_var("OPENCODE_AUTH_PATH", old_auth);
+        reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
+
+        assert!(!status.available);
+        assert!(status.data.is_none());
+        assert!(status.error.unwrap().contains("API key not found"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_opencode_quota_usage_unavailable() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/billing/subscription"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "hard_limit_usd": 100.0,
+                "plan": { "title": "Go Plan" }
+            })))
+            .mount(&mock_server)
+            .await;
+
         Mock::given(method("GET"))
             .and(path("/v1/dashboard/billing/usage"))
             .respond_with(ResponseTemplate::new(404))
@@ -877,27 +1195,18 @@ mod tests {
 
         let old_key = std::env::var("OPENCODE_API_KEY").ok();
         let old_url = std::env::var("OPENCODE_BASE_URL").ok();
-
         std::env::set_var("OPENCODE_API_KEY", "sk-test");
         std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
 
         let fetcher = QuotaFetcher::new();
         let status = fetcher.fetch_opencode_quota().await;
 
-        match old_key {
-            Some(k) => std::env::set_var("OPENCODE_API_KEY", k),
-            None => std::env::remove_var("OPENCODE_API_KEY"),
-        }
-        match old_url {
-            Some(u) => std::env::set_var("OPENCODE_BASE_URL", u),
-            None => std::env::remove_var("OPENCODE_BASE_URL"),
-        }
+        reset_env_var("OPENCODE_API_KEY", old_key);
+        reset_env_var("OPENCODE_BASE_URL", old_url);
 
-        // Should still succeed with subscription info even if usage endpoint fails
         assert!(status.available);
         let data = status.data.unwrap();
         assert_eq!(data.plan_type, Some("Go Plan".to_string()));
-        assert_eq!(data.hard_limit_usd, Some(100.0));
-        assert!(data.total_usage_usd.is_none()); // usage endpoint failed
+        assert!(data.total_usage_usd.is_none());
     }
 }
