@@ -1,7 +1,7 @@
 mod aggregator;
 mod config;
 mod models;
-mod parser;
+mod sources;
 mod quota;
 mod routes;
 mod xunfei;
@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
-use crate::parser::load_all_sources;
+use crate::sources::load_all_sources;
 use crate::routes::AppState;
 
 #[tokio::main]
