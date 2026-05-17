@@ -32,8 +32,6 @@ import {
   type PaginatedRequests,
   type FilterOptions,
   type QuotaResponse,
-  type QuotaKimiCode,
-  type QuotaOpenCode,
   type XunfeiStatus,
 } from "./api";
 import {
