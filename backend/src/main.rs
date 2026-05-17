@@ -1,6 +1,7 @@
 mod aggregator;
 mod models;
 mod parser;
+mod quota;
 mod routes;
 
 use axum::{
@@ -61,7 +62,8 @@ async fn main() {
     let api_routes = Router::new()
         .route("/api/stats", get(routes::get_stats))
         .route("/api/requests", get(routes::get_requests))
-        .route("/api/filters", get(routes::get_filters));
+        .route("/api/filters", get(routes::get_filters))
+        .route("/api/quota", get(routes::get_quota));
 
     let app = Router::new()
         .merge(api_routes)

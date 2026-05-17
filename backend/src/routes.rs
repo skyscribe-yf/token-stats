@@ -1,5 +1,6 @@
 use crate::aggregator;
 use crate::models::*;
+use crate::quota::{QuotaFetcher, QuotaResponse};
 use axum::{
     extract::{Query, State},
     response::IntoResponse,
@@ -144,4 +145,20 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
         models,
         sources,
     })
+}
+
+pub async fn get_quota() -> impl IntoResponse {
+    let fetcher = QuotaFetcher::new();
+
+    let (kimi_result, opencode_result) = tokio::join!(
+        fetcher.fetch_kimi_balance(),
+        fetcher.fetch_opencode_quota(),
+    );
+
+    let response = QuotaResponse {
+        kimi: Some(kimi_result),
+        opencode_go: Some(opencode_result),
+    };
+
+    Json(response)
 }
