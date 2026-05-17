@@ -19,11 +19,6 @@ import {
   ChevronRight,
   Filter,
   Activity,
-  Coins,
-  Database,
-  TrendingUp,
-  Zap,
-  Server,
   X,
   SlidersHorizontal,
 } from "lucide-react";
@@ -51,14 +46,12 @@ import {
 } from "./lib/utils";
 import {
   buildCsvFilterParam,
-  formatAppliedRange,
   isEmptyAppliedSelection,
   type AppliedRange,
 } from "./lib/filterState";
 
 const ZH = {
   title: "Token 统计仪表盘",
-  subtitle: "监控跨工具的 AI Token 使用情况",
   totalCalls: "总调用次数",
   inputTokens: "输入 Token",
   outputTokens: "输出 Token",
@@ -70,13 +63,9 @@ const ZH = {
   vendorBreakdown: "供应商分布",
   cacheHitTrend: "缓存命中率趋势",
   tokenDistribution: "Token 分布",
-  vendorPerformance: "供应商表现",
-  modelPerformance: "模型表现",
-  sourceOverview: "工具概览",
+  vendorAndModel: "供应商 & 模型表现",
   detailedRequests: "详细请求",
-  allProviders: "全部供应商",
   allModels: "全部模型",
-  allSources: "全部工具",
   last7Days: "最近7天",
   customTime: "自定义",
   last6h: "最近6小时",
@@ -86,15 +75,12 @@ const ZH = {
   last14d: "最近14天",
   last30d: "最近30天",
   allTime: "所有",
-  vendorAndModel: "供应商 & 模型表现",
   provider: "供应商",
   model: "模型",
   source: "工具",
   calls: "调用次数",
   input: "输入",
   output: "输出",
-  cacheReadCol: "缓存读取",
-  cacheWriteCol: "缓存写入",
   total: "合计",
   cacheHit: "缓存命中",
   cost: "费用",
@@ -115,60 +101,9 @@ const ZH = {
   apply: "应用",
   cancel: "取消",
   quickSelect: "快捷选择",
-  currentFilters: "当前筛选",
-  timeRange: "时间范围",
   updatedAt: "更新时间",
   updating: "更新中...",
-  noneSelected: "未选择",
-  requestModel: "明细模型",
 } as const;
-
-function SourceBadge({ source }: { source: string }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium"
-      style={{
-        background: `${getSourceColor(source)}15`,
-        color: getSourceColor(source),
-      }}
-    >
-      <span
-        className="w-1.5 h-1.5 rounded-full"
-        style={{ background: getSourceColor(source) }}
-      />
-      {getSourceLabel(source)}
-    </span>
-  );
-}
-
-function StatCard({
-  title,
-  value,
-  subtitle,
-  icon: Icon,
-  color,
-}: {
-  title: string;
-  value: string;
-  subtitle?: string;
-  icon: React.ElementType;
-  color: string;
-}) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-slate-500 text-sm font-medium">{title}</p>
-          <p className="text-2xl font-bold text-slate-800 mt-1">{value}</p>
-          {subtitle && <p className="text-slate-400 text-xs mt-1">{subtitle}</p>}
-        </div>
-        <div className={`p-2.5 rounded-lg ${color}`}>
-          <Icon className="w-5 h-5 text-white" />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function QuotaCard({
   title,
@@ -251,31 +186,6 @@ function toggleInSet<T>(set: Set<T>, setter: (s: Set<T>) => void, value: T) {
 
 type TimePreset = "today" | "6h" | "12h" | "1d" | "3d" | "7d" | "14d" | "30d" | "all" | "custom";
 
-function getPresetLabel(preset: TimePreset): string {
-  switch (preset) {
-    case "today":
-      return ZH.today;
-    case "6h":
-      return ZH.last6h;
-    case "12h":
-      return ZH.last12h;
-    case "1d":
-      return ZH.last1d;
-    case "3d":
-      return ZH.last3d;
-    case "7d":
-      return ZH.last7Days;
-    case "14d":
-      return ZH.last14d;
-    case "30d":
-      return ZH.last30d;
-    case "all":
-      return ZH.allTime;
-    case "custom":
-      return ZH.customTime;
-  }
-}
-
 function getPresetRange(preset: Exclude<TimePreset, "custom">): Pick<AppliedRange, "from" | "to"> {
   switch (preset) {
     case "today": {
@@ -340,18 +250,6 @@ function emptyRequests(page: number): PaginatedRequests {
     limit: 50,
     total_pages: 0,
   };
-}
-
-function selectionLabel(
-  selected: ReadonlySet<string>,
-  options: readonly string[],
-  format: (value: string) => string = (value) => value
-): string {
-  if (options.length === 0) return ZH.noneSelected;
-  const selectedInOptionOrder = options.filter((option) => selected.has(option));
-  if (selectedInOptionOrder.length === 0) return ZH.noneSelected;
-  if (selectedInOptionOrder.length === options.length) return "全部";
-  return selectedInOptionOrder.map(format).join(", ");
 }
 
 export default function App() {
@@ -505,7 +403,7 @@ export default function App() {
         const q = await fetchQuota();
         setQuota(q);
       } catch {
-        /* quota is optional — don't set error state */
+        /* quota is optional */
       } finally {
         setQuotaLoading(false);
       }
@@ -617,40 +515,24 @@ export default function App() {
         : "bg-slate-50 text-slate-500 hover:bg-slate-100"
     }`;
 
-  const appliedRangeLabel = useMemo(
-    () => formatAppliedRange(getPresetLabel(activePreset), effectiveRange),
-    [activePreset, effectiveRange]
-  );
-  const selectedSourceLabel = useMemo(
-    () => selectionLabel(selectedSources, filters.sources, getSourceLabel),
-    [selectedSources, filters.sources]
-  );
-  const selectedVendorLabel = useMemo(
-    () => selectionLabel(selectedVendors, filters.vendors),
-    [selectedVendors, filters.vendors]
-  );
-
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Header */}
+      {/* Header - compact, sticky */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {/* Logo + Title */}
             <div className="flex items-center gap-2 shrink-0">
               <div className="bg-primary-600 p-1.5 rounded-lg">
-                <Activity className="w-5 h-5 text-white" />
+                <Activity className="w-4 h-4 text-white" />
               </div>
-              <div>
-                <h1 className="text-base font-bold text-slate-800 leading-tight">
-                  {ZH.title}
-                </h1>
-                <p className="text-[11px] text-slate-500 leading-tight">{ZH.subtitle}</p>
-              </div>
+              <h1 className="text-sm font-bold text-slate-800 leading-tight">
+                {ZH.title}
+              </h1>
             </div>
 
             {/* Divider */}
-            <div className="hidden sm:block w-px h-6 bg-slate-200" />
+            <div className="hidden sm:block w-px h-5 bg-slate-200" />
 
             {/* Time presets */}
             <div className="flex items-center gap-1.5">
@@ -752,9 +634,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Spacer */}
-            <div className="flex-1" />
-
             {/* Source filter tags */}
             <div className="flex items-center gap-1 flex-wrap">
               {filters.sources.map((s) => (
@@ -805,41 +684,21 @@ export default function App() {
                 </button>
               ))}
             </div>
-          </div>
-        </div>
-      </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600">
-            <div className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
-              <Filter className="h-3.5 w-3.5 text-slate-400" />
-              {ZH.currentFilters}
-            </div>
-            <span>
-              {ZH.timeRange}: <span className="font-medium text-slate-800">{appliedRangeLabel}</span>
-            </span>
-            <span>
-              {ZH.source}: <span className="font-medium text-slate-800">{selectedSourceLabel}</span>
-            </span>
-            <span>
-              {ZH.provider}: <span className="font-medium text-slate-800">{selectedVendorLabel}</span>
-            </span>
-            {selectedModel && (
-              <span>
-                {ZH.requestModel}: <span className="font-medium text-slate-800">{selectedModel}</span>
-              </span>
-            )}
-            <span className="ml-auto text-slate-500">
+            {/* Spacer + Updated at */}
+            <div className="flex-1" />
+            <span className="text-[11px] text-slate-400 shrink-0">
               {loading
                 ? ZH.updating
                 : `${ZH.updatedAt}: ${lastUpdatedAt ? formatTime(lastUpdatedAt.toISOString()) : "-"}`}
             </span>
           </div>
         </div>
+      </header>
 
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         {error && (
-          <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
+          <div className="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs">
             {error}
           </div>
         )}
@@ -852,51 +711,70 @@ export default function App() {
 
         {stats && (
           <>
-            {/* Summary Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-              <StatCard
-                title={ZH.totalCalls}
-                value={formatNumber(stats.overall.total_calls)}
-                icon={Server}
-                color="bg-primary-500"
-              />
-              <StatCard
-                title={ZH.inputTokens}
-                value={formatNumber(stats.overall.total_input_tokens)}
-                icon={Database}
-                color="bg-emerald-500"
-              />
-              <StatCard
-                title={ZH.outputTokens}
-                value={formatNumber(stats.overall.total_output_tokens)}
-                icon={Zap}
-                color="bg-amber-500"
-              />
-              <StatCard
-                title={ZH.cacheRead}
-                value={formatNumber(stats.overall.total_cache_read_tokens)}
-                icon={TrendingUp}
-                color="bg-violet-500"
-              />
-              <StatCard
-                title={ZH.cacheHitRatio}
-                value={formatPercent(stats.overall.weighted_cache_hit_ratio)}
-                subtitle={ZH.weighted}
-                icon={Activity}
-                color="bg-rose-500"
-              />
-              <StatCard
-                title={ZH.totalCost}
-                value={formatCost(stats.overall.total_cost)}
-                icon={Coins}
-                color="bg-slate-700"
-              />
+            {/* KPI Strip - compact horizontal metrics */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3 mb-3">
+              <div className="flex flex-wrap items-center divide-x divide-slate-200 gap-y-1">
+                <div className="pr-4 min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">{ZH.totalCalls}</p>
+                  <p className="text-lg font-bold text-slate-800 leading-tight">{formatNumber(stats.overall.total_calls)}</p>
+                </div>
+                <div className="px-4 min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">{ZH.inputTokens}</p>
+                  <p className="text-lg font-bold text-emerald-600 leading-tight">{formatNumber(stats.overall.total_input_tokens)}</p>
+                </div>
+                <div className="px-4 min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">{ZH.outputTokens}</p>
+                  <p className="text-lg font-bold text-amber-600 leading-tight">{formatNumber(stats.overall.total_output_tokens)}</p>
+                </div>
+                <div className="px-4 min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">{ZH.cacheRead}</p>
+                  <p className="text-lg font-bold text-violet-600 leading-tight">{formatNumber(stats.overall.total_cache_read_tokens)}</p>
+                </div>
+                <div className="px-4 min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">{ZH.cacheHitRatio}</p>
+                  <p className="text-lg font-bold text-rose-600 leading-tight">{formatPercent(stats.overall.weighted_cache_hit_ratio)}</p>
+                </div>
+                <div className="pl-4 min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">{ZH.totalCost}</p>
+                  <p className="text-lg font-bold text-slate-800 leading-tight">{formatCost(stats.overall.total_cost)}</p>
+                </div>
+              </div>
+
+              {/* Source Overview - compact inline row */}
+              {stats.by_source.length > 1 && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
+                  {stats.by_source.map((s) => (
+                    <span key={s.source} className="inline-flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: getSourceColor(s.source) }} />
+                      <span className="font-medium" style={{ color: getSourceColor(s.source) }}>{getSourceLabel(s.source)}</span>
+                      <span className="text-slate-400">{formatNumber(s.calls)}次</span>
+                      <span className="text-slate-400">·</span>
+                      <span className="text-slate-400">{formatNumber(s.total_tokens)}tok</span>
+                      <span className="text-slate-400">·</span>
+                      <span className="text-slate-400">{formatCost(s.cost, s.source)}</span>
+                      <span className="text-slate-400">·</span>
+                      <span className="text-slate-400">{formatPercent(s.cache_hit_ratio)}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Quota Overview */}
+            {/* Quota Overview - collapsible (collapsed by default) */}
             {(quota || quotaLoading) && (
-              <div className="mb-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <details className="mb-3 group">
+                <summary className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-2.5 cursor-pointer select-none flex items-center gap-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors list-none">
+                  <svg className="w-3.5 h-3.5 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                  配额概览
+                  <span className="text-[11px] text-slate-400 font-normal ml-1">
+                    {!quotaLoading && quota?.kimi?.available && quota.kimi.data
+                      ? `Kimi: ¥${quota.kimi.data.available_balance.toFixed(2)}`
+                      : !quotaLoading && quota?.opencode_go?.available && quota.opencode_go.data
+                      ? `OpenCode: ${quota.opencode_go.data.usage_percent?.toFixed(0) ?? "?"}%已用`
+                      : quotaLoading ? "加载中..." : ""}
+                  </span>
+                </summary>
+                <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {/* Kimi balance */}
                   <QuotaCard
                     title="Kimi 余额"
@@ -993,87 +871,42 @@ export default function App() {
                     )}
                   </QuotaCard>
                 </div>
-              </div>
+              </details>
             )}
 
-            {/* Source Overview */}
-            {stats.by_source.length > 1 && (
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm mb-6">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                  {ZH.sourceOverview}
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {stats.by_source.map((s) => (
-                    <div
-                      key={s.source}
-                      className="rounded-lg border border-slate-100 p-4"
-                    >
-                      <div className="flex items-center gap-2 mb-3">
-                        <SourceBadge source={s.source} />
-                      </div>
-                      <div className="space-y-1 text-xs text-slate-600">
-                        <p>
-                          调用:{" "}
-                          <span className="font-semibold text-slate-800">
-                            {formatNumber(s.calls)}
-                          </span>
-                        </p>
-                        <p>
-                          Token:{" "}
-                          <span className="font-semibold text-slate-800">
-                            {formatNumber(s.total_tokens)}
-                          </span>
-                        </p>
-                        <p>
-                          费用:{" "}
-                          <span className="font-semibold text-slate-800">
-                            {formatCost(s.cost, s.source)}
-                          </span>
-                        </p>
-                        <p>
-                          命中率:{" "}
-                          <span className="font-semibold text-slate-800">
-                            {formatPercent(s.cache_hit_ratio)}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Charts Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Charts Row - reduced height, pie merged into vendor card */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
               {/* Daily Trends + Cache Hit Ratio */}
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">
+              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                <h3 className="text-xs font-semibold text-slate-700 mb-2">
                   {ZH.dailyTokenUsage} & {ZH.cacheHitTrend}
                 </h3>
-                <ResponsiveContainer width="100%" height={320}>
+                <ResponsiveContainer width="100%" height={240}>
                   <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis
                       dataKey="date"
-                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tick={{ fontSize: 10, fill: "#64748b" }}
                       angle={-30}
                       textAnchor="end"
-                      height={60}
+                      height={50}
                     />
                     <YAxis
                       yAxisId="tokens"
-                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tick={{ fontSize: 10, fill: "#64748b" }}
                       tickFormatter={(v: number) => formatNumber(v)}
+                      width={50}
                     />
                     <YAxis
                       yAxisId="ratio"
                       orientation="right"
-                      tick={{ fontSize: 11, fill: "#f43f5e" }}
+                      tick={{ fontSize: 10, fill: "#f43f5e" }}
                       domain={[0, 100]}
                       unit="%"
+                      width={40}
                     />
                     <Tooltip content={<CustomTooltip />} />
-                    <Legend />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
                     <Line
                       yAxisId="tokens"
                       type="monotone"
@@ -1115,237 +948,140 @@ export default function App() {
                 </ResponsiveContainer>
               </div>
 
-              {/* Vendor Breakdown */}
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                  {ZH.vendorBreakdown}
+              {/* Vendor Breakdown + Distribution (pie merged in) */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                <h3 className="text-xs font-semibold text-slate-700 mb-2">
+                  {ZH.vendorBreakdown} & {ZH.tokenDistribution}
                 </h3>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={vendorChartData} layout="vertical">
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="#e2e8f0"
-                    />
-                    <XAxis
-                      type="number"
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      tickFormatter={(v: number) => formatNumber(v)}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      width={100}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar
-                      dataKey="tokens"
-                      name={ZH.totalTokensLabel}
-                      radius={[0, 4, 4, 0]}
-                    >
-                      {vendorChartData.map((_, i) => (
-                        <Cell key={i} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <ResponsiveContainer width="100%" height={220}>
+                      <BarChart data={vendorChartData} layout="vertical">
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 10, fill: "#64748b" }}
+                          tickFormatter={(v: number) => formatNumber(v)}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          tick={{ fontSize: 10, fill: "#64748b" }}
+                          width={80}
+                        />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Bar
+                          dataKey="tokens"
+                          name={ZH.totalTokensLabel}
+                          radius={[0, 4, 4, 0]}
+                        >
+                          {vendorChartData.map((_, i) => (
+                            <Cell key={i} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="w-[140px] shrink-0">
+                    <ResponsiveContainer width="100%" height={220}>
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={40}
+                          outerRadius={65}
+                          paddingAngle={3}
+                          dataKey="value"
+                        >
+                          {pieData.map((_entry, i) => (
+                            <Cell key={i} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<PieTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Token Distribution Pie */}
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm mb-6">
-              <h3 className="text-sm font-semibold text-slate-700 mb-4">
-                {ZH.tokenDistribution}
-              </h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={90}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {pieData.map((_entry, i) => (
-                      <Cell key={i} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<PieTooltip />} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Vendor & Model Performance */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-6">
-              <div className="p-5 border-b border-slate-100">
-                <h3 className="text-sm font-semibold text-slate-700">
+            {/* Vendor & Model Performance - compact table, merged cache columns */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-3">
+              <div className="px-4 py-2.5 border-b border-slate-100">
+                <h3 className="text-xs font-semibold text-slate-700">
                   {ZH.vendorAndModel}
                 </h3>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-xs">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.provider}
-                      </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.model}
-                      </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.source}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.calls}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.input}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.output}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cacheReadCol}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cacheWriteCol}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.total}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cacheHit}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cost}
-                      </th>
+                    <tr className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wider">
+                      <th className="px-3 py-2 text-left font-medium">{ZH.provider}</th>
+                      <th className="px-3 py-2 text-left font-medium">{ZH.model}</th>
+                      <th className="px-3 py-2 text-left font-medium">{ZH.source}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.calls}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.input}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.output}</th>
+                      <th className="px-3 py-2 text-right font-medium">缓存</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.total}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.cacheHit}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.cost}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {mergedTableData.map((row, idx) =>
                       row.type === "vendor" ? (
-                        <tr
-                          key={`vendor-${row.data.provider}`}
-                          className="bg-slate-50/80 transition-colors"
-                        >
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className="w-2.5 h-2.5 rounded-full"
-                                style={{
-                                  background: getSourceColor(row.data.provider),
-                                }}
-                              />
-                              <span className="font-bold text-slate-800">
-                                {row.data.provider}
-                              </span>
+                        <tr key={`vendor-${row.data.provider}`} className="bg-slate-50/80 transition-colors">
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full" style={{ background: getSourceColor(row.data.provider) }} />
+                              <span className="font-bold text-slate-800">{row.data.provider}</span>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-xs text-slate-400 italic">
-                            汇总
+                          <td className="px-3 py-2 text-[10px] text-slate-400 italic">汇总</td>
+                          <td className="px-3 py-2"></td>
+                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(row.data.calls)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.input_tokens)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.output_tokens)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.cache_read_tokens + row.data.cache_write_tokens)}</td>
+                          <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(row.data.total_tokens)}</td>
+                          <td className="px-3 py-2 text-right">
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                              row.data.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                              : row.data.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-600"
+                            }`}>{formatPercent(row.data.cache_hit_ratio)}</span>
                           </td>
-                          <td className="px-4 py-3"></td>
-                          <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                            {formatNumber(row.data.calls)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.input_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.output_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.cache_read_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.cache_write_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right font-bold text-slate-800">
-                            {formatNumber(row.data.total_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                row.data.cache_hit_ratio > 50
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : row.data.cache_hit_ratio > 10
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-slate-100 text-slate-600"
-                              }`}
-                            >
-                              {formatPercent(row.data.cache_hit_ratio)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                            {formatCost(row.data.cost)}
-                          </td>
+                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCost(row.data.cost)}</td>
                         </tr>
                       ) : (
-                        <tr
-                          key={`model-${row.data.provider}-${row.data.model}-${idx}`}
-                          className="hover:bg-slate-50 transition-colors"
-                        >
-                          <td className="px-4 py-3"></td>
-                          <td className="px-4 py-3 font-medium text-slate-700">
-                            {row.data.model}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex flex-wrap gap-1">
+                        <tr key={`model-${row.data.provider}-${row.data.model}-${idx}`} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-3 py-2"></td>
+                          <td className="px-3 py-2 font-medium text-slate-700">{row.data.model}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-0.5">
                               {(row.data.sources || []).map((s) => (
-                                <span
-                                  key={s}
-                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium"
-                                  style={{
-                                    background: `${getSourceColor(s)}15`,
-                                    color: getSourceColor(s),
-                                  }}
-                                >
-                                  <span
-                                    className="w-1 h-1 rounded-full"
-                                    style={{ background: getSourceColor(s) }}
-                                  />
+                                <span key={s} className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] font-medium"
+                                  style={{ background: `${getSourceColor(s)}15`, color: getSourceColor(s) }}>
                                   {getSourceLabel(s)}
                                 </span>
                               ))}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.calls)}
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.calls)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.input_tokens)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.output_tokens)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.cache_read_tokens + row.data.cache_write_tokens)}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(row.data.total_tokens)}</td>
+                          <td className="px-3 py-2 text-right">
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                              row.data.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                              : row.data.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-600"
+                            }`}>{formatPercent(row.data.cache_hit_ratio)}</span>
                           </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.input_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.output_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.cache_read_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatNumber(row.data.cache_write_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                            {formatNumber(row.data.total_tokens)}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                row.data.cache_hit_ratio > 50
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : row.data.cache_hit_ratio > 10
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-slate-100 text-slate-600"
-                              }`}
-                            >
-                              {formatPercent(row.data.cache_hit_ratio)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-600">
-                            {formatCost(row.data.cost)}
-                          </td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatCost(row.data.cost)}</td>
                         </tr>
                       )
                     )}
@@ -1354,208 +1090,122 @@ export default function App() {
               </div>
             </div>
 
-            {/* Detailed Requests */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
-              <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <h3 className="text-sm font-semibold text-slate-700">
-                  {ZH.detailedRequests}
-                </h3>
-                <div className="flex items-center gap-2">
-                  <Filter className="w-4 h-4 text-slate-400" />
+            {/* Detailed Requests - collapsible (collapsed by default) */}
+            <details className="group">
+              <summary className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-2.5 cursor-pointer select-none flex items-center gap-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors list-none">
+                <svg className="w-3.5 h-3.5 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                {ZH.detailedRequests}
+                <span className="text-[11px] text-slate-400 font-normal ml-1">
+                  {requests ? `${formatNumber(requests.total)} 条` : ""}
+                </span>
+                <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  <Filter className="w-3.5 h-3.5 text-slate-400" />
                   <select
                     value={selectedModel}
                     onChange={(e) => {
                       setSelectedModel(e.target.value);
                       setPage(1);
                     }}
-                    className="px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:ring-2 focus:ring-primary-500 outline-none bg-white"
+                    className="px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-primary-500 outline-none bg-white"
                   >
                     <option value="">{ZH.allModels}</option>
                     {filters.models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
+                      <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
                 </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              </summary>
+              <div className="mt-1.5 bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
+                <table className="w-full text-xs">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.date}
-                      </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.provider}
-                      </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.model}
-                      </th>
-                      <th className="px-4 py-3 text-left font-medium">
-                        {ZH.source}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.input}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.output}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cacheReadCol}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cacheWriteCol}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.total}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cacheHit}
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        {ZH.cost}
-                      </th>
+                    <tr className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wider">
+                      <th className="px-3 py-2 text-left font-medium">{ZH.date}</th>
+                      <th className="px-3 py-2 text-left font-medium">{ZH.provider}</th>
+                      <th className="px-3 py-2 text-left font-medium">{ZH.model}</th>
+                      <th className="px-3 py-2 text-left font-medium">{ZH.source}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.input}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.output}</th>
+                      <th className="px-3 py-2 text-right font-medium">缓存</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.total}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.cacheHit}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.cost}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {requests?.data.map((r, i) => (
-                      <tr
-                        key={i}
-                        className="hover:bg-slate-50 transition-colors"
-                      >
-                        <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
-                          {formatTime(r.time)}
+                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{formatTime(r.time)}</td>
+                        <td className="px-3 py-2">
+                          <span className="text-xs font-medium" style={{ color: getSourceColor(r.provider) }}>{r.provider}</span>
                         </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium"
-                            style={{
-                              background: `${getSourceColor(r.provider)}15`,
-                              color: getSourceColor(r.provider),
-                            }}
-                          >
-                            <span
-                              className="w-1.5 h-1.5 rounded-full"
-                              style={{
-                                background: getSourceColor(r.provider),
-                              }}
-                            />
-                            {r.provider}
+                        <td className="px-3 py-2 text-slate-600">{r.model}</td>
+                        <td className="px-3 py-2">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium"
+                            style={{ background: `${getSourceColor(r.source)}15`, color: getSourceColor(r.source) }}>
+                            {getSourceLabel(r.source)}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {r.model}
+                        <td className="px-3 py-2 text-right text-slate-600">{formatNumber(r.input_tokens)}</td>
+                        <td className="px-3 py-2 text-right text-slate-600">{formatNumber(r.output_tokens)}</td>
+                        <td className="px-3 py-2 text-right text-slate-600">{formatNumber(r.cache_read_tokens + r.cache_write_tokens)}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(r.total_tokens)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                            r.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                            : r.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                            : "bg-slate-100 text-slate-600"
+                          }`}>{formatPercent(r.cache_hit_ratio)}</span>
                         </td>
-                        <td className="px-4 py-3">
-                          <SourceBadge source={r.source} />
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {formatNumber(r.input_tokens)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {formatNumber(r.output_tokens)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {formatNumber(r.cache_read_tokens)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {formatNumber(r.cache_write_tokens)}
-                        </td>
-                        <td className="px-4 py-3 text-right font-semibold text-slate-700">
-                          {formatNumber(r.total_tokens)}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              r.cache_hit_ratio > 50
-                                ? "bg-emerald-100 text-emerald-700"
-                                : r.cache_hit_ratio > 10
-                                ? "bg-amber-100 text-amber-700"
-                                : "bg-slate-100 text-slate-600"
-                            }`}
-                          >
-                            {formatPercent(r.cache_hit_ratio)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {formatCost(r.cost, r.source)}
-                        </td>
+                        <td className="px-3 py-2 text-right text-slate-600">{formatCost(r.cost, r.source)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
 
-              {/* Pagination */}
-              {requests && requests.total_pages > 1 && (
-                <div className="p-4 border-t border-slate-100 flex items-center justify-between">
-                  <p className="text-sm text-slate-500">
-                    {ZH.showing}{" "}
-                    {(requests.page - 1) * requests.limit + 1}-
-                    {Math.min(
-                      requests.page * requests.limit,
-                      requests.total
-                    )}{" "}
-                    {ZH.of} {formatNumber(requests.total)} {ZH.requests}
-                  </p>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={requests.page <= 1}
-                      className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-                    {Array.from(
-                      { length: Math.min(5, requests.total_pages) },
-                      (_, i) => {
+                {/* Pagination */}
+                {requests && requests.total_pages > 1 && (
+                  <div className="px-3 py-2 border-t border-slate-100 flex items-center justify-between">
+                    <p className="text-xs text-slate-500">
+                      {ZH.showing} {(requests.page - 1) * requests.limit + 1}-
+                      {Math.min(requests.page * requests.limit, requests.total)} {ZH.of} {formatNumber(requests.total)} {ZH.requests}
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        disabled={requests.page <= 1}
+                        className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      {Array.from({ length: Math.min(5, requests.total_pages) }, (_, i) => {
                         let pageNum: number;
-                        if (requests.total_pages <= 5) {
-                          pageNum = i + 1;
-                        } else if (requests.page <= 3) {
-                          pageNum = i + 1;
-                        } else if (
-                          requests.page >=
-                          requests.total_pages - 2
-                        ) {
-                          pageNum = requests.total_pages - 4 + i;
-                        } else {
-                          pageNum = requests.page - 2 + i;
-                        }
+                        if (requests.total_pages <= 5) pageNum = i + 1;
+                        else if (requests.page <= 3) pageNum = i + 1;
+                        else if (requests.page >= requests.total_pages - 2) pageNum = requests.total_pages - 4 + i;
+                        else pageNum = requests.page - 2 + i;
                         return (
-                          <button
-                            key={pageNum}
-                            onClick={() => setPage(pageNum)}
-                            className={`w-8 h-8 rounded-md text-sm font-medium transition-colors ${
-                              pageNum === requests.page
-                                ? "bg-primary-600 text-white"
-                                : "hover:bg-slate-100 text-slate-600"
-                            }`}
-                          >
+                          <button key={pageNum} onClick={() => setPage(pageNum)}
+                            className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
+                              pageNum === requests.page ? "bg-primary-600 text-white" : "hover:bg-slate-100 text-slate-600"
+                            }`}>
                             {pageNum}
                           </button>
                         );
-                      }
-                    )}
-                    <button
-                      onClick={() =>
-                        setPage((p) =>
-                          Math.min(requests.total_pages, p + 1)
-                        )
-                      }
-                      disabled={requests.page >= requests.total_pages}
-                      className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                      })}
+                      <button
+                        onClick={() => setPage((p) => Math.min(requests.total_pages, p + 1))}
+                        disabled={requests.page >= requests.total_pages}
+                        className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            </details>
 
-            <footer className="mt-8 text-center text-sm text-slate-400 pb-6">
+            <footer className="mt-4 text-center text-xs text-slate-400 pb-4">
               {ZH.footer}
             </footer>
           </>
