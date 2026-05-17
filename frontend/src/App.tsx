@@ -763,6 +763,7 @@ export default function App() {
               )}
             </div>
 
+
             {/* Vendor Subscriptions - collapsible (collapsed by default) */}
             <details className="mb-3 group">
               <summary className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-2.5 cursor-pointer select-none flex items-center gap-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors list-none">
@@ -791,6 +792,7 @@ export default function App() {
               <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {/* Xunfei */}
                 <div className={"bg-white rounded-xl border " + (xunfei?.available && xunfei.data?.status === "active" ? "border-emerald-200" : "border-slate-200") + " p-4 shadow-sm"}>
+
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <span className={"w-2 h-2 rounded-full " + (xunfeiLoading ? "bg-amber-400" : xunfei?.available && xunfei.data?.status === "active" ? "bg-emerald-500" : "bg-slate-300")} />
@@ -809,13 +811,17 @@ export default function App() {
                         <span className={"px-1.5 py-0.5 rounded-full text-[10px] font-medium " + (xunfei.data.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
                           {xunfei.data.status === "active" ? "有效" : xunfei.data.status}
                         </span>
+
                         <span className="text-slate-400">¥{(xunfei.data.price / 100).toFixed(2)}/月</span>
+
                       </div>
                       <div className="space-y-1.5">
                         <div>
                           <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
+
                             <span>月度</span>
                             <span>{xunfei.data.usage.package_used.toLocaleString()} / {xunfei.data.usage.package_limit.toLocaleString()}</span>
+
                           </div>
                           <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                             <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.package_used, xunfei.data.usage.package_limit)}
@@ -837,9 +843,11 @@ export default function App() {
                           </div>
                         )}
                       </div>
+
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 pt-1.5 border-t border-slate-100 text-[11px] text-slate-500">
                         <span>余额: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.cash / 100).toFixed(2)}</span></span>
                         {xunfei.data.balance.virtual_balance > 0 && (
+
                           <span>赠送: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.virtual_balance / 100).toFixed(2)}</span></span>
                         )}
                         <span>到期: {xunfei.data.expires_at.replace(" ", "T")}</span>

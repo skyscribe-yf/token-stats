@@ -1,4 +1,5 @@
 export function formatNumber(n: number): string {
+  if (n == null || Number.isNaN(n)) return "-";
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + "B";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
@@ -6,6 +7,7 @@ export function formatNumber(n: number): string {
 }
 
 export function formatCost(cost: number, source?: string): string {
+  if (cost == null || Number.isNaN(cost)) return "-";
   // For non-pi sources with zero cost, show N/A
   if (cost === 0 && source && source !== "pi") return "N/A";
   if (cost === 0) return "$0.00";
@@ -14,6 +16,7 @@ export function formatCost(cost: number, source?: string): string {
 }
 
 export function formatPercent(pct: number): string {
+  if (pct == null || Number.isNaN(pct)) return "-";
   return pct.toFixed(1) + "%";
 }
 
