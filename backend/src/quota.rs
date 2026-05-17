@@ -2,7 +2,10 @@
 //!
 //! Supports:
 //! - **Kimi Code**: Usage via `GET /usages` on the Kimi Code platform (OAuth access token)
+//!   Auto-refreshes expired tokens using the stored refresh_token.
 //! - **OpenCode-go**: Usage/quota via OpenAI-compatible billing endpoints
+//!   When billing API returns 404, masks the HTML error and surfaces a workspace
+//!   redirect URL constructed from the `OPENCODE_GO_WORKSPACE_ID` env var.
 //!
 //! Auth keys are read from environment variables or local config files.
 //! For Kimi, the system reads the OAuth access token from
@@ -293,7 +296,18 @@ pub fn get_kimi_credentials_path() -> PathBuf {
         .join("kimi-code.json")
 }
 
+/// Kimi Code OAuth token refresh response from the auth API.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct KimiCodeTokenRefreshResponse {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub token_type: Option<String>,
+    pub expires_in: Option<f64>,
+    pub scope: Option<String>,
+}
+
 /// Read Kimi Code OAuth access token from `~/.kimi/credentials/kimi-code.json`.
+/// If the token is expired, returns None (caller should attempt refresh).
 pub fn get_kimi_code_access_token() -> Option<String> {
     let path = get_kimi_credentials_path();
     if !path.exists() {
@@ -326,6 +340,112 @@ pub fn get_kimi_code_access_token() -> Option<String> {
     }
 
     Some(token.to_string())
+}
+
+/// Attempt to refresh the Kimi Code OAuth access token using the stored refresh_token.
+/// On success, updates the credentials file and returns the new access token.
+/// Returns None if refresh fails or no refresh_token is available.
+pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String> {
+    let path = get_kimi_credentials_path();
+    if !path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&path).ok()?;
+    let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let refresh_token = creds
+        .get("refresh_token")
+        .and_then(|v| v.as_str())?;
+    if refresh_token.is_empty() {
+        return None;
+    }
+
+    // Extract client_id from the credentials file, or use the default kimi-code client
+    let client_id = creds
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("17e5f671-d194-4dfb-9706-5516cb48c098");
+
+    let auth_base_url = get_kimi_auth_base_url();
+    let url = format!("{}/api/oauth/token", auth_base_url.trim_end_matches('/'));
+
+    tracing::info!("Refreshing Kimi Code access token via {:?}", url);
+
+    let response = client
+        .post(&url)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", client_id),
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+
+    match response {
+        Ok(r) if r.status().is_success() => {
+            let refresh_resp: KimiCodeTokenRefreshResponse = match r.json().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::warn!("Failed to parse token refresh response: {}", e);
+                    return None;
+                }
+            };
+
+            // Compute new expires_at
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as f64;
+            let expires_in = refresh_resp.expires_in.unwrap_or(900.0);
+            let new_expires_at = now + expires_in;
+
+            // Update the credentials file
+            let mut new_creds = creds.clone();
+            new_creds["access_token"] = serde_json::Value::String(refresh_resp.access_token.clone());
+            new_creds["expires_at"] = serde_json::Value::Number(
+                serde_json::Number::from_f64(new_expires_at)
+                    .unwrap_or(serde_json::Number::from(0)),
+            );
+            if let Some(new_refresh) = &refresh_resp.refresh_token {
+                new_creds["refresh_token"] = serde_json::Value::String(new_refresh.clone());
+            }
+            new_creds["expires_in"] = serde_json::Value::Number(
+                serde_json::Number::from_f64(expires_in)
+                    .unwrap_or(serde_json::Number::from(900)),
+            );
+            if let Some(scope) = &refresh_resp.scope {
+                new_creds["scope"] = serde_json::Value::String(scope.clone());
+            }
+            if let Some(token_type) = &refresh_resp.token_type {
+                new_creds["token_type"] = serde_json::Value::String(token_type.clone());
+            }
+
+            let new_content = serde_json::to_string_pretty(&new_creds).unwrap_or_default();
+            if std::fs::write(&path, new_content).is_err() {
+                tracing::warn!("Failed to write refreshed token to credentials file");
+            }
+            tracing::info!("Kimi Code token refreshed successfully, expires in {}s", expires_in as i64);
+            Some(refresh_resp.access_token)
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            tracing::warn!("Kimi Code token refresh failed: {} {}", status, truncate_error_body(&body));
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Kimi Code token refresh request failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Get the Kimi Auth API base URL for token refresh.
+pub fn get_kimi_auth_base_url() -> String {
+    std::env::var("KIMI_AUTH_BASE_URL")
+        .unwrap_or_else(|_| "https://auth.kimi.com".to_string())
 }
 
 /// Get the Kimi Code API base URL.
@@ -378,6 +498,21 @@ pub fn get_opencode_api_key() -> Option<String> {
     None
 }
 
+/// Truncate error response body for display. Long HTML responses (like OpenCode 404s)
+/// are masked to avoid flooding the error message with irrelevant content.
+fn truncate_error_body(body: &str) -> String {
+    const MAX_ERROR_BODY_LEN: usize = 200;
+    if body.len() <= MAX_ERROR_BODY_LEN {
+        return body.to_string();
+    }
+    // Check if it looks like HTML
+    if body.trim_start().starts_with("<!") || body.trim_start().starts_with("<html") {
+        return "(HTML response, content omitted)".to_string();
+    }
+    // Otherwise truncate with ellipsis
+    format!("{}...", &body[..MAX_ERROR_BODY_LEN])
+}
+
 /// Get the OpenCode base URL for API calls.
 pub fn get_opencode_base_url() -> String {
     std::env::var("OPENCODE_BASE_URL")
@@ -385,6 +520,7 @@ pub fn get_opencode_base_url() -> String {
 }
 
 /// Get the OpenCode-go workspace URL from env var.
+/// Constructs a redirect URL using the actual workspace ID from OPENCODE_GO_WORKSPACE_ID.
 pub fn get_opencode_workspace_url() -> Option<String> {
     std::env::var("OPENCODE_GO_WORKSPACE_ID")
         .ok()
@@ -408,19 +544,27 @@ impl QuotaFetcher {
     }
 
     /// Fetch Kimi Code usage from the Kimi Code platform API.
+    /// If the access token is expired, attempts to refresh it automatically.
     pub async fn fetch_kimi_quota(&self) -> KimiQuotaStatus {
         let access_token = match get_kimi_code_access_token() {
             Some(t) => t,
             None => {
-                return KimiQuotaStatus {
-                    available: false,
-                    data: None,
-                    error: Some(
-                        "Kimi Code access token not found. \
-                         Log in with `kimi` CLI or set KIMI_CREDENTIALS_PATH"
-                            .to_string(),
-                    ),
-                };
+                // Token expired or missing — try refreshing
+                tracing::info!("Kimi Code access token expired or missing, attempting refresh");
+                match refresh_kimi_code_token(&self.client).await {
+                    Some(t) => t,
+                    None => {
+                        return KimiQuotaStatus {
+                            available: false,
+                            data: None,
+                            error: Some(
+                                "Kimi Code access token not found and refresh failed. \
+                                 Log in with `kimi` CLI or set KIMI_CREDENTIALS_PATH"
+                                    .to_string(),
+                            ),
+                        };
+                    }
+                }
             }
         };
 
@@ -451,7 +595,7 @@ impl QuotaFetcher {
             return KimiQuotaStatus {
                 available: false,
                 data: None,
-                error: Some(format!("API returned {}: {}", status, body)),
+                error: Some(format!("API returned {}: {}", status, truncate_error_body(&body))),
             };
         }
 
@@ -644,7 +788,7 @@ impl QuotaFetcher {
                 return OpenCodeQuotaStatus {
                     available: false,
                     data: None,
-                    error: Some(format!("Subscription API returned {}: {}", status, body)),
+                    error: Some(format!("Subscription API returned {}: {}", status, truncate_error_body(&body))),
                 };
             }
             Err(e) => {
