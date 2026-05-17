@@ -4,6 +4,7 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react()],
+  base: "/token-stats/",
   build: {
     outDir: path.resolve(__dirname, "../backend/static"),
     emptyOutDir: true,

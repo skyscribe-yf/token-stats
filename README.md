@@ -58,7 +58,7 @@ sudo systemctl start token-stats
 sudo nginx -s reload
 ```
 
-Access the dashboard at **http://localhost:8081**
+Access the dashboard at **http://localhost:8081/token-stats/**
 
 ### Manual Setup
 

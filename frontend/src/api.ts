@@ -1,4 +1,4 @@
-const API_BASE = "";
+const API_BASE = "/token-stats";
 
 export interface AggregatedStats {
   total_calls: number;
