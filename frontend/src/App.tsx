@@ -31,9 +31,11 @@ import {
   fetchStats,
   fetchRequests,
   fetchFilters,
+  fetchQuota,
   type StatsResponse,
   type PaginatedRequests,
   type FilterOptions,
+  type QuotaResponse,
 } from "./api";
 import {
   formatNumber,
@@ -164,6 +166,33 @@ function StatCard({
           <Icon className="w-5 h-5 text-white" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function QuotaCard({
+  title,
+  provider,
+  status,
+  children,
+}: {
+  title: string;
+  provider: string;
+  status: "available" | "unavailable" | "loading";
+  children: React.ReactNode;
+}) {
+  const borderColor = status === "available" ? "border-emerald-200" : "border-slate-200";
+  const indicatorColor = status === "available" ? "bg-emerald-500" : status === "loading" ? "bg-amber-400" : "bg-slate-300";
+  return (
+    <div className={`bg-white rounded-xl border ${borderColor} p-4 shadow-sm`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${indicatorColor}`} />
+          <span className="text-xs font-semibold text-slate-700">{title}</span>
+        </div>
+        <span className="text-[10px] text-slate-400">{provider}</span>
+      </div>
+      {children}
     </div>
   );
 }
@@ -336,6 +365,8 @@ export default function App() {
 
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
+  const [quota, setQuota] = useState<QuotaResponse | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(true);
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
     models: [],
@@ -467,6 +498,22 @@ export default function App() {
       void loadRequests();
     });
   }, [loadRequests, effectiveRange.appliedAt]);
+
+  useEffect(() => {
+    const loadQuota = async () => {
+      try {
+        const q = await fetchQuota();
+        setQuota(q);
+      } catch {
+        /* quota is optional — don't set error state */
+      } finally {
+        setQuotaLoading(false);
+      }
+    };
+    loadQuota();
+    const interval = setInterval(loadQuota, 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Close custom panel on outside click
   useEffect(() => {
@@ -845,6 +892,109 @@ export default function App() {
                 color="bg-slate-700"
               />
             </div>
+
+            {/* Quota Overview */}
+            {(quota || quotaLoading) && (
+              <div className="mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Kimi balance */}
+                  <QuotaCard
+                    title="Kimi 余额"
+                    provider="kimi"
+                    status={
+                      quotaLoading
+                        ? "loading"
+                        : quota?.kimi?.available
+                        ? "available"
+                        : "unavailable"
+                    }
+                  >
+                    {quotaLoading ? (
+                      <div className="h-12 flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
+                      </div>
+                    ) : quota?.kimi?.available && quota.kimi.data ? (
+                      <div>
+                        <p className="text-xl font-bold text-slate-800">
+                          ¥{quota.kimi.data.available_balance.toFixed(2)}
+                        </p>
+                        <div className="flex gap-3 mt-1 text-xs text-slate-500">
+                          <span>现金: ¥{quota.kimi.data.cash_balance.toFixed(2)}</span>
+                          <span>赠送: ¥{quota.kimi.data.voucher_balance.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">
+                        {quota?.kimi?.error || "不可用"}
+                      </p>
+                    )}
+                  </QuotaCard>
+
+                  {/* OpenCode-go quota */}
+                  <QuotaCard
+                    title="OpenCode-go 配额"
+                    provider="opencode-go"
+                    status={
+                      quotaLoading
+                        ? "loading"
+                        : quota?.opencode_go?.available
+                        ? "available"
+                        : "unavailable"
+                    }
+                  >
+                    {quotaLoading ? (
+                      <div className="h-12 flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
+                      </div>
+                    ) : quota?.opencode_go?.available && quota.opencode_go.data ? (
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-medium text-slate-600">
+                            {quota.opencode_go.data.plan_type || "No Plan"}
+                          </span>
+                          {quota.opencode_go.data.hard_limit_usd != null && (
+                            <span className="text-[11px] text-slate-400">
+                              上限 ${quota.opencode_go.data.hard_limit_usd.toFixed(0)}
+                            </span>
+                          )}
+                        </div>
+                        {quota.opencode_go.data.usage_percent != null && (
+                          <div className="mt-1">
+                            <div className="flex justify-between text-xs text-slate-500 mb-0.5">
+                              <span>
+                                已用 ${quota.opencode_go.data.total_usage_usd?.toFixed(2) || "?"}
+                              </span>
+                              <span>{quota.opencode_go.data.usage_percent.toFixed(1)}%</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  quota.opencode_go.data.usage_percent > 80
+                                    ? "bg-rose-500"
+                                    : quota.opencode_go.data.usage_percent > 50
+                                    ? "bg-amber-500"
+                                    : "bg-emerald-500"
+                                }`}
+                                style={{ width: `${Math.min(quota.opencode_go.data.usage_percent, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {quota.opencode_go.data.remaining_usd != null && (
+                          <p className="text-xs text-slate-500 mt-1">
+                            剩余: ${quota.opencode_go.data.remaining_usd.toFixed(2)}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">
+                        {quota?.opencode_go?.error || "不可用"}
+                      </p>
+                    )}
+                  </QuotaCard>
+                </div>
+              </div>
+            )}
 
             {/* Source Overview */}
             {stats.by_source.length > 1 && (

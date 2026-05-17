@@ -141,6 +141,45 @@ export async function fetchRequests(
   return res.json();
 }
 
+export interface QuotaKimi {
+  provider: string;
+  available_balance: number;
+  voucher_balance: number;
+  cash_balance: number;
+}
+
+export interface QuotaOpenCode {
+  provider: string;
+  plan_type: string | null;
+  hard_limit_usd: number | null;
+  total_usage_usd: number | null;
+  usage_percent: number | null;
+  remaining_usd: number | null;
+}
+
+export interface KimiQuotaStatus {
+  available: boolean;
+  data: QuotaKimi | null;
+  error: string | null;
+}
+
+export interface OpenCodeQuotaStatus {
+  available: boolean;
+  data: QuotaOpenCode | null;
+  error: string | null;
+}
+
+export interface QuotaResponse {
+  kimi: KimiQuotaStatus | null;
+  opencode_go: OpenCodeQuotaStatus | null;
+}
+
+export async function fetchQuota(): Promise<QuotaResponse> {
+  const res = await fetch(`${API_BASE}/api/quota`);
+  if (!res.ok) throw new Error("Failed to fetch quota");
+  return res.json();
+}
+
 export async function fetchFilters(): Promise<FilterOptions> {
   const res = await fetch(`${API_BASE}/api/filters`);
   if (!res.ok) throw new Error("Failed to fetch filters");
