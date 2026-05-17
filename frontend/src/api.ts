@@ -185,3 +185,53 @@ export async function fetchFilters(): Promise<FilterOptions> {
   if (!res.ok) throw new Error("Failed to fetch filters");
   return res.json();
 }
+
+// ─── Xunfei (iFlytek) Coding Plan ───────────────────────────────────────────
+
+export interface XunfeiUsage {
+  package_used: number;
+  package_limit: number;
+  package_left: number;
+  rp5h_used: number;
+  rp5h_limit: number;
+  rpw_used: number;
+  rpw_limit: number;
+}
+
+export interface XunfeiBalance {
+  cash: number;
+  virtual_balance: number;
+}
+
+export interface XunfeiModelInfo {
+  model_id: string;
+  name: string;
+  context_length: string;
+  is_default: boolean;
+}
+
+export interface XunfeiStatusData {
+  plan_name: string;
+  package_id: number;
+  status: string;
+  expires_at: string;
+  created_at: string;
+  price: number;
+  usage: XunfeiUsage;
+  balance: XunfeiBalance;
+  app_id: string;
+  api_key_masked: string;
+  model_list: XunfeiModelInfo[];
+}
+
+export interface XunfeiStatus {
+  available: boolean;
+  data: XunfeiStatusData | null;
+  error: string | null;
+}
+
+export async function fetchXunfei(): Promise<XunfeiStatus> {
+  const res = await fetch(`${API_BASE}/api/xunfei`);
+  if (!res.ok) throw new Error("Failed to fetch xunfei status");
+  return res.json();
+}

@@ -32,10 +32,12 @@ import {
   fetchRequests,
   fetchFilters,
   fetchQuota,
+  fetchXunfei,
   type StatsResponse,
   type PaginatedRequests,
   type FilterOptions,
   type QuotaResponse,
+  type XunfeiStatus,
 } from "./api";
 import {
   formatNumber,
@@ -367,6 +369,8 @@ export default function App() {
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
   const [quota, setQuota] = useState<QuotaResponse | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(true);
+  const [xunfei, setXunfei] = useState<XunfeiStatus | null>(null);
+  const [xunfeiLoading, setXunfeiLoading] = useState(true);
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
     models: [],
@@ -512,6 +516,22 @@ export default function App() {
     };
     loadQuota();
     const interval = setInterval(loadQuota, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const loadXunfei = async () => {
+      try {
+        const x = await fetchXunfei();
+        setXunfei(x);
+      } catch {
+        /* xunfei is optional */
+      } finally {
+        setXunfeiLoading(false);
+      }
+    };
+    loadXunfei();
+    const interval = setInterval(loadXunfei, 60_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -992,6 +1012,152 @@ export default function App() {
                       </p>
                     )}
                   </QuotaCard>
+                </div>
+              </div>
+            )}
+
+            {/* Xunfei Coding Plan Subscription */}
+            {(xunfei || xunfeiLoading) && (
+              <div className="mb-6">
+                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${
+                        xunfeiLoading ? "bg-amber-400" :
+                        xunfei?.available && xunfei.data?.status === "active" ? "bg-emerald-500" : "bg-slate-300"
+                      }`} />
+                      <span className="text-xs font-semibold text-slate-700">讯飞编程套餐</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">xfyun.cn</span>
+                  </div>
+                  {xunfeiLoading ? (
+                    <div className="h-16 flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600" />
+                    </div>
+                  ) : xunfei?.available && xunfei.data ? (
+                    <>
+                      {/* Plan info row */}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs mb-3">
+                        <span className="font-bold text-slate-800">{xunfei.data.plan_name}</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                          xunfei.data.status === "active"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-100 text-slate-600"
+                        }`}>
+                          {xunfei.data.status === "active" ? "有效" : xunfei.data.status}
+                        </span>
+                        <span className="text-slate-400">
+                          ¥{(xunfei.data.price / 100).toFixed(2)}/月
+                        </span>
+                        <span className="text-slate-400">
+                          到期: {xunfei.data.expires_at.replace(" ", "T")}
+                        </span>
+                      </div>
+
+                      {/* Usage bars */}
+                      <div className="space-y-2">
+                        {/* Monthly */}
+                        <div>
+                          <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
+                            <span>月度请求</span>
+                            <span>{xunfei.data.usage.package_used.toLocaleString()} / {xunfei.data.usage.package_limit.toLocaleString()} ({(100 - xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0)}% 剩余)</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) > 0.8
+                                  ? "bg-rose-500"
+                                  : xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) > 0.5
+                                  ? "bg-amber-500"
+                                  : "bg-emerald-500"
+                              }`}
+                              style={{ width: `${Math.min(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100, 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                        {/* Weekly */}
+                        {xunfei.data.usage.rpw_limit > 0 && (
+                          <div>
+                            <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
+                              <span>每周请求</span>
+                              <span>{xunfei.data.usage.rpw_used.toLocaleString()} / {xunfei.data.usage.rpw_limit.toLocaleString()}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) > 0.8
+                                    ? "bg-rose-500"
+                                    : xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) > 0.5
+                                    ? "bg-amber-500"
+                                    : "bg-emerald-500"
+                                }`}
+                                style={{ width: `${Math.min(xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {/* Per-5h */}
+                        {xunfei.data.usage.rp5h_limit > 0 && (
+                          <div>
+                            <div className="flex justify-between text-[11px] text-slate-500 mb-0.5">
+                              <span>每5小时请求</span>
+                              <span>{xunfei.data.usage.rp5h_used.toLocaleString()} / {xunfei.data.usage.rp5h_limit.toLocaleString()}</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) > 0.8
+                                    ? "bg-rose-500"
+                                    : xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) > 0.5
+                                    ? "bg-amber-500"
+                                    : "bg-emerald-500"
+                                }`}
+                                style={{ width: `${Math.min(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Balance & models footer */}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                        <span>余额: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.cash / 100).toFixed(2)}</span></span>
+                        {xunfei.data.balance.virtual_balance > 0 && (
+                          <span>赠送: <span className="font-medium text-slate-700">¥{(xunfei.data.balance.virtual_balance / 100).toFixed(2)}</span></span>
+                        )}
+                        <span className="text-slate-300">|</span>
+                        <span>模型: <span className="font-medium text-slate-700">{xunfei.data.model_list.length}个</span></span>
+                        <span className="text-slate-300">|</span>
+                        <span title={xunfei.data.app_id}>App: <span className="font-medium text-slate-700">{xunfei.data.app_id}</span></span>
+                        <span className="text-slate-300">|</span>
+                        <span title="API Key (masked)">Key: <span className="font-medium text-slate-700">{xunfei.data.api_key_masked}</span></span>
+                      </div>
+
+                      {/* Model chips */}
+                      {xunfei.data.model_list.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {xunfei.data.model_list.map((m) => (
+                            <span
+                              key={m.model_id}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                m.is_default
+                                  ? "bg-primary-100 text-primary-700"
+                                  : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {m.name}
+                              <span className="text-slate-400">{m.context_length}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">
+                      {xunfei?.error || "不可用"}
+                      {xunfei?.available && !xunfei.data && " — 无活跃套餐"}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
