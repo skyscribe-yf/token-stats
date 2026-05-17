@@ -23,10 +23,13 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 - In-memory data store (`Arc<AppState>` with `RwLock<Vec<TokenRecord>>`)
 - Background refresh task every 30s (`REFRESH_INTERVAL_SECS`)
 - Serves static files from `backend/static/` (built frontend)
-- Parses data from 3 sources:
+- Parses data from 5 sources:
   1. **Pi**: `~/.pi/token-logs/usage.jsonl` (JSONL)
-  2. **ccswitch**: `~/.cc-switch/cc-switch.db` (SQLite) — Claude Code + Codex
-  3. **Kimi CLI**: `~/.kimi/sessions/*/wire.jsonl` (JSONL)
+  2. **Codex**: `~/.codex/sessions/*/rollout-*.jsonl` (JSONL) — direct from Codex CLI
+  3. **Claude Code**: `~/.claude/projects/*/*.jsonl` (JSONL) — direct from Claude Code CLI
+  4. **OpenCode**: `~/.local/share/opencode/opencode.db` (SQLite) — direct from OpenCode CLI
+  5. **Kimi CLI**: `~/.kimi/sessions/*/wire.jsonl` (JSONL)
+  - **ccswitch fallback**: `~/.cc-switch/cc-switch.db` (SQLite) — only loaded if `USE_CC_SWITCH` env var is set
 
 ### Frontend (`frontend/`)
 - Vite + React 19 + TypeScript
@@ -45,6 +48,7 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 | File | Purpose |
 |------|---------|
 | `src/main.rs` | Server init, background refresh, routing, CORS |
+| `src/config.rs` | Vendor merge config loading and application |
 | `src/models.rs` | All data structs: `TokenRecord`, `StatsResponse`, `AggregatedStats`, etc. |
 | `src/parser.rs` | Parse all 3 data sources (JSONL + SQLite) |
 | `src/aggregator.rs` | Filter, aggregate, sort, paginate records |
@@ -107,7 +111,32 @@ cache_hit_ratio = cache_read_tokens / (input_tokens + cache_read_tokens) × 100%
 - `input_tokens` = non-cached input ONLY (normalized)
 - `total_tokens` = input + output + cache_read + cache_write
 
-**Important normalization:** For OpenAI/Codex data, `input_tokens` INCLUDES cache_read_tokens in the raw data. The parser subtracts: `effective_input = input_tokens - cache_read_tokens`. This ensures consistent cache hit ratio calculation across all sources.
+**Important normalization:**
+- **Codex (OpenAI API)**: `input_tokens` INCLUDES `cache_read_tokens` in the raw data. The parser subtracts: `effective_input = input_tokens - cache_read_tokens`.
+- **Claude Code (Anthropic API)**: `input_tokens` already excludes cache tokens. No normalization needed.
+- **Kimi CLI**: `input_tokens` already excludes cache tokens. No normalization needed.
+- This ensures consistent cache hit ratio calculation across all sources.
+
+### Vendor Merging
+
+Different data sources may use different provider names for the same vendor (e.g. "kimi" from Kimi CLI vs "kimi-coding" from ccswitch). The `vendor_merge.toml` config file defines merge rules to unify these into canonical names.
+
+**Config file**: `backend/vendor_merge.toml` (auto-detected next to the binary, or override via `VENDOR_MERGE_CONFIG` env var)
+
+```toml
+[[vendor_group]]
+name = "kimi"
+providers = ["kimi", "kimi-coding"]
+
+[[vendor_group]]
+name = "ainaba"
+providers = ["openai", "ainaiba"]
+```
+
+- Each `[[vendor_group]]` has a `name` (the canonical provider name) and `providers` (all original names that should map to it).
+- Merging is applied in `load_all_sources()` after all data is loaded, before records are stored.
+- If the config file is missing, no merging occurs (graceful degradation).
+- The `config.rs` module handles loading and applying the merge map.
 
 ---
 
@@ -182,7 +211,9 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `RUST_LOG` | - | Logging level (`info`, `debug`, `trace`) |
 | `REFRESH_INTERVAL_SECS` | `30` | Data refresh interval |
 | `CCSWITCH_DB_PATH` | `~/.cc-switch/cc-switch.db` | Override ccswitch DB location |
+| `USE_CC_SWITCH` | unset | Set to any value to also load legacy cc-switch SQLite data |
 | `KIMI_SESSIONS_PATH` | `~/.kimi/sessions` | Override Kimi sessions directory |
+| `VENDOR_MERGE_CONFIG` | auto-detect | Override vendor merge config path (see below) |
 
 ---
 

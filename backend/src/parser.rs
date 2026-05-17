@@ -1,5 +1,7 @@
+use crate::config;
 use crate::models::TokenRecord;
-use chrono::{Utc, TimeZone};
+use chrono::{Utc, TimeZone, DateTime};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -218,6 +220,7 @@ fn resolve_provider_from_model(
         "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
         "deepseek-v4-pro" | "deepseek-v4-flash" => "deepseek".to_string(),
         "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" => "openai".to_string(),
+        "glm-5.1" => "opencode-go".to_string(),
         _ => model.to_string(), // fallback: use model name as provider
     }
 }
@@ -357,6 +360,343 @@ fn walkdir_recursive(path: &Path, result: &mut Vec<std::path::PathBuf>) -> Resul
     Ok(())
 }
 
+// ─── Codex direct source ───
+
+pub fn get_codex_sessions_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".codex").join("sessions")
+}
+
+pub fn parse_codex_sessions<P: AsRef<Path>>(base_path: P) -> Vec<TokenRecord> {
+    let base = base_path.as_ref();
+    if !base.exists() {
+        tracing::warn!("Codex sessions dir not found at {:?}, skipping", base);
+        return Vec::new();
+    }
+
+    let mut records = Vec::new();
+
+    if let Ok(entries) = walkdir(base) {
+        for path in entries {
+            if !path.to_string_lossy().ends_with(".jsonl") {
+                continue;
+            }
+            if !path.file_name().unwrap_or_default().to_string_lossy().starts_with("rollout-") {
+                continue;
+            }
+
+            let file = match File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            // First pass: find model from turn_context
+            let mut session_model = "gpt-5.5".to_string();
+            {
+                let reader = BufReader::new(&file);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        if line.trim().is_empty() { continue; }
+                        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
+                            if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
+                                if let Some(model) = obj.get("payload").and_then(|p| p.get("model")).and_then(|m| m.as_str()) {
+                                    session_model = model.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Second pass: collect token_count events
+            let file = match File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if line.trim().is_empty() { continue; }
+                    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
+                        if obj.get("type").and_then(|t| t.as_str()) != Some("event_msg") {
+                            continue;
+                        }
+                        let payload = obj.get("payload");
+                        if payload.is_none() { continue; }
+                        let payload = payload.unwrap();
+                        if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
+                            continue;
+                        }
+                        let info = payload.get("info");
+                        if info.is_none() || info.unwrap().is_null() { continue; }
+                        let last_usage = info.unwrap().get("last_token_usage");
+                        if last_usage.is_none() { continue; }
+                        let usage = last_usage.unwrap();
+
+                        let input_tokens = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cached_input_tokens = usage.get("cached_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let output_tokens = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        // reasoning_output_tokens is part of output_tokens, ignore for totals
+
+                        // OpenAI convention: input_tokens includes cache; normalize
+                        let effective_input = (input_tokens - cached_input_tokens).max(0);
+
+                        let ts_str = obj.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                        let (date, time) = parse_iso_timestamp(ts_str);
+
+                        records.push(TokenRecord {
+                            date,
+                            time,
+                            api_key_prefix: "N/A".to_string(),
+                            provider: "openai".to_string(),
+                            model: session_model.clone(),
+                            source: "codex".to_string(),
+                            input_tokens: effective_input,
+                            output_tokens,
+                            cache_read_tokens: cached_input_tokens,
+                            cache_write_tokens: 0,
+                            total_tokens: effective_input + output_tokens + cached_input_tokens,
+                            cost: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!("Loaded {} records from Codex sessions", records.len());
+    records
+}
+
+fn parse_iso_timestamp(ts: &str) -> (String, String) {
+    match DateTime::parse_from_rfc3339(ts) {
+        Ok(dt) => {
+            let utc = dt.with_timezone(&Utc);
+            (utc.format("%Y-%m-%d").to_string(), utc.to_rfc3339())
+        }
+        Err(_) => ("unknown".to_string(), "unknown".to_string()),
+    }
+}
+
+// ─── Claude Code direct source ───
+
+pub fn get_claude_code_projects_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".claude").join("projects")
+}
+
+pub fn parse_claude_code_sessions<P: AsRef<Path>>(base_path: P) -> Vec<TokenRecord> {
+    let base = base_path.as_ref();
+    if !base.exists() {
+        tracing::warn!("Claude Code projects dir not found at {:?}, skipping", base);
+        return Vec::new();
+    }
+
+    let mut records = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+
+    if let Ok(entries) = walkdir(base) {
+        for path in entries {
+            if !path.to_string_lossy().ends_with(".jsonl") {
+                continue;
+            }
+
+            let file = match File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if line.trim().is_empty() { continue; }
+                    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
+                        if obj.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+                            continue;
+                        }
+                        let session_id = obj.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let msg = obj.get("message");
+                        if msg.is_none() { continue; }
+                        let msg = msg.unwrap();
+                        let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                        let key = (session_id.clone(), msg_id);
+                        if seen.contains(&key) {
+                            continue;
+                        }
+
+                        let usage = msg.get("usage");
+                        if usage.is_none() { continue; }
+                        let usage = usage.unwrap();
+                        let input_tokens = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let output_tokens = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cache_read_tokens = usage.get("cache_read_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cache_write_tokens = usage.get("cache_creation_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+
+                        // Filter out intermediate streaming snapshots with zero usage
+                        if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 && cache_write_tokens == 0 {
+                            continue;
+                        }
+
+                        seen.insert(key);
+
+                        let model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                        let provider = resolve_provider_from_model(&model, &std::collections::HashMap::new());
+
+                        let ts_str = obj.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+                        let (date, time) = parse_iso_timestamp(ts_str);
+
+                        records.push(TokenRecord {
+                            date,
+                            time,
+                            api_key_prefix: "N/A".to_string(),
+                            provider,
+                            model,
+                            source: "claude-code".to_string(),
+                            input_tokens,
+                            output_tokens,
+                            cache_read_tokens,
+                            cache_write_tokens,
+                            total_tokens: input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
+                            cost: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!("Loaded {} records from Claude Code sessions", records.len());
+    records
+}
+
+// ─── OpenCode source ───
+
+pub fn get_opencode_db_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".local").join("share").join("opencode").join("opencode.db")
+}
+
+pub fn parse_opencode_db<P: AsRef<Path>>(path: P) -> Vec<TokenRecord> {
+    let path = path.as_ref();
+    if !path.exists() {
+        tracing::warn!("OpenCode DB not found at {:?}, skipping", path);
+        return Vec::new();
+    }
+
+    let conn = match rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to open OpenCode DB: {}, skipping", e);
+            return Vec::new();
+        }
+    };
+
+    let mut records = Vec::new();
+    let sql = "SELECT data FROM message";
+
+    let mut stmt = match conn.prepare(sql) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Failed to prepare OpenCode query: {}, skipping", e);
+            return records;
+        }
+    };
+
+    let rows = stmt.query_map([], |row| {
+        let data: String = row.get(0)?;
+        Ok(data)
+    });
+
+    match rows {
+        Ok(r) => {
+            for item in r {
+                if let Ok(data) = item {
+                    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&data) {
+                        // Only assistant messages with token usage
+                        if obj.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                            continue;
+                        }
+                        let tokens = obj.get("tokens");
+                        if tokens.is_none() || tokens.unwrap().is_null() {
+                            continue;
+                        }
+                        let tokens = tokens.unwrap();
+                        let input_tokens = tokens.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let output_tokens = tokens.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let reasoning_tokens = tokens.get("reasoning").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cache = tokens.get("cache");
+                        let cache_read_tokens = cache.and_then(|c| c.get("read")).and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cache_write_tokens = cache.and_then(|c| c.get("write")).and_then(|v| v.as_i64()).unwrap_or(0);
+                        let total_tokens = tokens.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
+
+                        // Filter out zero-usage records (intermediate streaming states)
+                        if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 && cache_write_tokens == 0 {
+                            continue;
+                        }
+
+                        // reasoning is part of output
+                        let effective_output = output_tokens + reasoning_tokens;
+
+                        let model = obj.get("modelID").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                        let mut provider = obj.get("providerID").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                        // Normalize opencode → opencode-go for consistency with existing data
+                        if provider == "opencode" {
+                            provider = "opencode-go".to_string();
+                        }
+                        // Fallback to model-based resolution if provider is missing/generic
+                        if provider == "unknown" || provider.is_empty() {
+                            provider = resolve_provider_from_model(&model, &std::collections::HashMap::new());
+                        }
+
+                        let cost = obj.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+                        let time_obj = obj.get("time");
+                        let ts_ms = time_obj
+                            .and_then(|t| t.get("completed"))
+                            .and_then(|v| v.as_i64())
+                            .or_else(|| time_obj.and_then(|t| t.get("created")).and_then(|v| v.as_i64()))
+                            .unwrap_or(0);
+                        let (date, time) = if ts_ms > 0 {
+                            let secs = ts_ms / 1000;
+                            let dt = Utc.timestamp_opt(secs, 0).single();
+                            match dt {
+                                Some(dt) => (dt.format("%Y-%m-%d").to_string(), dt.to_rfc3339()),
+                                None => ("unknown".to_string(), "unknown".to_string()),
+                            }
+                        } else {
+                            ("unknown".to_string(), "unknown".to_string())
+                        };
+
+                        records.push(TokenRecord {
+                            date,
+                            time,
+                            api_key_prefix: "N/A".to_string(),
+                            provider,
+                            model,
+                            source: "opencode".to_string(),
+                            input_tokens,
+                            output_tokens: effective_output,
+                            cache_read_tokens,
+                            cache_write_tokens,
+                            total_tokens,
+                            cost,
+                        });
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Failed to iterate OpenCode messages: {}", e),
+    }
+
+    tracing::info!("Loaded {} records from OpenCode DB", records.len());
+    records
+}
+
 // ─── Load all sources ───
 
 pub fn load_all_sources() -> Vec<TokenRecord> {
@@ -369,11 +709,34 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
     tracing::info!("Loaded {} pi records", pi_records.len());
     all_records.extend(pi_records);
 
-    // ccswitch (Claude Code + Codex)
-    let ccswitch_path = get_ccswitch_db_path();
-    tracing::info!("Loading ccswitch data from: {:?}", ccswitch_path);
-    let ccswitch_records = parse_ccswitch_db(&ccswitch_path);
-    all_records.extend(ccswitch_records);
+    // Codex (direct from session JSONL)
+    let codex_path = get_codex_sessions_path();
+    tracing::info!("Loading Codex data from: {:?}", codex_path);
+    let codex_records = parse_codex_sessions(&codex_path);
+    tracing::info!("Loaded {} codex records", codex_records.len());
+    all_records.extend(codex_records);
+
+    // Claude Code (direct from project JSONL)
+    let claude_path = get_claude_code_projects_path();
+    tracing::info!("Loading Claude Code data from: {:?}", claude_path);
+    let claude_records = parse_claude_code_sessions(&claude_path);
+    tracing::info!("Loaded {} claude-code records", claude_records.len());
+    all_records.extend(claude_records);
+
+    // OpenCode
+    let opencode_path = get_opencode_db_path();
+    tracing::info!("Loading OpenCode data from: {:?}", opencode_path);
+    let opencode_records = parse_opencode_db(&opencode_path);
+    tracing::info!("Loaded {} opencode records", opencode_records.len());
+    all_records.extend(opencode_records);
+
+    // ccswitch (fallback, only if env var explicitly set)
+    if std::env::var("USE_CC_SWITCH").is_ok() {
+        let ccswitch_path = get_ccswitch_db_path();
+        tracing::info!("Loading ccswitch data from: {:?}", ccswitch_path);
+        let ccswitch_records = parse_ccswitch_db(&ccswitch_path);
+        all_records.extend(ccswitch_records);
+    }
 
     // Kimi CLI
     let kimi_path = get_kimi_sessions_path();
@@ -382,5 +745,12 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
     all_records.extend(kimi_records);
 
     tracing::info!("Total records across all sources: {}", all_records.len());
+
+    // Apply vendor merging from config
+    let merge_config_path = config::get_vendor_merge_config_path();
+    if let Some(merge_map) = config::load_vendor_merge_map(&merge_config_path) {
+        config::apply_vendor_merge(&mut all_records, &merge_map);
+    }
+
     all_records
 }

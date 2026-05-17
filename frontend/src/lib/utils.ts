@@ -72,6 +72,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   "claude-code": "#f59e0b", // amber
   codex: "#10b981",       // emerald
   "kimi-cli": "#8b5cf6",  // violet
+  opencode: "#f97316",    // orange
 };
 
 export const SOURCE_LABELS: Record<string, string> = {
@@ -79,6 +80,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   "kimi-cli": "Kimi CLI",
+  opencode: "OpenCode",
 };
 
 export function getSourceColor(source: string): string {
