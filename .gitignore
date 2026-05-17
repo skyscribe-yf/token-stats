@@ -2,6 +2,7 @@
 /frontend/node_modules/
 /frontend/dist/
 *.log
+/logs/
 .DS_Store
 *.swp
 *.swo

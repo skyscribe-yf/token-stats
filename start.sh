@@ -26,5 +26,6 @@ fi
 
 echo ""
 echo "📊 Starting server..."
+echo "   Log level: use --log-level (default: info) or RUST_LOG env var"
 cd "$BACKEND_DIR"
-RUST_LOG=info ./target/release/token-stats-backend
+./target/release/token-stats-backend --log-level info

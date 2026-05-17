@@ -7,6 +7,12 @@ mod routes;
 mod xunfei;
 
 use axum::{routing::get, Router};
+use clap::Parser;
+use flexi_logger::{
+    trc::{setup_tracing, FormatConfig},
+    writers::FileLogWriter,
+    Cleanup, Criterion, FileSpec, LogSpecification, Naming, WriteMode,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,11 +23,53 @@ use tower_http::services::ServeDir;
 use crate::sources::load_all_sources;
 use crate::routes::AppState;
 
+/// Token Stats Backend — AI token usage dashboard API.
+#[derive(Parser, Debug)]
+#[command(name = "token-stats-backend", version)]
+struct Args {
+    /// Log level (trace, debug, info, warn, error)
+    /// Also reads from RUST_LOG env var.
+    #[arg(short = 'l', long = "log-level", default_value = "info")]
+    log_level: String,
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let args = Args::parse();
+
+    // flexi_logger with file rotation:
+    //   - writes to logs/token-stats*.log
+    //   - rotates at 10 MB per file (Criterion::Size)
+    //   - keeps at most 20 rotated files (Cleanup::KeepLogFiles)
+    //   - bridges tracing events via flexi_logger::trc::setup_tracing
+    //   - respects RUST_LOG env var (takes precedence via LogSpecification::env_or_parse)
+    let log_spec = LogSpecification::env_or_parse(&args.log_level)
+        .expect("Failed to parse log level");
+
+    let _log_handle = setup_tracing(
+        log_spec,
+        None, // no specfile for on-the-fly changes
+        FileLogWriter::builder(
+            FileSpec::default()
+                .directory("logs")
+                .basename("token-stats")
+                .suffix("log"),
+        )
+        .rotate(
+            Criterion::Size(10_000_000), // 10 MB
+            Naming::Timestamps,
+            Cleanup::KeepLogFiles(20),
+        )
+        .append()
+        .write_mode(WriteMode::Async),
+        &FormatConfig::default().with_file(true),
+    )
+    .expect("Failed to set up flexi_logger tracing");
+
+    tracing::info!(
+        "Starting Token Stats Backend — log level: {}",
+        args.log_level
+    );
 
     let records = load_all_sources();
     tracing::info!("Initial load: {} records", records.len());
