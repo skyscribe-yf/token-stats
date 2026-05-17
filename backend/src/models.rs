@@ -1,0 +1,135 @@
+use chrono::{NaiveDate, DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenRecord {
+    pub date: String,
+    pub time: String,
+    #[serde(rename = "apiKeyPrefix")]
+    pub api_key_prefix: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(rename = "inputTokens")]
+    pub input_tokens: i64,
+    #[serde(rename = "outputTokens")]
+    pub output_tokens: i64,
+    #[serde(rename = "cacheReadTokens")]
+    pub cache_read_tokens: i64,
+    #[serde(rename = "cacheWriteTokens")]
+    pub cache_write_tokens: i64,
+    #[serde(rename = "totalTokens")]
+    pub total_tokens: i64,
+    pub cost: f64,
+}
+
+impl TokenRecord {
+    pub fn cache_hit_ratio(&self) -> f64 {
+        let total_input = self.input_tokens + self.cache_read_tokens;
+        if total_input > 0 {
+            self.cache_read_tokens as f64 / total_input as f64 * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn parsed_date(&self) -> Option<NaiveDate> {
+        NaiveDate::parse_from_str(&self.date, "%Y-%m-%d").ok()
+    }
+
+    pub fn parsed_time(&self) -> Option<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(&self.time)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AggregatedStats {
+    pub total_calls: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_tokens: i64,
+    pub total_cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub total_cost: f64,
+    pub avg_cache_hit_ratio: f64,
+    pub weighted_cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VendorStats {
+    pub provider: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DateStats {
+    pub date: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelStats {
+    pub model: String,
+    pub provider: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DetailedRequest {
+    pub date: String,
+    pub time: String,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PaginatedRequests {
+    pub data: Vec<DetailedRequest>,
+    pub total: usize,
+    pub page: usize,
+    pub limit: usize,
+    pub total_pages: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StatsResponse {
+    pub overall: AggregatedStats,
+    pub by_vendor: Vec<VendorStats>,
+    pub by_date: Vec<DateStats>,
+    pub by_model: Vec<ModelStats>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FilterOptions {
+    pub vendors: Vec<String>,
+    pub models: Vec<String>,
+}

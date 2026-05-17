@@ -1,0 +1,15 @@
+[Unit]
+Description=Token Stats Dashboard Backend
+After=network.target
+
+[Service]
+Type=simple
+User=skyscribe
+WorkingDirectory=/home/skyscribe/srcs/token-stats/backend
+Environment="RUST_LOG=info"
+ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

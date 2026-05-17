@@ -1,0 +1,16 @@
+/backend/target/
+/frontend/node_modules/
+/frontend/dist/
+*.log
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+.env
+/backend/static/assets/
+/backend/static/index.html
+/backend/static/favicon.svg
+/backend/static/icons.svg
