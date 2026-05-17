@@ -1,6 +1,7 @@
 use crate::aggregator;
 use crate::models::*;
 use crate::quota::{QuotaFetcher, QuotaResponse};
+use crate::xunfei::XunfeiFetcher;
 use axum::{
     extract::{Query, State},
     response::IntoResponse,
@@ -161,4 +162,10 @@ pub async fn get_quota() -> impl IntoResponse {
     };
 
     Json(response)
+}
+
+pub async fn get_xunfei() -> impl IntoResponse {
+    let fetcher = XunfeiFetcher::new();
+    let status = fetcher.fetch_status().await;
+    Json(status)
 }

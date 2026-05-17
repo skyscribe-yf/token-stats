@@ -4,6 +4,7 @@ mod models;
 mod parser;
 mod quota;
 mod routes;
+mod xunfei;
 
 use axum::{
     routing::get,
@@ -64,7 +65,8 @@ async fn main() {
         .route("/api/stats", get(routes::get_stats))
         .route("/api/requests", get(routes::get_requests))
         .route("/api/filters", get(routes::get_filters))
-        .route("/api/quota", get(routes::get_quota));
+        .route("/api/quota", get(routes::get_quota))
+        .route("/api/xunfei", get(routes::get_xunfei));
 
     let app = Router::new()
         .merge(api_routes)
