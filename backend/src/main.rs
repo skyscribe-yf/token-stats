@@ -1,4 +1,5 @@
 mod aggregator;
+mod config;
 mod models;
 mod parser;
 mod routes;

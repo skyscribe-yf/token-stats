@@ -1,0 +1,12 @@
+# Vendor merge configuration
+# Providers listed under a group will be merged into the group's name.
+# This is useful when the same vendor appears under different provider names
+# across data sources (e.g. "kimi" from Kimi CLI vs "kimi-coding" from ccswitch).
+
+[[vendor_group]]
+name = "kimi"
+providers = ["kimi", "kimi-coding"]
+
+[[vendor_group]]
+name = "ainaba"
+providers = ["openai", "ainaiba"]
