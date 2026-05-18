@@ -1,18 +1,53 @@
 use crate::models::*;
-use crate::routes::TimeBound;
+use crate::time::TimeBound;
 use chrono::{FixedOffset, Utc};
 use std::collections::{HashMap, HashSet};
 
-/// Get the local date string for a record, given an optional timezone offset
+// ── Shared accumulation helper ───────────────────────────────────────────────
+
+/// Token-usage accumulator shared by all dimension-level `compute_*` functions.
+#[derive(Default)]
+struct StatAccum {
+    calls: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
+    total_tokens: i64,
+    cost: f64,
+}
+
+impl StatAccum {
+    fn accumulate(&mut self, r: &TokenRecord) {
+        self.calls += 1;
+        self.input_tokens += r.input_tokens;
+        self.output_tokens += r.output_tokens;
+        self.cache_read_tokens += r.cache_read_tokens;
+        self.cache_write_tokens += r.cache_write_tokens;
+        self.total_tokens += r.total_tokens;
+        self.cost += r.cost;
+    }
+
+    fn cache_hit_ratio(&self) -> f64 {
+        let denom = self.input_tokens + self.cache_read_tokens;
+        if denom > 0 {
+            self.cache_read_tokens as f64 / denom as f64 * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Get the local date string for a record, given an optional timezone offset.
 fn local_date_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> String {
     if let Some(tz) = tz {
-        // Convert UTC time to local timezone and extract the date
         if let Some(utc_dt) = record.parsed_time() {
             let local_dt = utc_dt.with_timezone(tz);
             return local_dt.format("%Y-%m-%d").to_string();
         }
     }
-    // Fallback: use the record's own date field (UTC-based)
     record.date.clone()
 }
 
@@ -149,8 +184,11 @@ pub fn paginate_requests(
     tz: Option<&FixedOffset>,
 ) -> PaginatedRequests {
     let total = records.len();
+    // Guard: avoid divide-by-zero and negative start index
+    let page = page.max(1);
+    let limit = limit.max(1);
     let total_pages = total.div_ceil(limit);
-    let start = (page - 1) * limit;
+    let start = ((page - 1) * limit).min(total);
     let end = (start + limit).min(total);
 
     let data: Vec<DetailedRequest> = records[start..end]
@@ -183,24 +221,14 @@ pub fn paginate_requests(
     }
 }
 
+// ── Aggregation functions ───────────────────────────────────────────────────
+
 fn compute_overall_stats(records: &[&TokenRecord]) -> AggregatedStats {
-    let mut total_calls = 0i64;
-    let mut total_input = 0i64;
-    let mut total_output = 0i64;
-    let mut total_cache_read = 0i64;
-    let mut total_cache_write = 0i64;
-    let mut total_tokens = 0i64;
-    let mut total_cost = 0.0;
+    let mut acc = StatAccum::default();
     let mut total_cache_hit_ratio = 0.0;
 
     for r in records {
-        total_calls += 1;
-        total_input += r.input_tokens;
-        total_output += r.output_tokens;
-        total_cache_read += r.cache_read_tokens;
-        total_cache_write += r.cache_write_tokens;
-        total_tokens += r.total_tokens;
-        total_cost += r.cost;
+        acc.accumulate(r);
         total_cache_hit_ratio += r.cache_hit_ratio();
     }
 
@@ -210,97 +238,67 @@ fn compute_overall_stats(records: &[&TokenRecord]) -> AggregatedStats {
         0.0
     };
 
-    let weighted_cache_hit_ratio = if total_input + total_cache_read > 0 {
-        total_cache_read as f64 / (total_input + total_cache_read) as f64 * 100.0
-    } else {
-        0.0
-    };
-
     AggregatedStats {
-        total_calls,
-        total_input_tokens: total_input,
-        total_output_tokens: total_output,
-        total_cache_read_tokens: total_cache_read,
-        total_cache_write_tokens: total_cache_write,
-        total_tokens,
-        total_cost,
+        total_calls: acc.calls,
+        total_input_tokens: acc.input_tokens,
+        total_output_tokens: acc.output_tokens,
+        total_cache_read_tokens: acc.cache_read_tokens,
+        total_cache_write_tokens: acc.cache_write_tokens,
+        total_tokens: acc.total_tokens,
+        total_cost: acc.cost,
         avg_cache_hit_ratio,
-        weighted_cache_hit_ratio,
+        weighted_cache_hit_ratio: acc.cache_hit_ratio(),
     }
 }
 
 fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
-    let mut map: HashMap<String, VendorStats> = HashMap::new();
+    let mut map: HashMap<String, StatAccum> = HashMap::new();
 
     for r in records {
-        let entry = map
-            .entry(r.provider.clone())
-            .or_insert_with(|| VendorStats {
-                provider: r.provider.clone(),
-                calls: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                total_tokens: 0,
-                cost: 0.0,
-                cache_hit_ratio: 0.0,
-            });
-
-        entry.calls += 1;
-        entry.input_tokens += r.input_tokens;
-        entry.output_tokens += r.output_tokens;
-        entry.cache_read_tokens += r.cache_read_tokens;
-        entry.cache_write_tokens += r.cache_write_tokens;
-        entry.total_tokens += r.total_tokens;
-        entry.cost += r.cost;
+        map.entry(r.provider.clone()).or_default().accumulate(r);
     }
 
-    let mut result: Vec<VendorStats> = map.into_values().collect();
-    for v in &mut result {
-        let total_input = v.input_tokens + v.cache_read_tokens;
-        if total_input > 0 {
-            v.cache_hit_ratio = v.cache_read_tokens as f64 / total_input as f64 * 100.0;
-        }
-    }
+    let mut result: Vec<VendorStats> = map
+        .into_iter()
+        .map(|(provider, acc)| VendorStats {
+            provider,
+            calls: acc.calls,
+            input_tokens: acc.input_tokens,
+            output_tokens: acc.output_tokens,
+            cache_read_tokens: acc.cache_read_tokens,
+            cache_write_tokens: acc.cache_write_tokens,
+            total_tokens: acc.total_tokens,
+            cost: acc.cost,
+            cache_hit_ratio: acc.cache_hit_ratio(),
+        })
+        .collect();
 
     result.sort_by_key(|v| std::cmp::Reverse(v.total_tokens));
     result
 }
 
 fn compute_date_stats(records: &[&TokenRecord], tz: Option<&FixedOffset>) -> Vec<DateStats> {
-    let mut map: HashMap<String, DateStats> = HashMap::new();
+    let mut map: HashMap<String, StatAccum> = HashMap::new();
 
     for r in records {
         let local_date = local_date_for_record(r, tz);
-        let entry = map.entry(local_date.clone()).or_insert_with(|| DateStats {
-            date: local_date,
-            calls: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: 0,
-            cost: 0.0,
-            cache_hit_ratio: 0.0,
-        });
-
-        entry.calls += 1;
-        entry.input_tokens += r.input_tokens;
-        entry.output_tokens += r.output_tokens;
-        entry.cache_read_tokens += r.cache_read_tokens;
-        entry.cache_write_tokens += r.cache_write_tokens;
-        entry.total_tokens += r.total_tokens;
-        entry.cost += r.cost;
+        map.entry(local_date.clone()).or_default().accumulate(r);
     }
 
-    let mut result: Vec<DateStats> = map.into_values().collect();
-    for d in &mut result {
-        let total_input = d.input_tokens + d.cache_read_tokens;
-        if total_input > 0 {
-            d.cache_hit_ratio = d.cache_read_tokens as f64 / total_input as f64 * 100.0;
-        }
-    }
+    let mut result: Vec<DateStats> = map
+        .into_iter()
+        .map(|(date, acc)| DateStats {
+            date,
+            calls: acc.calls,
+            input_tokens: acc.input_tokens,
+            output_tokens: acc.output_tokens,
+            cache_read_tokens: acc.cache_read_tokens,
+            cache_write_tokens: acc.cache_write_tokens,
+            total_tokens: acc.total_tokens,
+            cost: acc.cost,
+            cache_hit_ratio: acc.cache_hit_ratio(),
+        })
+        .collect();
 
     result.sort_by(|a, b| a.date.cmp(&b.date));
     result
@@ -308,7 +306,7 @@ fn compute_date_stats(records: &[&TokenRecord], tz: Option<&FixedOffset>) -> Vec
 
 fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
     struct Agg {
-        stats: ModelStats,
+        accum: StatAccum,
         source_set: HashSet<String>,
     }
 
@@ -317,85 +315,59 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
     for r in records {
         let key = (r.provider.clone(), r.model.clone());
         let agg = map.entry(key).or_insert_with(|| Agg {
-            stats: ModelStats {
-                model: r.model.clone(),
-                provider: r.provider.clone(),
-                sources: Vec::new(),
-                calls: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                total_tokens: 0,
-                cost: 0.0,
-                cache_hit_ratio: 0.0,
-            },
+            accum: StatAccum::default(),
             source_set: HashSet::new(),
         });
-
-        agg.stats.calls += 1;
-        agg.stats.input_tokens += r.input_tokens;
-        agg.stats.output_tokens += r.output_tokens;
-        agg.stats.cache_read_tokens += r.cache_read_tokens;
-        agg.stats.cache_write_tokens += r.cache_write_tokens;
-        agg.stats.total_tokens += r.total_tokens;
-        agg.stats.cost += r.cost;
+        agg.accum.accumulate(r);
         agg.source_set.insert(r.source.clone());
     }
 
     let mut result: Vec<ModelStats> = map
-        .into_values()
-        .map(|mut agg| {
+        .into_iter()
+        .map(|((provider, model), agg)| {
             let mut sources: Vec<String> = agg.source_set.into_iter().collect();
             sources.sort();
-            agg.stats.sources = sources;
-            agg.stats
+            ModelStats {
+                model,
+                provider,
+                sources,
+                calls: agg.accum.calls,
+                input_tokens: agg.accum.input_tokens,
+                output_tokens: agg.accum.output_tokens,
+                cache_read_tokens: agg.accum.cache_read_tokens,
+                cache_write_tokens: agg.accum.cache_write_tokens,
+                total_tokens: agg.accum.total_tokens,
+                cost: agg.accum.cost,
+                cache_hit_ratio: agg.accum.cache_hit_ratio(),
+            }
         })
         .collect();
-
-    for m in &mut result {
-        let total_input = m.input_tokens + m.cache_read_tokens;
-        if total_input > 0 {
-            m.cache_hit_ratio = m.cache_read_tokens as f64 / total_input as f64 * 100.0;
-        }
-    }
 
     result.sort_by_key(|m| std::cmp::Reverse(m.total_tokens));
     result
 }
 
 fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
-    let mut map: HashMap<String, SourceStats> = HashMap::new();
+    let mut map: HashMap<String, StatAccum> = HashMap::new();
 
     for r in records {
-        let entry = map.entry(r.source.clone()).or_insert_with(|| SourceStats {
-            source: r.source.clone(),
-            calls: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            total_tokens: 0,
-            cost: 0.0,
-            cache_hit_ratio: 0.0,
-        });
-
-        entry.calls += 1;
-        entry.input_tokens += r.input_tokens;
-        entry.output_tokens += r.output_tokens;
-        entry.cache_read_tokens += r.cache_read_tokens;
-        entry.cache_write_tokens += r.cache_write_tokens;
-        entry.total_tokens += r.total_tokens;
-        entry.cost += r.cost;
+        map.entry(r.source.clone()).or_default().accumulate(r);
     }
 
-    let mut result: Vec<SourceStats> = map.into_values().collect();
-    for s in &mut result {
-        let total_input = s.input_tokens + s.cache_read_tokens;
-        if total_input > 0 {
-            s.cache_hit_ratio = s.cache_read_tokens as f64 / total_input as f64 * 100.0;
-        }
-    }
+    let mut result: Vec<SourceStats> = map
+        .into_iter()
+        .map(|(source, acc)| SourceStats {
+            source,
+            calls: acc.calls,
+            input_tokens: acc.input_tokens,
+            output_tokens: acc.output_tokens,
+            cache_read_tokens: acc.cache_read_tokens,
+            cache_write_tokens: acc.cache_write_tokens,
+            total_tokens: acc.total_tokens,
+            cost: acc.cost,
+            cache_hit_ratio: acc.cache_hit_ratio(),
+        })
+        .collect();
 
     result.sort_by_key(|s| std::cmp::Reverse(s.total_tokens));
     result

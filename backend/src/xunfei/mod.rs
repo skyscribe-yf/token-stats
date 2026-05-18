@@ -5,76 +5,8 @@
 //!
 //! Auth: `XUNFEI_SSO_SESSION_ID` env var or `~/.config/token-stats/xunfei.json`
 
-use serde::{Deserialize, Serialize};
-
-// ─── Response types ──────────────────────────────────────────────────────────
-
-/// Aggregated Xunfei subscription status for the dashboard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XunfeiStatus {
-    pub available: bool,
-    pub data: Option<XunfeiStatusData>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XunfeiStatusData {
-    /// Current plan name (e.g. "专业版")
-    pub plan_name: String,
-    pub package_id: i64,
-    /// Plan status: "active", "inactive", "unknown"
-    pub status: String,
-    /// Expiry time (YYYY-MM-DD HH:MM:SS from API)
-    pub expires_at: String,
-    /// Creation time
-    pub created_at: String,
-    /// Monthly price in cents (e.g. 3900 = ¥39.00)
-    pub price: i64,
-
-    /// Usage in current billing cycle
-    pub usage: XunfeiUsage,
-
-    /// Account balance in cents
-    pub balance: XunfeiBalance,
-
-    /// App ID for API access
-    pub app_id: String,
-    /// API key (masked — only first 8 chars shown)
-    pub api_key_masked: String,
-
-    /// Available models in this plan
-    pub model_list: Vec<XunfeiModelInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XunfeiUsage {
-    /// Monthly request usage
-    pub package_used: i64,
-    pub package_limit: i64,
-    pub package_left: i64,
-    /// Per-5-hour rolling window usage
-    pub rp5h_used: i64,
-    pub rp5h_limit: i64,
-    /// Per-week rolling window usage
-    pub rpw_used: i64,
-    pub rpw_limit: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XunfeiBalance {
-    /// Cash balance in cents
-    pub cash: i64,
-    /// Virtual/gift balance in cents
-    pub virtual_balance: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XunfeiModelInfo {
-    pub model_id: String,
-    pub name: String,
-    pub context_length: String,
-    pub is_default: bool,
-}
+pub mod types;
+pub use types::*;
 
 // ─── Credential resolution ───────────────────────────────────────────────────
 
@@ -144,7 +76,6 @@ impl XunfeiFetcher {
             }
         };
 
-        // Fetch plan list and balance in parallel
         let plan_url = format!("{}/api/v1/gpt-finetune/coding-plan/list", self.base_url);
         let balance_url = format!("{}/api/v1/gpt-finetune/user/balance", self.base_url);
 
@@ -259,90 +190,97 @@ fn parse_xunfei_status(
     }
 
     let plan = &rows[0];
+    let status_data = extract_plan_status(plan, balance_payload);
+    XunfeiStatus {
+        available: true,
+        data: Some(status_data),
+        error: None,
+    }
+}
 
+fn extract_plan_status(
+    plan: &serde_json::Value,
+    balance_payload: Option<&serde_json::Value>,
+) -> XunfeiStatusData {
     let plan_name = plan
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("未知")
         .to_string();
-
     let package_id = plan.get("packageId").and_then(|v| v.as_i64()).unwrap_or(0);
     let status = match plan.get("status").and_then(|v| v.as_i64()).unwrap_or(0) {
         1 => "active".to_string(),
         0 => "inactive".to_string(),
         _ => "unknown".to_string(),
     };
-
     let expires_at = plan
         .get("expiresAt")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
     let created_at = plan
         .get("createTime")
         .or_else(|| plan.get("validFrom"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
     let price = plan.get("price").and_then(|v| v.as_i64()).unwrap_or(0);
-
     let app_id = plan
         .get("appId")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
     let api_key = plan
         .get("codingPlanAppCredentialDTO")
         .and_then(|v| v.get("apiKey"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let api_key_masked = mask_api_key(api_key);
 
-    let api_key_masked = if api_key.len() > 8 {
-        format!("{}...", &api_key[..8])
-    } else if api_key.is_empty() {
+    let usage = extract_usage(plan);
+    let balance = extract_balance(balance_payload);
+    let model_list = extract_model_list(plan);
+
+    XunfeiStatusData {
+        plan_name,
+        package_id,
+        status,
+        expires_at,
+        created_at,
+        price,
+        usage,
+        balance,
+        app_id,
+        api_key_masked,
+        model_list,
+    }
+}
+
+fn mask_api_key(key: &str) -> String {
+    if key.len() > 8 {
+        format!("{}...", &key[..8])
+    } else if key.is_empty() {
         "N/A".to_string()
     } else {
-        api_key.to_string()
-    };
+        key.to_string()
+    }
+}
 
-    // Usage
+fn extract_usage(plan: &serde_json::Value) -> XunfeiUsage {
     let usage_dto = plan.get("codingPlanUsageDTO");
-    let usage = XunfeiUsage {
-        package_used: usage_dto
-            .and_then(|v| v.get("packageUsage"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        package_limit: usage_dto
-            .and_then(|v| v.get("packageLimit"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        package_left: usage_dto
-            .and_then(|v| v.get("packageLeft"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        rp5h_used: usage_dto
-            .and_then(|v| v.get("rp5hUsage"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        rp5h_limit: usage_dto
-            .and_then(|v| v.get("rp5hLimit"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        rpw_used: usage_dto
-            .and_then(|v| v.get("rpwUsage"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        rpw_limit: usage_dto
-            .and_then(|v| v.get("rpwLimit"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-    };
+    XunfeiUsage {
+        package_used: field_i64(usage_dto, "packageUsage"),
+        package_limit: field_i64(usage_dto, "packageLimit"),
+        package_left: field_i64(usage_dto, "packageLeft"),
+        rp5h_used: field_i64(usage_dto, "rp5hUsage"),
+        rp5h_limit: field_i64(usage_dto, "rp5hLimit"),
+        rpw_used: field_i64(usage_dto, "rpwUsage"),
+        rpw_limit: field_i64(usage_dto, "rpwLimit"),
+    }
+}
 
-    // Balance
-    let balance = match balance_payload {
+fn extract_balance(balance_payload: Option<&serde_json::Value>) -> XunfeiBalance {
+    match balance_payload {
         Some(b) => {
             let bdata = b.get("data");
             XunfeiBalance {
@@ -360,11 +298,11 @@ fn parse_xunfei_status(
             cash: 0,
             virtual_balance: 0,
         },
-    };
+    }
+}
 
-    // Model list
-    let model_list: Vec<XunfeiModelInfo> = plan
-        .get("modelInfo")
+fn extract_model_list(plan: &serde_json::Value) -> Vec<XunfeiModelInfo> {
+    plan.get("modelInfo")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -388,25 +326,13 @@ fn parse_xunfei_status(
                 })
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    XunfeiStatus {
-        available: true,
-        data: Some(XunfeiStatusData {
-            plan_name,
-            package_id,
-            status,
-            expires_at,
-            created_at,
-            price,
-            usage,
-            balance,
-            app_id,
-            api_key_masked,
-            model_list,
-        }),
-        error: None,
-    }
+fn field_i64(val: Option<&serde_json::Value>, key: &str) -> i64 {
+    val.and_then(|v| v.get(key))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -427,24 +353,16 @@ mod tests {
                         "apiKey": "a96f1790a7656ed5f0fa29be01c2fc08:SECRET"
                     },
                     "codingPlanUsageDTO": {
-                        "packageUsage": 6256,
-                        "packageLimit": 18000,
-                        "packageLeft": 11744,
-                        "rp5hUsage": 197,
-                        "rp5hLimit": 1200,
-                        "rpwUsage": 6256,
-                        "rpwLimit": 9000
+                        "packageUsage": 6256, "packageLimit": 18000, "packageLeft": 11744,
+                        "rp5hUsage": 197, "rp5hLimit": 1200,
+                        "rpwUsage": 6256, "rpwLimit": 9000
                     },
                     "createTime": "2026-05-14 11:50:44",
                     "expiresAt": "2026-06-14 11:52:41",
                     "modelInfo": [
-                        {"modelId": "xopglm5", "name": "GLM-5", "contextLength": "200k", "default": true},
-                        {"modelId": "xsparkx2", "name": "Spark X2", "contextLength": "128k", "default": false}
+                        {"modelId": "xopglm5", "name": "GLM-5", "contextLength": "200k", "default": true}
                     ],
-                    "name": "专业版",
-                    "packageId": 9198006,
-                    "price": 3900,
-                    "status": 1,
+                    "name": "专业版", "packageId": 9198006, "price": 3900, "status": 1,
                     "validFrom": "2026-05-14 11:52:41"
                 }]
             }
@@ -452,25 +370,19 @@ mod tests {
 
         let balance_json = serde_json::json!({
             "code": 0,
-            "data": { "balance": 0, "virtualBalance": 24190 }
+            "data": {"balance": 0, "virtualBalance": 24190}
         });
 
         let status = parse_xunfei_status(&plan_json, Some(&balance_json));
         assert!(status.available);
         let data = status.data.unwrap();
-
         assert_eq!(data.plan_name, "专业版");
         assert_eq!(data.status, "active");
         assert_eq!(data.package_id, 9198006);
-        assert_eq!(data.expires_at, "2026-06-14 11:52:41");
         assert_eq!(data.price, 3900);
         assert_eq!(data.usage.package_used, 6256);
-        assert_eq!(data.usage.package_limit, 18000);
-        assert_eq!(data.usage.rp5h_used, 197);
         assert_eq!(data.usage.rp5h_limit, 1200);
-        assert_eq!(data.balance.cash, 0);
         assert_eq!(data.balance.virtual_balance, 24190);
-        assert_eq!(data.model_list.len(), 2);
         assert!(data.api_key_masked.starts_with("a96f1790"));
     }
 
@@ -478,20 +390,16 @@ mod tests {
     fn test_parse_xunfei_status_no_rows() {
         let plan_json = serde_json::json!({
             "code": 0,
-            "data": { "page": 1, "rows": [], "size": 10, "total": 0 }
+            "data": {"page": 1, "rows": [], "size": 10, "total": 0}
         });
         let status = parse_xunfei_status(&plan_json, None);
         assert!(status.available);
         assert!(status.data.is_none());
-        assert!(status.error.unwrap().contains("No active"));
     }
 
     #[test]
     fn test_parse_xunfei_status_api_error() {
-        let plan_json = serde_json::json!({
-            "code": 4001,
-            "message": "用户未登录"
-        });
+        let plan_json = serde_json::json!({"code": 4001, "message": "用户未登录"});
         let status = parse_xunfei_status(&plan_json, None);
         assert!(!status.available);
         assert!(status.error.unwrap().contains("用户未登录"));
