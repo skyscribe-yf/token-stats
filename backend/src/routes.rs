@@ -1,20 +1,18 @@
 use crate::aggregator;
+use crate::app::AppState;
 use crate::models::*;
 use crate::quota::{QuotaFetcher, QuotaResponse};
+use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
 use axum::{
     extract::{Query, State},
     response::IntoResponse,
     Json,
 };
-use chrono::{FixedOffset, NaiveDate};
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
-pub struct AppState {
-    pub records: RwLock<Vec<TokenRecord>>,
-}
+// ─── Query parameter types ───────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct StatsQuery {
@@ -23,7 +21,6 @@ pub struct StatsQuery {
     pub source: Option<String>,
     pub provider: Option<String>,
     /// Timezone offset in minutes from UTC (e.g. 480 for UTC+8, -300 for UTC-5)
-    /// Used to compute local dates for by_date aggregation
     pub tz_offset: Option<i32>,
 }
 
@@ -34,7 +31,6 @@ pub struct RequestsQuery {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub source: Option<String>,
-    /// Timezone offset in minutes from UTC
     pub tz_offset: Option<i32>,
     #[serde(default = "default_page")]
     pub page: usize,
@@ -50,33 +46,17 @@ fn default_limit() -> usize {
     50
 }
 
-#[derive(Debug, Clone)]
-pub enum TimeBound {
-    DateTime(chrono::NaiveDateTime),
-    Date(NaiveDate),
+const MAX_LIMIT: usize = 1000;
+const MIN_PAGE: usize = 1;
+
+/// Clamp pagination parameters to safe ranges.
+fn validate_pagination(page: usize, limit: usize) -> (usize, usize) {
+    let page = page.max(MIN_PAGE);
+    let limit = limit.clamp(1, MAX_LIMIT);
+    (page, limit)
 }
 
-pub fn parse_time_bound(s: &str) -> Option<TimeBound> {
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Some(TimeBound::DateTime(dt));
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Some(TimeBound::DateTime(dt));
-    }
-    // Support datetime-local input format without seconds (HTML default)
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M") {
-        return Some(TimeBound::DateTime(dt));
-    }
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Some(TimeBound::Date(d));
-    }
-    None
-}
-
-/// Convert a tz_offset in minutes to a chrono FixedOffset
-fn tz_offset_to_fixed(offset_minutes: i32) -> FixedOffset {
-    FixedOffset::east_opt(offset_minutes * 60).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
-}
+// ─── Route handlers ──────────────────────────────────────────────────────────
 
 pub async fn get_stats(
     State(state): State<Arc<AppState>>,
@@ -121,7 +101,8 @@ pub async fn get_requests(
         source,
         tz.as_ref(),
     );
-    let paginated = aggregator::paginate_requests(filtered, query.page, query.limit, tz.as_ref());
+    let (page, limit) = validate_pagination(query.page, query.limit);
+    let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref());
 
     Json(paginated)
 }
@@ -152,7 +133,7 @@ pub async fn get_quota() -> impl IntoResponse {
     let fetcher = QuotaFetcher::new();
 
     let (kimi_result, opencode_result) =
-        tokio::join!(fetcher.fetch_kimi_quota(), fetcher.fetch_opencode_quota(),);
+        tokio::join!(fetcher.fetch_kimi_quota(), fetcher.fetch_opencode_quota());
 
     let response = QuotaResponse {
         kimi: Some(kimi_result),
