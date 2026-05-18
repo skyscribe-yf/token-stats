@@ -65,11 +65,9 @@ impl OpenCodeSource {
 
         match rows {
             Ok(r) => {
-                for item in r {
-                    if let Ok(data) = item {
-                        if let Some(record) = Self::parse_message(&data) {
-                            records.push(record);
-                        }
+                for data in r.flatten() {
+                    if let Some(record) = Self::parse_message(&data) {
+                        records.push(record);
                     }
                 }
             }
@@ -94,7 +92,10 @@ impl OpenCodeSource {
 
         let input_tokens = tokens.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
         let output_tokens = tokens.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
-        let reasoning_tokens = tokens.get("reasoning").and_then(|v| v.as_i64()).unwrap_or(0);
+        let reasoning_tokens = tokens
+            .get("reasoning")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         let cache = tokens.get("cache");
         let cache_read_tokens = cache
             .and_then(|c| c.get("read"))
@@ -144,7 +145,11 @@ impl OpenCodeSource {
         let ts_ms = time_obj
             .and_then(|t| t.get("completed"))
             .and_then(|v| v.as_i64())
-            .or_else(|| time_obj.and_then(|t| t.get("created")).and_then(|v| v.as_i64()))
+            .or_else(|| {
+                time_obj
+                    .and_then(|t| t.get("created"))
+                    .and_then(|v| v.as_i64())
+            })
             .unwrap_or(0);
 
         let (date, time) = if ts_ms > 0 {

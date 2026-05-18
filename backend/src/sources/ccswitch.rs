@@ -52,15 +52,14 @@ impl CcSwitchSource {
         // Build provider_id → name mapping
         let mut provider_names: HashMap<String, String> = HashMap::new();
         {
-            let mut stmt = match conn.prepare(
-                "SELECT id, name FROM providers WHERE app_type = 'claude'",
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("Failed to query providers: {}", e);
-                    return Vec::new();
-                }
-            };
+            let mut stmt =
+                match conn.prepare("SELECT id, name FROM providers WHERE app_type = 'claude'") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("Failed to query providers: {}", e);
+                        return Vec::new();
+                    }
+                };
             let rows = stmt.query_map([], |row| {
                 let id: String = row.get(0)?;
                 let name: String = row.get(1)?;
@@ -68,10 +67,8 @@ impl CcSwitchSource {
             });
             match rows {
                 Ok(r) => {
-                    for item in r {
-                        if let Ok((id, name)) = item {
-                            provider_names.insert(id, name);
-                        }
+                    for (id, name) in r.flatten() {
+                        provider_names.insert(id, name);
                     }
                 }
                 Err(e) => tracing::warn!("Failed to iterate providers: {}", e),
@@ -123,32 +120,30 @@ impl CcSwitchSource {
 
         match rows {
             Ok(r) => {
-                for item in r {
-                    if let Ok((
-                        _request_id,
-                        provider_id,
-                        model,
-                        request_model,
-                        input_tokens,
-                        output_tokens,
-                        cache_read_tokens,
-                        cache_creation_tokens,
-                        total_cost_usd,
-                        created_at,
-                        data_source,
-                        _session_id,
-                    )) = item
-                    {
-                        let source = match data_source.as_str() {
-                            "session_log" => "claude-code",
-                            "codex_session" => "codex",
-                            other => other,
-                        }
-                        .to_string();
+                for (
+                    _request_id,
+                    provider_id,
+                    model,
+                    request_model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    total_cost_usd,
+                    created_at,
+                    data_source,
+                    _session_id,
+                ) in r.flatten()
+                {
+                    let source = match data_source.as_str() {
+                        "session_log" => "claude-code",
+                        "codex_session" => "codex",
+                        other => other,
+                    }
+                    .to_string();
 
-                        let provider = if provider_id.starts_with("_session")
-                            || provider_id == "_codex_session"
-                        {
+                    let provider =
+                        if provider_id.starts_with("_session") || provider_id == "_codex_session" {
                             super::resolve_provider_from_model(&model)
                         } else {
                             provider_names
@@ -157,43 +152,40 @@ impl CcSwitchSource {
                                 .unwrap_or(provider_id)
                         };
 
-                        let dt = Utc.timestamp_opt(created_at, 0).single();
-                        let (date, time) = match dt {
-                            Some(dt) => {
-                                (dt.format("%Y-%m-%d").to_string(), dt.to_rfc3339())
-                            }
-                            None => ("unknown".to_string(), "unknown".to_string()),
-                        };
+                    let dt = Utc.timestamp_opt(created_at, 0).single();
+                    let (date, time) = match dt {
+                        Some(dt) => (dt.format("%Y-%m-%d").to_string(), dt.to_rfc3339()),
+                        None => ("unknown".to_string(), "unknown".to_string()),
+                    };
 
-                        // Normalize cache semantics
-                        let (effective_input, effective_cache_read) =
-                            if data_source == "codex_session" {
-                                let non_cached = (input_tokens - cache_read_tokens).max(0);
-                                (non_cached, cache_read_tokens)
-                            } else {
-                                (input_tokens, cache_read_tokens)
-                            };
+                    // Normalize cache semantics
+                    let (effective_input, effective_cache_read) = if data_source == "codex_session"
+                    {
+                        let non_cached = (input_tokens - cache_read_tokens).max(0);
+                        (non_cached, cache_read_tokens)
+                    } else {
+                        (input_tokens, cache_read_tokens)
+                    };
 
-                        let cost: f64 = total_cost_usd.parse().unwrap_or(0.0);
+                    let cost: f64 = total_cost_usd.parse().unwrap_or(0.0);
 
-                        records.push(TokenRecord {
-                            date,
-                            time,
-                            api_key_prefix: "N/A".to_string(),
-                            provider,
-                            model: request_model,
-                            source,
-                            input_tokens: effective_input,
-                            output_tokens,
-                            cache_read_tokens: effective_cache_read,
-                            cache_write_tokens: cache_creation_tokens,
-                            total_tokens: effective_input
-                                + output_tokens
-                                + effective_cache_read
-                                + cache_creation_tokens,
-                            cost,
-                        });
-                    }
+                    records.push(TokenRecord {
+                        date,
+                        time,
+                        api_key_prefix: "N/A".to_string(),
+                        provider,
+                        model: request_model,
+                        source,
+                        input_tokens: effective_input,
+                        output_tokens,
+                        cache_read_tokens: effective_cache_read,
+                        cache_write_tokens: cache_creation_tokens,
+                        total_tokens: effective_input
+                            + output_tokens
+                            + effective_cache_read
+                            + cache_creation_tokens,
+                        cost,
+                    });
                 }
             }
             Err(e) => tracing::warn!("Failed to iterate request logs: {}", e),

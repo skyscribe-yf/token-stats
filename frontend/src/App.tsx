@@ -228,8 +228,8 @@ function emptyRequests(page: number): PaginatedRequests {
 }
 
 export default function App() {
-  const [activePreset, setActivePreset] = useState<TimePreset>("7d");
-  const [appliedRange, setAppliedRange] = useState<AppliedRange>(() => makeAppliedRange("7d"));
+  const [activePreset, setActivePreset] = useState<TimePreset>("today");
+  const [appliedRange, setAppliedRange] = useState<AppliedRange>(() => makeAppliedRange("today"));
   const [customFrom, setCustomFrom] = useState<string>("");
   const [customTo, setCustomTo] = useState<string>("");
   const [showCustomPanel, setShowCustomPanel] = useState(false);
@@ -317,7 +317,6 @@ export default function App() {
         setSelectedVendors(new Set(f.vendors));
         filtersInitializedRef.current = true;
       }
-      setPage(1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载数据失败");
     } finally {
@@ -381,6 +380,15 @@ export default function App() {
       void loadRequests();
     });
   }, [loadRequests, effectiveRange.appliedAt]);
+
+  // Auto-refresh data every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadData();
+      void loadRequests();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadData, loadRequests]);
 
   useEffect(() => {
     const loadQuota = async () => {
@@ -489,6 +497,7 @@ export default function App() {
       setActivePreset("custom");
       setAppliedRange(makeCustomAppliedRange(customFrom, customTo));
       setShowCustomPanel(false);
+      setPage(1);
     }
   };
 
@@ -496,6 +505,7 @@ export default function App() {
     setActivePreset(key);
     setAppliedRange(makeAppliedRange(key));
     setShowCustomPanel(false);
+    setPage(1);
   };
 
   const quickSetCustom = (key: Exclude<TimePreset, "custom">) => {
