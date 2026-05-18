@@ -1,9 +1,9 @@
 mod aggregator;
 mod config;
 mod models;
-mod sources;
 mod quota;
 mod routes;
+mod sources;
 mod xunfei;
 
 use axum::{routing::get, Router};
@@ -20,8 +20,8 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
-use crate::sources::load_all_sources;
 use crate::routes::AppState;
+use crate::sources::load_all_sources;
 
 /// Token Stats Backend — AI token usage dashboard API.
 #[derive(Parser, Debug)]
@@ -43,8 +43,8 @@ async fn main() {
     //   - keeps at most 20 rotated files (Cleanup::KeepLogFiles)
     //   - bridges tracing events via flexi_logger::trc::setup_tracing
     //   - respects RUST_LOG env var (takes precedence via LogSpecification::env_or_parse)
-    let log_spec = LogSpecification::env_or_parse(&args.log_level)
-        .expect("Failed to parse log level");
+    let log_spec =
+        LogSpecification::env_or_parse(&args.log_level).expect("Failed to parse log level");
 
     let _log_handle = setup_tracing(
         log_spec,

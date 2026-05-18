@@ -4,24 +4,24 @@
 //! implements the `DataSource` trait. The `load_all_sources()` function
 //! orchestrates loading all configured sources and applies vendor merging.
 
-mod pi;
-mod codex;
+mod ccswitch;
 mod claude_code;
+mod codex;
 mod kimi_cli;
 mod opencode;
-mod ccswitch;
+mod pi;
 
 use crate::config;
 use crate::models::TokenRecord;
 use chrono::{DateTime, Utc};
 use std::path::Path;
 
-pub use pi::PiSource;
-pub use codex::CodexSource;
+pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
+pub use codex::CodexSource;
 pub use kimi_cli::KimiCliSource;
 pub use opencode::OpenCodeSource;
-pub use ccswitch::CcSwitchSource;
+pub use pi::PiSource;
 
 /// Trait for a data source that produces `TokenRecord` batches.
 pub trait DataSource: Send + Sync {
@@ -41,7 +41,10 @@ pub(crate) fn walkdir(path: &Path) -> Result<Vec<std::path::PathBuf>, std::io::E
     Ok(result)
 }
 
-fn walkdir_recursive(path: &Path, result: &mut Vec<std::path::PathBuf>) -> Result<(), std::io::Error> {
+fn walkdir_recursive(
+    path: &Path,
+    result: &mut Vec<std::path::PathBuf>,
+) -> Result<(), std::io::Error> {
     if path.is_dir() {
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
@@ -94,14 +97,14 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
 
     let sources: Vec<Box<dyn DataSource>> = {
         let mut v: Vec<Box<dyn DataSource>> = vec![
-            Box::new(PiSource::default()),
-            Box::new(CodexSource::default()),
-            Box::new(ClaudeCodeSource::default()),
-            Box::new(OpenCodeSource::default()),
-            Box::new(KimiCliSource::default()),
+            Box::new(PiSource),
+            Box::new(CodexSource),
+            Box::new(ClaudeCodeSource),
+            Box::new(OpenCodeSource),
+            Box::new(KimiCliSource),
         ];
         if std::env::var("USE_CC_SWITCH").is_ok() {
-            v.push(Box::new(CcSwitchSource::default()));
+            v.push(Box::new(CcSwitchSource));
         }
         v
     };

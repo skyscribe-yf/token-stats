@@ -354,9 +354,7 @@ pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String>
     let content = std::fs::read_to_string(&path).ok()?;
     let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
 
-    let refresh_token = creds
-        .get("refresh_token")
-        .and_then(|v| v.as_str())?;
+    let refresh_token = creds.get("refresh_token").and_then(|v| v.as_str())?;
     if refresh_token.is_empty() {
         return None;
     }
@@ -403,17 +401,16 @@ pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String>
 
             // Update the credentials file
             let mut new_creds = creds.clone();
-            new_creds["access_token"] = serde_json::Value::String(refresh_resp.access_token.clone());
+            new_creds["access_token"] =
+                serde_json::Value::String(refresh_resp.access_token.clone());
             new_creds["expires_at"] = serde_json::Value::Number(
-                serde_json::Number::from_f64(new_expires_at)
-                    .unwrap_or(serde_json::Number::from(0)),
+                serde_json::Number::from_f64(new_expires_at).unwrap_or(serde_json::Number::from(0)),
             );
             if let Some(new_refresh) = &refresh_resp.refresh_token {
                 new_creds["refresh_token"] = serde_json::Value::String(new_refresh.clone());
             }
             new_creds["expires_in"] = serde_json::Value::Number(
-                serde_json::Number::from_f64(expires_in)
-                    .unwrap_or(serde_json::Number::from(900)),
+                serde_json::Number::from_f64(expires_in).unwrap_or(serde_json::Number::from(900)),
             );
             if let Some(scope) = &refresh_resp.scope {
                 new_creds["scope"] = serde_json::Value::String(scope.clone());
@@ -426,13 +423,20 @@ pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String>
             if std::fs::write(&path, new_content).is_err() {
                 tracing::warn!("Failed to write refreshed token to credentials file");
             }
-            tracing::info!("Kimi Code token refreshed successfully, expires in {}s", expires_in as i64);
+            tracing::info!(
+                "Kimi Code token refreshed successfully, expires in {}s",
+                expires_in as i64
+            );
             Some(refresh_resp.access_token)
         }
         Ok(r) => {
             let status = r.status();
             let body = r.text().await.unwrap_or_default();
-            tracing::warn!("Kimi Code token refresh failed: {} {}", status, truncate_error_body(&body));
+            tracing::warn!(
+                "Kimi Code token refresh failed: {} {}",
+                status,
+                truncate_error_body(&body)
+            );
             None
         }
         Err(e) => {
@@ -444,8 +448,7 @@ pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String>
 
 /// Get the Kimi Auth API base URL for token refresh.
 pub fn get_kimi_auth_base_url() -> String {
-    std::env::var("KIMI_AUTH_BASE_URL")
-        .unwrap_or_else(|_| "https://auth.kimi.com".to_string())
+    std::env::var("KIMI_AUTH_BASE_URL").unwrap_or_else(|_| "https://auth.kimi.com".to_string())
 }
 
 /// Get the Kimi Code API base URL.
@@ -515,8 +518,7 @@ fn truncate_error_body(body: &str) -> String {
 
 /// Get the OpenCode base URL for API calls.
 pub fn get_opencode_base_url() -> String {
-    std::env::var("OPENCODE_BASE_URL")
-        .unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
+    std::env::var("OPENCODE_BASE_URL").unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
 }
 
 /// Get the OpenCode-go workspace URL from env var.
@@ -595,7 +597,11 @@ impl QuotaFetcher {
             return KimiQuotaStatus {
                 available: false,
                 data: None,
-                error: Some(format!("API returned {}: {}", status, truncate_error_body(&body))),
+                error: Some(format!(
+                    "API returned {}: {}",
+                    status,
+                    truncate_error_body(&body)
+                )),
             };
         }
 
@@ -632,14 +638,10 @@ impl QuotaFetcher {
         for limit in &body.limits {
             if let Some(detail) = &limit.detail {
                 let window_duration = limit.window.as_ref().and_then(|w| w.duration);
-                let time_unit = limit
-                    .window
-                    .as_ref()
-                    .and_then(|w| w.time_unit.as_deref());
+                let time_unit = limit.window.as_ref().and_then(|w| w.time_unit.as_deref());
 
                 // Identify the 5-hour rolling window
-                let is_5h = (window_duration == Some(5)
-                    && time_unit == Some("TIME_UNIT_HOUR"))
+                let is_5h = (window_duration == Some(5) && time_unit == Some("TIME_UNIT_HOUR"))
                     || (window_duration == Some(300) && time_unit == Some("TIME_UNIT_MINUTE"));
 
                 if is_5h {
@@ -661,11 +663,7 @@ impl QuotaFetcher {
             .as_ref()
             .map(|q| q.remaining as i64)
             .unwrap_or(0);
-        let parallel_limit = body
-            .parallel
-            .as_ref()
-            .map(|p| p.limit as i64)
-            .unwrap_or(0);
+        let parallel_limit = body.parallel.as_ref().map(|p| p.limit as i64).unwrap_or(0);
         let membership_level = body
             .user
             .as_ref()
@@ -755,10 +753,7 @@ impl QuotaFetcher {
                     return OpenCodeQuotaStatus {
                         available: false,
                         data: None,
-                        error: Some(format!(
-                            "Failed to parse subscription response: {}",
-                            e
-                        )),
+                        error: Some(format!("Failed to parse subscription response: {}", e)),
                     };
                 }
             },
@@ -788,7 +783,11 @@ impl QuotaFetcher {
                 return OpenCodeQuotaStatus {
                     available: false,
                     data: None,
-                    error: Some(format!("Subscription API returned {}: {}", status, truncate_error_body(&body))),
+                    error: Some(format!(
+                        "Subscription API returned {}: {}",
+                        status,
+                        truncate_error_body(&body)
+                    )),
                 };
             }
             Err(e) => {
@@ -903,10 +902,7 @@ mod tests {
     #[test]
     fn test_get_kimi_code_base_url_default() {
         temp_env::with_var("KIMI_CODE_BASE_URL", None::<&str>, || {
-            assert_eq!(
-                get_kimi_code_base_url(),
-                "https://api.kimi.com/coding/v1"
-            );
+            assert_eq!(get_kimi_code_base_url(), "https://api.kimi.com/coding/v1");
         });
     }
 
@@ -1056,6 +1052,7 @@ mod tests {
     // ── Integration: Kimi Code quota ────────────────────────────────────
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_kimi_quota_success() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
@@ -1128,6 +1125,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_kimi_quota_no_token() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
@@ -1146,6 +1144,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_kimi_quota_api_error() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
@@ -1192,6 +1191,7 @@ mod tests {
     // ── Integration: OpenCode-go quota ──────────────────────────────────
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_success() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
@@ -1236,6 +1236,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_404_with_workspace() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;
@@ -1271,6 +1272,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_no_api_key_with_workspace() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_key = std::env::var("OPENCODE_API_KEY").ok();
@@ -1296,6 +1298,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_no_api_key_no_workspace() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_key = std::env::var("OPENCODE_API_KEY").ok();
@@ -1318,6 +1321,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_usage_unavailable() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let mock_server = MockServer::start().await;

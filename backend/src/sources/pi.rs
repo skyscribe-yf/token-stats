@@ -24,7 +24,10 @@ impl DataSource for PiSource {
 
 impl PiSource {
     fn log_path() -> PathBuf {
-        super::home_dir().join(".pi").join("token-logs").join("usage.jsonl")
+        super::home_dir()
+            .join(".pi")
+            .join("token-logs")
+            .join("usage.jsonl")
     }
 
     fn parse(path: &std::path::Path) -> Vec<TokenRecord> {
@@ -36,17 +39,15 @@ impl PiSource {
         let reader = BufReader::new(file);
         let mut records = Vec::new();
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if line.trim().is_empty() {
-                    continue;
+        for line in reader.lines().map_while(Result::ok) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(mut record) = serde_json::from_str::<TokenRecord>(&line) {
+                if record.source.is_empty() {
+                    record.source = "pi".to_string();
                 }
-                if let Ok(mut record) = serde_json::from_str::<TokenRecord>(&line) {
-                    if record.source.is_empty() {
-                        record.source = "pi".to_string();
-                    }
-                    records.push(record);
-                }
+                records.push(record);
             }
         }
 

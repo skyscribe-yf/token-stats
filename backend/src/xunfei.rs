@@ -384,10 +384,7 @@ fn parse_xunfei_status(
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    is_default: m
-                        .get("default")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
+                    is_default: m.get("default").and_then(|v| v.as_bool()).unwrap_or(false),
                 })
                 .collect()
         })
