@@ -34,8 +34,7 @@ export interface DateStats {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
-  cache_hit_ratio_no_astron?: number;
-  cache_hit_ratio_no_xunfei?: number;
+  cache_hit_ratio_no_xunfei: number;
 }
 
 export interface ModelStats {

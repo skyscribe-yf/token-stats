@@ -278,13 +278,8 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
     result
 }
 
-/// Check if a model should be excluded from the "no-astron" cache hit ratio.
-/// Models containing "astron-code" have zero cache reads and skew the ratio.
-fn is_astron_model(model: &str) -> bool {
-    model.contains("astron-code")
-}
-
 /// Check if a provider is xunfei (has no cache mechanism).
+/// Xunfei uses astron-code models which have zero cache reads, skewing the ratio.
 fn is_xunfei_provider(provider: &str) -> bool {
     provider == "xunfei"
 }
@@ -342,13 +337,11 @@ fn compute_date_stats(
     tz: Option<&FixedOffset>,
     resolution: Resolution,
 ) -> Vec<DateStats> {
-    // We need separate accumulators for the "no-astron" and "no-xunfei" cache hit ratios
+    // Accumulator that excludes xunfei provider (which has no cache mechanism)
     #[derive(Default)]
     struct PeriodAccum {
         all: StatAccum,
-        no_astron: StatAccum,
         no_xunfei: StatAccum,
-        has_astron: bool,
         has_xunfei: bool,
     }
 
@@ -358,11 +351,6 @@ fn compute_date_stats(
         let key = period_key_for_record(r, tz, resolution);
         let acc = map.entry(key).or_default();
         acc.all.accumulate(r);
-        if is_astron_model(&r.model) {
-            acc.has_astron = true;
-        } else {
-            acc.no_astron.accumulate(r);
-        }
         if is_xunfei_provider(&r.provider) {
             acc.has_xunfei = true;
         } else {
@@ -373,16 +361,12 @@ fn compute_date_stats(
     let mut result: Vec<DateStats> = map
         .into_iter()
         .map(|(date, acc)| {
-            let cache_hit_ratio_no_astron = if acc.has_astron {
-                Some(acc.no_astron.cache_hit_ratio())
-            } else {
-                // No astron records in this period, no need for separate ratio
-                None
-            };
+            // Always return a value: when no xunfei data exists, the
+            // overall ratio is already xunfei-free, so use it directly.
             let cache_hit_ratio_no_xunfei = if acc.has_xunfei {
-                Some(acc.no_xunfei.cache_hit_ratio())
+                acc.no_xunfei.cache_hit_ratio()
             } else {
-                None
+                acc.all.cache_hit_ratio()
             };
             DateStats {
                 date,
@@ -394,7 +378,6 @@ fn compute_date_stats(
                 total_tokens: acc.all.total_tokens,
                 cost: acc.all.cost,
                 cache_hit_ratio: acc.all.cache_hit_ratio(),
-                cache_hit_ratio_no_astron,
                 cache_hit_ratio_no_xunfei,
             }
         })
