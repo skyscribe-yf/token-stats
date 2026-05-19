@@ -27,6 +27,8 @@ pub struct StatsQuery {
     pub provider: Option<String>,
     /// Timezone offset in minutes from UTC (e.g. 480 for UTC+8, -300 for UTC-5)
     pub tz_offset: Option<i32>,
+    /// Aggregation resolution: "day" (default), "4h", "1h"
+    pub resolution: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +75,11 @@ pub async fn get_stats(
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let provider = query.provider.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
+    let resolution = query
+        .resolution
+        .as_deref()
+        .and_then(Resolution::from_str)
+        .unwrap_or_default();
 
     let response = aggregator::aggregate_records(
         &records,
@@ -81,6 +88,7 @@ pub async fn get_stats(
         source,
         provider,
         tz.as_ref(),
+        resolution,
     );
     Json(response)
 }
