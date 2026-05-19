@@ -285,14 +285,20 @@ fn is_astron_model(model: &str) -> bool {
 }
 
 /// Compute the bucket key for a record based on the resolution.
-fn period_key_for_record(record: &TokenRecord, tz: Option<&FixedOffset>, resolution: Resolution) -> String {
+fn period_key_for_record(
+    record: &TokenRecord,
+    tz: Option<&FixedOffset>,
+    resolution: Resolution,
+) -> String {
     if resolution == Resolution::Day {
         return local_date_for_record(record, tz);
     }
 
     // For sub-day resolutions, we need the local datetime
     let local_dt = if let Some(tz) = tz {
-        record.parsed_time().map(|dt| dt.with_timezone(tz).naive_local())
+        record
+            .parsed_time()
+            .map(|dt| dt.with_timezone(tz).naive_local())
     } else {
         record.parsed_time().map(|dt| dt.naive_utc())
     };
@@ -317,7 +323,11 @@ fn period_key_for_record(record: &TokenRecord, tz: Option<&FixedOffset>, resolut
     }
 }
 
-fn compute_date_stats(records: &[&TokenRecord], tz: Option<&FixedOffset>, resolution: Resolution) -> Vec<DateStats> {
+fn compute_date_stats(
+    records: &[&TokenRecord],
+    tz: Option<&FixedOffset>,
+    resolution: Resolution,
+) -> Vec<DateStats> {
     // We need separate accumulators for the "no-astron" cache hit ratio
     #[derive(Default)]
     struct PeriodAccum {
@@ -479,7 +489,15 @@ mod tests {
             ),
         ];
 
-        let stats = aggregate_records(&records, None, None, Some("pi,codex"), Some("openai"), None, Resolution::Day);
+        let stats = aggregate_records(
+            &records,
+            None,
+            None,
+            Some("pi,codex"),
+            Some("openai"),
+            None,
+            Resolution::Day,
+        );
 
         assert_eq!(stats.overall.total_calls, 2);
         assert_eq!(stats.overall.total_tokens, 300);
