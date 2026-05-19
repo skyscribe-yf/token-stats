@@ -6,10 +6,15 @@ use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // ─── Query parameter types ───────────────────────────────────────────────────
@@ -143,8 +148,176 @@ pub async fn get_quota() -> impl IntoResponse {
     Json(response)
 }
 
+/// Export all records as downloadable JSONL.
+pub async fn export_data(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let guard = state.records.read().await;
+    let mut out = String::with_capacity(guard.len() * 256);
+    for r in guard.iter() {
+        if let Ok(line) = serde_json::to_string(r) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    (
+        [
+            ("Content-Type", "application/x-ndjson"),
+            (
+                "Content-Disposition",
+                "attachment; filename=token-stats-export.jsonl",
+            ),
+        ],
+        out,
+    )
+}
+
+pub async fn refresh_data(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let added = state.refresh_records().await;
+    let total = state.records.read().await.len();
+    Json(serde_json::json!({
+        "success": true,
+        "added": added,
+        "total": total,
+    }))
+}
+
 pub async fn get_xunfei() -> impl IntoResponse {
     let fetcher = XunfeiFetcher::new();
     let status = fetcher.fetch_status().await;
     Json(status)
+}
+
+// ─── Restore ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreBody {
+    /// Path to a single JSONL backup file (e.g. api_requests.jsonl or usage.jsonl).
+    pub backup_file: Option<String>,
+    /// Path to a backup directory containing usage.jsonl and/or api_requests.jsonl.
+    pub backup_dir: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RestoreResponse {
+    pub success: bool,
+    pub before_count: usize,
+    pub after_count: usize,
+    pub added: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+pub async fn restore_backup(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RestoreBody>,
+) -> Result<Json<RestoreResponse>, (StatusCode, String)> {
+    let mut guard = state.records.write().await;
+    let before_count = guard.len();
+
+    // Build dedup fingerprint set from existing records
+    let mut seen: HashSet<(String, String, String, String, i64, i64, i64)> =
+        HashSet::with_capacity(guard.len());
+    for r in guard.iter() {
+        seen.insert((
+            r.time.clone(),
+            r.provider.clone(),
+            r.model.clone(),
+            r.source.clone(),
+            r.input_tokens,
+            r.output_tokens,
+            r.cache_read_tokens,
+        ));
+    }
+
+    let mut added = 0usize;
+    let mut skipped = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    // Collect file paths to restore
+    let mut files: Vec<PathBuf> = Vec::new();
+
+    if let Some(ref dir) = body.backup_dir {
+        let dir = PathBuf::from(dir);
+        for name in &["api_requests.jsonl", "usage.jsonl"] {
+            let path = dir.join(name);
+            if path.exists() {
+                files.push(path);
+            }
+        }
+    }
+
+    if let Some(ref file) = body.backup_file {
+        files.push(PathBuf::from(file));
+    }
+
+    if files.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "No backup files found. Provide backup_file or backup_dir.".into(),
+        ));
+    }
+
+    for file_path in &files {
+        let file = match File::open(file_path) {
+            Ok(f) => f,
+            Err(e) => {
+                errors.push(format!("Cannot open {:?}: {}", file_path, e));
+                continue;
+            }
+        };
+
+        let reader = BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let record: TokenRecord = match serde_json::from_str(&line) {
+                Ok(r) => r,
+                Err(e) => {
+                    errors.push(format!(
+                        "Parse error in {:?}: {} — {}",
+                        file_path,
+                        e,
+                        line.chars().take(80).collect::<String>()
+                    ));
+                    continue;
+                }
+            };
+
+            let key = (
+                record.time.clone(),
+                record.provider.clone(),
+                record.model.clone(),
+                record.source.clone(),
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+            );
+
+            if seen.insert(key) {
+                guard.push(record);
+                added += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+    }
+
+    let after_count = guard.len();
+
+    tracing::info!(
+        "Restored from backup: {} added, {} skipped, {} errors",
+        added,
+        skipped,
+        errors.len()
+    );
+
+    Ok(Json(RestoreResponse {
+        success: errors.is_empty(),
+        before_count,
+        after_count,
+        added,
+        skipped,
+        errors,
+    }))
 }

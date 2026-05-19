@@ -5,7 +5,11 @@
 use crate::models::TokenRecord;
 use crate::routes;
 use crate::sources::load_all_sources;
-use axum::{routing::get, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,9 +33,69 @@ impl AppState {
         }
     }
 
+    /// Incrementally refresh records from all data sources.
+    ///
+    /// Returns the number of new records added.
+    pub async fn refresh_records(&self) -> usize {
+        let new_records = load_all_sources();
+        let mut guard = self.records.write().await;
+        // Build a fingerprint set of existing records to avoid duplicates.
+        // Fingerprint: (time, provider, model, source, input, output, cache_read)
+        // This is effectively unique for any real-world record.
+        let mut seen: HashSet<(
+            String, // time
+            String, // provider
+            String, // model
+            String, // source
+            i64,    // input_tokens
+            i64,    // output_tokens
+            i64,    // cache_read_tokens
+        )> = HashSet::with_capacity(guard.len());
+        for r in guard.iter() {
+            seen.insert((
+                r.time.clone(),
+                r.provider.clone(),
+                r.model.clone(),
+                r.source.clone(),
+                r.input_tokens,
+                r.output_tokens,
+                r.cache_read_tokens,
+            ));
+        }
+
+        let mut added = 0usize;
+        for r in new_records {
+            let key = (
+                r.time.clone(),
+                r.provider.clone(),
+                r.model.clone(),
+                r.source.clone(),
+                r.input_tokens,
+                r.output_tokens,
+                r.cache_read_tokens,
+            );
+            if seen.insert(key) {
+                guard.push(r);
+                added += 1;
+            }
+        }
+
+        if added > 0 {
+            tracing::info!("Refreshed data: {} records (+{} new)", guard.len(), added);
+        } else {
+            tracing::debug!("Refreshed data: {} records (unchanged)", guard.len());
+        }
+
+        added
+    }
+
     /// Spawn a background task that reloads data sources periodically.
+    ///
+    /// Uses **incremental** refresh: only adds new records, never removes
+    /// existing ones. This preserves historical data even when a source
+    /// directory (e.g. a project's runtime folder) is deleted.
     pub fn spawn_refresh_task(&self) {
-        let records = self.records.clone();
+        let state = self.clone();
         let refresh_interval = std::env::var("REFRESH_INTERVAL_SECS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -41,15 +105,7 @@ impl AppState {
             let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
             loop {
                 interval.tick().await;
-                let new_records = load_all_sources();
-                let mut guard = records.write().await;
-                let old_len = guard.len();
-                *guard = new_records;
-                if guard.len() != old_len {
-                    tracing::info!("Refreshed data: {} records (was {})", guard.len(), old_len);
-                } else {
-                    tracing::debug!("Refreshed data: {} records (unchanged)", guard.len());
-                }
+                state.refresh_records().await;
             }
         });
     }
@@ -69,7 +125,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/requests", get(routes::get_requests))
         .route("/api/filters", get(routes::get_filters))
         .route("/api/quota", get(routes::get_quota))
-        .route("/api/xunfei", get(routes::get_xunfei));
+        .route("/api/xunfei", get(routes::get_xunfei))
+        .route("/api/export", get(routes::export_data))
+        .route("/api/refresh", post(routes::refresh_data))
+        .route("/api/restore", post(routes::restore_backup));
 
     Router::new()
         .merge(api_routes)
