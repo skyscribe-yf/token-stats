@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::time::TimeBound;
-use chrono::{FixedOffset, Utc};
+use chrono::{FixedOffset, Timelike, Utc};
 use std::collections::{HashMap, HashSet};
 
 // ── Shared accumulation helper ───────────────────────────────────────────────
@@ -63,6 +63,7 @@ pub fn aggregate_records(
     source: Option<&str>,
     provider: Option<&str>,
     tz: Option<&FixedOffset>,
+    resolution: Resolution,
 ) -> StatsResponse {
     let sources = parse_csv_filter(source);
     let providers = parse_csv_filter(provider);
@@ -75,7 +76,7 @@ pub fn aggregate_records(
 
     let overall = compute_overall_stats(&filtered);
     let by_vendor = compute_vendor_stats(&filtered);
-    let by_date = compute_date_stats(&filtered, tz);
+    let by_date = compute_date_stats(&filtered, tz, resolution);
     let by_model = compute_model_stats(&filtered);
     let by_source = compute_source_stats(&filtered);
 
@@ -277,26 +278,98 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
     result
 }
 
-fn compute_date_stats(records: &[&TokenRecord], tz: Option<&FixedOffset>) -> Vec<DateStats> {
-    let mut map: HashMap<String, StatAccum> = HashMap::new();
+/// Check if a model should be excluded from the "no-astron" cache hit ratio.
+/// Models containing "astron-code" have zero cache reads and skew the ratio.
+fn is_astron_model(model: &str) -> bool {
+    model.contains("astron-code")
+}
+
+/// Compute the bucket key for a record based on the resolution.
+fn period_key_for_record(
+    record: &TokenRecord,
+    tz: Option<&FixedOffset>,
+    resolution: Resolution,
+) -> String {
+    if resolution == Resolution::Day {
+        return local_date_for_record(record, tz);
+    }
+
+    // For sub-day resolutions, we need the local datetime
+    let local_dt = if let Some(tz) = tz {
+        record
+            .parsed_time()
+            .map(|dt| dt.with_timezone(tz).naive_local())
+    } else {
+        record.parsed_time().map(|dt| dt.naive_utc())
+    };
+
+    let dt = match local_dt {
+        Some(dt) => dt,
+        None => {
+            // Fallback: use date string + midnight
+            let date = local_date_for_record(record, tz);
+            return format!("{} 00:00", date);
+        }
+    };
+
+    let hour = dt.hour();
+    match resolution {
+        Resolution::OneHour => format!("{} {:02}:00", dt.format("%Y-%m-%d"), hour),
+        Resolution::FourHours => {
+            let bucket_start = (hour / 4) * 4;
+            format!("{} {:02}:00", dt.format("%Y-%m-%d"), bucket_start)
+        }
+        Resolution::Day => unreachable!(),
+    }
+}
+
+fn compute_date_stats(
+    records: &[&TokenRecord],
+    tz: Option<&FixedOffset>,
+    resolution: Resolution,
+) -> Vec<DateStats> {
+    // We need separate accumulators for the "no-astron" cache hit ratio
+    #[derive(Default)]
+    struct PeriodAccum {
+        all: StatAccum,
+        no_astron: StatAccum,
+        has_astron: bool,
+    }
+
+    let mut map: HashMap<String, PeriodAccum> = HashMap::new();
 
     for r in records {
-        let local_date = local_date_for_record(r, tz);
-        map.entry(local_date.clone()).or_default().accumulate(r);
+        let key = period_key_for_record(r, tz, resolution);
+        let acc = map.entry(key).or_default();
+        acc.all.accumulate(r);
+        if is_astron_model(&r.model) {
+            acc.has_astron = true;
+        } else {
+            acc.no_astron.accumulate(r);
+        }
     }
 
     let mut result: Vec<DateStats> = map
         .into_iter()
-        .map(|(date, acc)| DateStats {
-            date,
-            calls: acc.calls,
-            input_tokens: acc.input_tokens,
-            output_tokens: acc.output_tokens,
-            cache_read_tokens: acc.cache_read_tokens,
-            cache_write_tokens: acc.cache_write_tokens,
-            total_tokens: acc.total_tokens,
-            cost: acc.cost,
-            cache_hit_ratio: acc.cache_hit_ratio(),
+        .map(|(date, acc)| {
+            let cache_hit_ratio_no_astron = if acc.has_astron {
+                Some(acc.no_astron.cache_hit_ratio())
+            } else {
+                // No astron records in this period, no need for separate ratio
+                None
+            };
+            DateStats {
+                date,
+                calls: acc.all.calls,
+                input_tokens: acc.all.input_tokens,
+                output_tokens: acc.all.output_tokens,
+                cache_read_tokens: acc.all.cache_read_tokens,
+                cache_write_tokens: acc.all.cache_write_tokens,
+                total_tokens: acc.all.total_tokens,
+                cost: acc.all.cost,
+                cache_hit_ratio: acc.all.cache_hit_ratio(),
+                cache_hit_ratio_no_astron,
+            }
         })
         .collect();
 
@@ -416,7 +489,15 @@ mod tests {
             ),
         ];
 
-        let stats = aggregate_records(&records, None, None, Some("pi,codex"), Some("openai"), None);
+        let stats = aggregate_records(
+            &records,
+            None,
+            None,
+            Some("pi,codex"),
+            Some("openai"),
+            None,
+            Resolution::Day,
+        );
 
         assert_eq!(stats.overall.total_calls, 2);
         assert_eq!(stats.overall.total_tokens, 300);

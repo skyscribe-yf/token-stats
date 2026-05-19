@@ -6,6 +6,12 @@ export function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
+/** Format a call count — always show the full number with locale separators (e.g. 2,620) */
+export function formatCalls(n: number): string {
+  if (n == null || Number.isNaN(n)) return "-";
+  return n.toLocaleString();
+}
+
 export function formatCost(cost: number, source?: string): string {
   if (cost == null || Number.isNaN(cost)) return "-";
   // For non-pi sources with zero cost, show N/A
@@ -92,4 +98,30 @@ export function getSourceColor(source: string): string {
 
 export function getSourceLabel(source: string): string {
   return SOURCE_LABELS[source] || source;
+}
+
+/** Format a reset time string (ISO 8601 / RFC 3339) into a relative time like "2h 15m 后重置" */
+export function formatResetTime(resetTime: string | null | undefined): string | null {
+  if (!resetTime) return null;
+  try {
+    const target = new Date(resetTime);
+    if (isNaN(target.getTime())) return null;
+    const now = new Date();
+    const diffMs = target.getTime() - now.getTime();
+    if (diffMs <= 0) return "即将重置";
+    const diffMin = Math.floor(diffMs / 60000);
+    const hours = Math.floor(diffMin / 60);
+    const mins = diffMin % 60;
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      const remainHours = hours % 24;
+      return `${days}d ${remainHours}h 后重置`;
+    }
+    if (hours > 0) {
+      return `${hours}h ${mins}m 后重置`;
+    }
+    return `${mins}m 后重置`;
+  } catch {
+    return null;
+  }
 }

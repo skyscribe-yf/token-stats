@@ -1,6 +1,7 @@
 use super::DataSource;
 use crate::models::TokenRecord;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -18,18 +19,31 @@ impl DataSource for PiSource {
     fn load(&self) -> Vec<TokenRecord> {
         let mut records = Vec::new();
 
-        // 1. Live session records from usage.jsonl
+        // 1. Live session records from usage.jsonl (main session + workers
+        //    that load pi-token-tracker via pi package mechanism)
         let log_path = Self::log_path();
         tracing::info!("Loading pi data from: {:?}", log_path);
         let live_records = Self::parse_log(&log_path);
         tracing::info!("Loaded {} pi live records", live_records.len());
+
+        // Build a coverage set: if usage.jsonl already has per-call records
+        // for a given (UTC date, provider, model), exit summaries for
+        // matching agents are redundant (would double-count).
+        let covered: HashSet<(String, String, String)> = live_records
+            .iter()
+            .map(|r| (r.date.clone(), r.provider.clone(), r.model.clone()))
+            .collect();
+
         records.extend(live_records);
 
-        // 2. Taskplane lane-worker runtime records from events-exit.json
-        let runtime_records = Self::scan_taskplane_runtimes();
+        // 2. Taskplane lane-worker runtime records from exit summaries.
+        //    Only included for agents NOT already covered by per-call data
+        //    (retroactive coverage for batches that ran before the
+        //    pi-token-tracker extension was installed as a pi package).
+        let runtime_records = Self::scan_taskplane_runtimes(&covered);
         if !runtime_records.is_empty() {
             tracing::info!(
-                "Loaded {} pi taskplane runtime records",
+                "Loaded {} pi taskplane runtime records (retroactive)",
                 runtime_records.len()
             );
             records.extend(runtime_records);
@@ -80,10 +94,12 @@ impl PiSource {
     //
     // Scans ~/srcs/*/.pi/runtime/ for these files and creates TokenRecords.
 
-    fn scan_taskplane_runtimes() -> Vec<TokenRecord> {
-        let srcs_dir = super::home_dir().join("srcs");
+    fn scan_taskplane_runtimes(covered: &HashSet<(String, String, String)>) -> Vec<TokenRecord> {
+        let projects_dir = std::env::var("TASKPLANE_PROJECTS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| super::home_dir().join("srcs"));
 
-        let project_dirs = match std::fs::read_dir(&srcs_dir) {
+        let project_dirs = match std::fs::read_dir(&projects_dir) {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
@@ -99,14 +115,17 @@ impl PiSource {
             if !runtime_root.exists() {
                 continue;
             }
-            let batch_records = Self::scan_batches(&runtime_root);
+            let batch_records = Self::scan_batches(&runtime_root, covered);
             records.extend(batch_records);
         }
 
         records
     }
 
-    fn scan_batches(runtime_root: &Path) -> Vec<TokenRecord> {
+    fn scan_batches(
+        runtime_root: &Path,
+        covered: &HashSet<(String, String, String)>,
+    ) -> Vec<TokenRecord> {
         let batch_dirs = match std::fs::read_dir(runtime_root) {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
@@ -171,6 +190,20 @@ impl PiSource {
                 };
 
                 let (provider, model) = read_agent_provider_model(agent_path);
+
+                // Skip if usage.jsonl already has per-call records for this
+                // (UTC date, provider, model). The batch_time is the UTC-
+                // converted timestamp; its date portion matches usage.jsonl
+                // records which also use UTC dates.
+                let utc_date = if batch_time.len() >= 10 {
+                    &batch_time[..10]
+                } else {
+                    &batch_date
+                };
+                let cover_key = (utc_date.to_string(), provider.clone(), model.clone());
+                if covered.contains(&cover_key) {
+                    continue;
+                }
 
                 let total_tokens = tokens.input
                     + tokens.output

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct TokenRecord {
     pub date: String,
     pub time: String,
-    #[serde(rename = "apiKeyPrefix")]
+    #[serde(rename = "apiKeyPrefix", default)]
     pub api_key_prefix: String,
     pub provider: String,
     pub model: String,
@@ -42,6 +42,26 @@ impl TokenRecord {
         DateTime::parse_from_rfc3339(&self.time)
             .ok()
             .map(|dt| dt.with_timezone(&Utc))
+    }
+}
+
+/// Aggregation time resolution for date-based stats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Resolution {
+    #[default]
+    Day,
+    FourHours,
+    OneHour,
+}
+
+impl Resolution {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "day" => Some(Self::Day),
+            "4h" => Some(Self::FourHours),
+            "1h" => Some(Self::OneHour),
+            _ => None,
+        }
     }
 }
 
@@ -82,6 +102,9 @@ pub struct DateStats {
     pub total_tokens: i64,
     pub cost: f64,
     pub cache_hit_ratio: f64,
+    /// Cache hit ratio excluding models that have zero cache reads (e.g. xunfei astron-code-latest)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_hit_ratio_no_astron: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

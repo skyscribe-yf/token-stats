@@ -42,6 +42,7 @@ import {
 } from "./api";
 import {
   formatNumber,
+  formatCalls,
   formatCost,
   formatPercent,
   formatDate,
@@ -51,6 +52,7 @@ import {
   getLocalDatetimeOffsetHours,
   getSourceColor,
   getSourceLabel,
+  formatResetTime,
 } from "./lib/utils";
 import {
   buildCsvFilterParam,
@@ -112,6 +114,8 @@ const ZH = {
   quickSelect: "快捷选择",
   updatedAt: "更新时间",
   updating: "更新中...",
+  cacheHitNoAstron: "缓存命中率(无astron)",
+  subscription: "订阅",
 } as const;
 
 function CustomTooltip({
@@ -299,6 +303,19 @@ export default function App() {
   );
   const hasEmptyRequiredSelection = hasEmptySourceSelection || hasEmptyVendorSelection;
 
+  /** Determine the resolution based on the time range */
+  const resolution = useMemo(() => {
+    if (!effectiveRange.from || !effectiveRange.to) return undefined;
+    const fromMs = new Date(effectiveRange.from).getTime();
+    const toMs = new Date(effectiveRange.to).getTime();
+    if (isNaN(fromMs) || isNaN(toMs)) return undefined;
+    const rangeMs = toMs - fromMs;
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    if (rangeMs < oneDayMs) return "1h";
+    if (rangeMs < 3 * oneDayMs) return "4h";
+    return undefined; // default = day
+  }, [effectiveRange.from, effectiveRange.to]);
+
   const loadData = useCallback(async () => {
     if (!effectiveRange.from || !effectiveRange.to) return;
 
@@ -319,7 +336,8 @@ export default function App() {
           effectiveRange.to,
           sourceFilter,
           vendorFilter,
-          tzOffset
+          tzOffset,
+          resolution
         ),
         fetchFilters(),
       ]);
@@ -343,6 +361,7 @@ export default function App() {
     vendorFilter,
     tzOffset,
     hasEmptyRequiredSelection,
+    resolution,
   ]);
 
   const loadRequests = useCallback(async () => {
@@ -465,18 +484,33 @@ export default function App() {
 
   const chartData = useMemo(() => {
     if (!stats?.by_date) return [];
-    return stats.by_date.map((d) => ({
-      date: formatDate(d.date),
-      rawDate: d.date,
-      calls: d.calls,
-      input: d.input_tokens,
-      output: d.output_tokens,
-      cacheRead: d.cache_read_tokens,
-      cacheWrite: d.cache_write_tokens,
-      total: d.total_tokens,
-      cost: d.cost,
-      cacheHitRatio: d.cache_hit_ratio,
-    }));
+    return stats.by_date.map((d) => {
+      // For sub-day resolution, the date field contains "YYYY-MM-DD HH:00"
+      // Display as "MM-DD HH:00" for 4h/1h, or just the date for daily
+      let label: string;
+      if (d.date.includes(" ")) {
+        // Sub-day: "2025-05-17 08:00" -> "05-17 08:00"
+        const parts = d.date.split(" ");
+        const datePart = parts[0].substring(5); // "05-17"
+        const timePart = parts[1].substring(0, 5); // "08:00"
+        label = `${datePart} ${timePart}`;
+      } else {
+        label = formatDate(d.date);
+      }
+      return {
+        date: label,
+        rawDate: d.date,
+        calls: d.calls,
+        input: d.input_tokens,
+        output: d.output_tokens,
+        cacheRead: d.cache_read_tokens,
+        cacheWrite: d.cache_write_tokens,
+        total: d.total_tokens,
+        cost: d.cost,
+        cacheHitRatio: d.cache_hit_ratio,
+        cacheHitRatioNoAstron: d.cache_hit_ratio_no_astron ?? null,
+      };
+    });
   }, [stats]);
 
   const vendorChartData = useMemo(() => {
@@ -586,6 +620,12 @@ export default function App() {
                 className={presetBtnClass("7d")}
               >
                 {ZH.last7Days}
+              </button>
+              <button
+                onClick={() => applyPreset("all")}
+                className={presetBtnClass("all")}
+              >
+                {ZH.allTime}
               </button>
               <div className="relative">
                 <button
@@ -722,6 +762,35 @@ export default function App() {
                   {v}
                 </button>
               ))}
+              {/* Subscription toggle: kimi, xunfei, opencode-go */}
+              {(() => {
+                const subVendors = filters.vendors.filter((v) =>
+                  ["kimi", "xunfei", "opencode-go", "opencode"].includes(v)
+                );
+                if (subVendors.length === 0) return null;
+                const allSelected = subVendors.every((v) => selectedVendors.has(v));
+                return (
+                  <button
+                    onClick={() => {
+                      const next = new Set(selectedVendors);
+                      for (const v of subVendors) {
+                        if (allSelected) next.delete(v);
+                        else next.add(v);
+                      }
+                      setSelectedVendors(next);
+                      setPage(1);
+                    }}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full transition-all border ${
+                      allSelected
+                        ? "bg-amber-500 text-white border-transparent shadow-sm"
+                        : "bg-white text-amber-600 border-amber-300 hover:border-amber-400"
+                    }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                    {ZH.subscription}
+                  </button>
+                );
+              })()}
             </div>
 
             {/* Spacer + Backup/Restore */}
@@ -844,7 +913,7 @@ export default function App() {
               <div className="flex flex-wrap items-center divide-x divide-slate-200 gap-y-1">
                 <div className="pr-4 min-w-0">
                   <p className="text-[11px] text-slate-400 font-medium">{ZH.totalCalls}</p>
-                  <p className="text-lg font-bold text-slate-800 leading-tight">{formatNumber(stats.overall.total_calls)}</p>
+                  <p className="text-lg font-bold text-slate-800 leading-tight">{formatCalls(stats.overall.total_calls)}</p>
                 </div>
                 <div className="px-4 min-w-0">
                   <p className="text-[11px] text-slate-400 font-medium">{ZH.totalTokens}</p>
@@ -879,7 +948,7 @@ export default function App() {
                     <span key={s.source} className="inline-flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: getSourceColor(s.source) }} />
                       <span className="font-medium" style={{ color: getSourceColor(s.source) }}>{getSourceLabel(s.source)}</span>
-                      <span className="text-slate-400">{formatNumber(s.calls)}次</span>
+                      <span className="text-slate-400">{formatCalls(s.calls)}次</span>
                       <span className="text-slate-400">·</span>
                       <span className="text-slate-400">{formatNumber(s.total_tokens)}tok</span>
                       <span className="text-slate-400">·</span>
@@ -906,7 +975,7 @@ export default function App() {
                           ? "讯飞: " + (xunfei.data.usage.rp5h_limit > 0 ? "5h " + (xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + (xunfei.data.usage.rpw_limit > 0 ? "周 " + (xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100).toFixed(0) + "%, " : "") + "月 " + (xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0) + "%"
                           : xunfei && !xunfeiLoading ? "讯飞: 获取失败" : null,
                         quota?.kimi?.available && quota.kimi.data
-                          ? "Kimi: " + (quota.kimi.data.rp5h_limit > 0 ? "5h " + (quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + "周 " + (quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100).toFixed(0) + "%"
+                          ? "Kimi: " + (quota.kimi.data.rp5h_limit > 0 ? "5h " + (quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100).toFixed(0) + "%" + (formatResetTime(quota.kimi.data.rp5h_reset_time) ? "(" + formatResetTime(quota.kimi.data.rp5h_reset_time)!.replace("后重置", "") + "), " : ", ") : "") + "周 " + (quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100).toFixed(0) + "%" + (formatResetTime(quota.kimi.data.weekly_reset_time) ? "(" + formatResetTime(quota.kimi.data.weekly_reset_time)!.replace("后重置", "") + ")" : "")
                           : quota?.kimi && !quotaLoading ? "Kimi: 获取失败" : null,
                         quota?.opencode_go?.available && quota.opencode_go.data
                           ? "OpenCode: " + (quota.opencode_go.data.usage_percent?.toFixed(0) ?? "?") + "%已用"
@@ -1023,6 +1092,9 @@ export default function App() {
                               style={{ width: (Math.min(quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100, 100)) + "%" }}
                             />
                           </div>
+                          {formatResetTime(quota.kimi.data.weekly_reset_time) && (
+                            <span className="text-[10px] text-slate-400">{formatResetTime(quota.kimi.data.weekly_reset_time)}</span>
+                          )}
                         </div>
                         {quota.kimi.data.rp5h_limit > 0 && (
                           <div>
@@ -1035,6 +1107,9 @@ export default function App() {
                                 style={{ width: (Math.min(quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100, 100)) + "%" }}
                               />
                             </div>
+                            {formatResetTime(quota.kimi.data.rp5h_reset_time) && (
+                              <span className="text-[10px] text-slate-400">{formatResetTime(quota.kimi.data.rp5h_reset_time)}</span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1188,6 +1263,17 @@ export default function App() {
                       strokeDasharray="6 3"
                       dot={{ r: 2 }}
                     />
+                    <Line
+                      yAxisId="ratio"
+                      type="monotone"
+                      dataKey="cacheHitRatioNoAstron"
+                      name={ZH.cacheHitNoAstron}
+                      stroke="#fb923c"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 2"
+                      dot={{ r: 1.5 }}
+                      connectNulls={false}
+                    />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1285,7 +1371,7 @@ export default function App() {
                           </td>
                           <td className="px-3 py-2 text-[10px] text-slate-400 italic">汇总</td>
                           <td className="px-3 py-2"></td>
-                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(row.data.calls)}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCalls(row.data.calls)}</td>
                           <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.input_tokens)}</td>
                           <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.output_tokens)}</td>
                           <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.cache_read_tokens + row.data.cache_write_tokens)}</td>
@@ -1313,7 +1399,7 @@ export default function App() {
                               ))}
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.calls)}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{formatCalls(row.data.calls)}</td>
                           <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.input_tokens)}</td>
                           <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.output_tokens)}</td>
                           <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.cache_read_tokens + row.data.cache_write_tokens)}</td>

@@ -50,6 +50,17 @@ echo "✅ nginx config valid"
 echo ""
 echo "📋 Installing systemd service..."
 sudo cp "$PROJECT_DIR/nginx/token-stats.service" /etc/systemd/system/token-stats.service
+
+# Inject XUNFEI_SSO_SESSION_ID from current shell into systemd env drop-in
+if [ -n "${XUNFEI_SSO_SESSION_ID:-}" ]; then
+    sudo mkdir -p /etc/systemd/system/token-stats.service.d
+    echo "[Service]" | sudo tee /etc/systemd/system/token-stats.service.d/xunfei.conf > /dev/null
+    echo "Environment=\"XUNFEI_SSO_SESSION_ID=$XUNFEI_SSO_SESSION_ID\"" | sudo tee -a /etc/systemd/system/token-stats.service.d/xunfei.conf > /dev/null
+    echo "✅ Injected XUNFEI_SSO_SESSION_ID into systemd env"
+else
+    echo "⚠️  XUNFEI_SSO_SESSION_ID not set in current shell — xunfei data will be unavailable"
+fi
+
 sudo systemctl daemon-reload
 echo "✅ systemd service installed"
 

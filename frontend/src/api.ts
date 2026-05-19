@@ -34,6 +34,7 @@ export interface DateStats {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
+  cache_hit_ratio_no_astron?: number;
 }
 
 export interface ModelStats {
@@ -104,7 +105,8 @@ export async function fetchStats(
   to?: string,
   source?: string,
   provider?: string,
-  tzOffset?: number
+  tzOffset?: number,
+  resolution?: string
 ): Promise<StatsResponse> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
@@ -112,6 +114,7 @@ export async function fetchStats(
   if (source) params.set("source", source);
   if (provider) params.set("provider", provider);
   if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
+  if (resolution) params.set("resolution", resolution);
   const res = await fetch(`${API_BASE}/api/stats?${params}`);
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
