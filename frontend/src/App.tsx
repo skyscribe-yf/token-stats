@@ -115,6 +115,8 @@ const ZH = {
   updatedAt: "更新时间",
   updating: "更新中...",
   cacheHitNoAstron: "缓存命中率(无astron)",
+  cacheHitNoXunfei: "缓存命中率(无讯飞)",
+  xunfeiNoCacheNote: "讯飞无缓存机制",
   subscription: "订阅",
 } as const;
 
@@ -303,7 +305,12 @@ export default function App() {
   );
   const hasEmptyRequiredSelection = hasEmptySourceSelection || hasEmptyVendorSelection;
 
-  /** Determine the resolution based on the time range */
+  /** Determine the resolution based on the time range
+   *  < 4h  → 1h buckets
+   *  < 1d  → 2h buckets
+   *  < 3d  → 12h (half-day) buckets
+   *  >= 3d → day buckets (default)
+   */
   const resolution = useMemo(() => {
     if (!effectiveRange.from || !effectiveRange.to) return undefined;
     const fromMs = new Date(effectiveRange.from).getTime();
@@ -311,8 +318,9 @@ export default function App() {
     if (isNaN(fromMs) || isNaN(toMs)) return undefined;
     const rangeMs = toMs - fromMs;
     const oneDayMs = 24 * 60 * 60 * 1000;
-    if (rangeMs < oneDayMs) return "1h";
-    if (rangeMs < 3 * oneDayMs) return "4h";
+    if (rangeMs < 4 * 60 * 60 * 1000) return "1h";
+    if (rangeMs < oneDayMs) return "2h";
+    if (rangeMs < 3 * oneDayMs) return "12h";
     return undefined; // default = day
   }, [effectiveRange.from, effectiveRange.to]);
 
@@ -486,7 +494,7 @@ export default function App() {
     if (!stats?.by_date) return [];
     return stats.by_date.map((d) => {
       // For sub-day resolution, the date field contains "YYYY-MM-DD HH:00"
-      // Display as "MM-DD HH:00" for 4h/1h, or just the date for daily
+      // Display as "MM-DD HH:00" for sub-day, or just the date for daily
       let label: string;
       if (d.date.includes(" ")) {
         // Sub-day: "2025-05-17 08:00" -> "05-17 08:00"
@@ -509,6 +517,7 @@ export default function App() {
         cost: d.cost,
         cacheHitRatio: d.cache_hit_ratio,
         cacheHitRatioNoAstron: d.cache_hit_ratio_no_astron ?? null,
+        cacheHitRatioNoXunfei: d.cache_hit_ratio_no_xunfei ?? null,
       };
     });
   }, [stats]);
@@ -1274,8 +1283,20 @@ export default function App() {
                       dot={{ r: 1.5 }}
                       connectNulls={false}
                     />
+                    <Line
+                      yAxisId="ratio"
+                      type="monotone"
+                      dataKey="cacheHitRatioNoXunfei"
+                      name={ZH.cacheHitNoXunfei}
+                      stroke="#06b6d4"
+                      strokeWidth={1.5}
+                      strokeDasharray="2 2"
+                      dot={{ r: 1.5 }}
+                      connectNulls={false}
+                    />
                   </LineChart>
                 </ResponsiveContainer>
+                <p className="text-[10px] text-slate-400 mt-1">* {ZH.xunfeiNoCacheNote}</p>
               </div>
 
               {/* Vendor Breakdown + Distribution (pie merged in) */}

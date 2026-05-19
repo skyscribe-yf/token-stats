@@ -50,7 +50,9 @@ impl TokenRecord {
 pub enum Resolution {
     #[default]
     Day,
+    HalfDay,
     FourHours,
+    TwoHours,
     OneHour,
 }
 
@@ -58,7 +60,9 @@ impl Resolution {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "day" => Some(Self::Day),
+            "12h" => Some(Self::HalfDay),
             "4h" => Some(Self::FourHours),
+            "2h" => Some(Self::TwoHours),
             "1h" => Some(Self::OneHour),
             _ => None,
         }
@@ -105,6 +109,9 @@ pub struct DateStats {
     /// Cache hit ratio excluding models that have zero cache reads (e.g. xunfei astron-code-latest)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_hit_ratio_no_astron: Option<f64>,
+    /// Cache hit ratio excluding all xunfei provider records (xunfei has no cache mechanism)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_hit_ratio_no_xunfei: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

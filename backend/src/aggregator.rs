@@ -284,6 +284,11 @@ fn is_astron_model(model: &str) -> bool {
     model.contains("astron-code")
 }
 
+/// Check if a provider is xunfei (has no cache mechanism).
+fn is_xunfei_provider(provider: &str) -> bool {
+    provider == "xunfei"
+}
+
 /// Compute the bucket key for a record based on the resolution.
 fn period_key_for_record(
     record: &TokenRecord,
@@ -315,8 +320,17 @@ fn period_key_for_record(
     let hour = dt.hour();
     match resolution {
         Resolution::OneHour => format!("{} {:02}:00", dt.format("%Y-%m-%d"), hour),
+        Resolution::TwoHours => {
+            let bucket_start = (hour / 2) * 2;
+            format!("{} {:02}:00", dt.format("%Y-%m-%d"), bucket_start)
+        }
         Resolution::FourHours => {
             let bucket_start = (hour / 4) * 4;
+            format!("{} {:02}:00", dt.format("%Y-%m-%d"), bucket_start)
+        }
+        Resolution::HalfDay => {
+            // AM (00:00) or PM (12:00)
+            let bucket_start = if hour < 12 { 0 } else { 12 };
             format!("{} {:02}:00", dt.format("%Y-%m-%d"), bucket_start)
         }
         Resolution::Day => unreachable!(),
@@ -328,12 +342,14 @@ fn compute_date_stats(
     tz: Option<&FixedOffset>,
     resolution: Resolution,
 ) -> Vec<DateStats> {
-    // We need separate accumulators for the "no-astron" cache hit ratio
+    // We need separate accumulators for the "no-astron" and "no-xunfei" cache hit ratios
     #[derive(Default)]
     struct PeriodAccum {
         all: StatAccum,
         no_astron: StatAccum,
+        no_xunfei: StatAccum,
         has_astron: bool,
+        has_xunfei: bool,
     }
 
     let mut map: HashMap<String, PeriodAccum> = HashMap::new();
@@ -347,6 +363,11 @@ fn compute_date_stats(
         } else {
             acc.no_astron.accumulate(r);
         }
+        if is_xunfei_provider(&r.provider) {
+            acc.has_xunfei = true;
+        } else {
+            acc.no_xunfei.accumulate(r);
+        }
     }
 
     let mut result: Vec<DateStats> = map
@@ -356,6 +377,11 @@ fn compute_date_stats(
                 Some(acc.no_astron.cache_hit_ratio())
             } else {
                 // No astron records in this period, no need for separate ratio
+                None
+            };
+            let cache_hit_ratio_no_xunfei = if acc.has_xunfei {
+                Some(acc.no_xunfei.cache_hit_ratio())
+            } else {
                 None
             };
             DateStats {
@@ -369,6 +395,7 @@ fn compute_date_stats(
                 cost: acc.all.cost,
                 cache_hit_ratio: acc.all.cache_hit_ratio(),
                 cache_hit_ratio_no_astron,
+                cache_hit_ratio_no_xunfei,
             }
         })
         .collect();
