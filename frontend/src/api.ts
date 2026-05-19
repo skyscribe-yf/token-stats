@@ -252,3 +252,36 @@ export async function fetchXunfei(): Promise<XunfeiStatus> {
   if (!res.ok) throw new Error("Failed to fetch xunfei status");
   return res.json();
 }
+
+// ─── Backup / Restore ────────────────────────────────────────────────────────
+
+export interface RestoreResponse {
+  success: boolean;
+  before_count: number;
+  after_count: number;
+  added: number;
+  skipped: number;
+  errors: string[];
+}
+
+export async function fetchRefresh(): Promise<{ success: boolean; added: number; total: number }> {
+  const res = await fetch(`${API_BASE}/api/refresh`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to refresh data");
+  return res.json();
+}
+
+export async function exportBackup(): Promise<Response> {
+  const res = await fetch(`${API_BASE}/api/export`);
+  if (!res.ok) throw new Error("Failed to export backup");
+  return res;
+}
+
+export async function restoreBackup(backupDir: string): Promise<RestoreResponse> {
+  const res = await fetch(`${API_BASE}/api/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backup_dir: backupDir }),
+  });
+  if (!res.ok) throw new Error("Failed to restore backup");
+  return res.json();
+}
