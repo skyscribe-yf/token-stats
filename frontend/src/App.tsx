@@ -114,7 +114,6 @@ const ZH = {
   quickSelect: "快捷选择",
   updatedAt: "更新时间",
   updating: "更新中...",
-  cacheHitNoAstron: "缓存命中率(无astron)",
   cacheHitNoXunfei: "缓存命中率(无讯飞)",
   xunfeiNoCacheNote: "讯飞无缓存机制",
   subscription: "订阅",
@@ -516,8 +515,7 @@ export default function App() {
         total: d.total_tokens,
         cost: d.cost,
         cacheHitRatio: d.cache_hit_ratio,
-        cacheHitRatioNoAstron: d.cache_hit_ratio_no_astron ?? null,
-        cacheHitRatioNoXunfei: d.cache_hit_ratio_no_xunfei ?? null,
+        cacheHitRatioNoXunfei: d.cache_hit_ratio_no_xunfei,
       };
     });
   }, [stats]);
@@ -1275,24 +1273,12 @@ export default function App() {
                     <Line
                       yAxisId="ratio"
                       type="monotone"
-                      dataKey="cacheHitRatioNoAstron"
-                      name={ZH.cacheHitNoAstron}
-                      stroke="#fb923c"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 2"
-                      dot={{ r: 1.5 }}
-                      connectNulls={false}
-                    />
-                    <Line
-                      yAxisId="ratio"
-                      type="monotone"
                       dataKey="cacheHitRatioNoXunfei"
                       name={ZH.cacheHitNoXunfei}
                       stroke="#06b6d4"
                       strokeWidth={1.5}
-                      strokeDasharray="2 2"
+                      strokeDasharray="4 2"
                       dot={{ r: 1.5 }}
-                      connectNulls={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>

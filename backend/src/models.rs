@@ -106,12 +106,8 @@ pub struct DateStats {
     pub total_tokens: i64,
     pub cost: f64,
     pub cache_hit_ratio: f64,
-    /// Cache hit ratio excluding models that have zero cache reads (e.g. xunfei astron-code-latest)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_hit_ratio_no_astron: Option<f64>,
-    /// Cache hit ratio excluding all xunfei provider records (xunfei has no cache mechanism)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_hit_ratio_no_xunfei: Option<f64>,
+    /// Cache hit ratio excluding xunfei provider records (xunfei has no cache mechanism)
+    pub cache_hit_ratio_no_xunfei: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
