@@ -1132,9 +1132,9 @@ export default function App() {
                           ? "Kimi: " + (quota.kimi.data.rp5h_limit > 0 ? "5h " + (quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100).toFixed(0) + "%" + (formatResetTime(quota.kimi.data.rp5h_reset_time) ? "(" + formatResetTime(quota.kimi.data.rp5h_reset_time)!.replace("后重置", "") + "), " : ", ") : "") + "周 " + (quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100).toFixed(0) + "%" + (formatResetTime(quota.kimi.data.weekly_reset_time) ? "(" + formatResetTime(quota.kimi.data.weekly_reset_time)!.replace("后重置", "") + ")" : "")
                           : quota?.kimi && !quotaLoading ? "Kimi: 获取失败" : null,
                         quota?.opencode_go?.available && quota.opencode_go.data
-                          ? "OpenCode: " + (quota.opencode_go.data.usage_percent?.toFixed(0) ?? "?") + "%已用"
-                          : quota?.opencode_go?.data?.workspace_url
-                            ? "OpenCode: →工作区"
+                          ? "OpenCode: " + (quota.opencode_go.data.entries.find(e => e.usage_type === "Monthly")?.percentage?.toFixed(0) ?? "?") + "%月已用"
+                          : quota?.opencode_go?.error
+                            ? "OpenCode: " + quota.opencode_go.error
                             : quota?.opencode_go && !quotaLoading ? "OpenCode: 获取失败" : null,
                       ]
                         .filter(Boolean)
@@ -1291,55 +1291,29 @@ export default function App() {
                     <div className="h-8 flex items-center justify-center">
                       <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary-600" />
                     </div>
-                  ) : quota?.opencode_go?.available && quota.opencode_go.data ? (
-                    <>
-                      <div className="flex items-center gap-2 text-[11px] mb-1">
-                        <span className="font-medium text-slate-600">
-                          {quota.opencode_go.data.plan_type || "No Plan"}
-                        </span>
-                        {quota.opencode_go.data.hard_limit_usd != null && (
-                          <span className="text-slate-400">上限 ¥{(quota.opencode_go.data.hard_limit_usd / 6 * (pricingConfig?.usd_to_cny ?? 6.82)).toFixed(0)}</span>
-                        )}
-                      </div>
-                      {quota.opencode_go.data.usage_percent != null ? (
-                        <div>
+                  ) : quota?.opencode_go?.available && quota.opencode_go.data && quota.opencode_go.data.entries.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {quota.opencode_go.data.entries.map((entry) => (
+                        <div key={entry.usage_type}>
                           <div className="flex justify-between text-[10px] text-slate-500">
-                            <span>已用 {quota.opencode_go.data.total_usage_usd != null ? `¥${((quota.opencode_go.data.total_usage_usd / 6) * (pricingConfig?.usd_to_cny ?? 6.82)).toFixed(2)}` : "?"}</span>
-                            <span>{quota.opencode_go.data.usage_percent.toFixed(0)}%</span>
+                            <span>{entry.usage_type === "Rolling" ? "滚动" : entry.usage_type === "Weekly" ? "周" : entry.usage_type === "Monthly" ? "月" : entry.usage_type}</span>
+                            <span>{entry.percentage}% · {entry.resets_in}</span>
                           </div>
                           <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                            <div className={"h-full rounded-full transition-all " + (quota.opencode_go.data.usage_percent > 80 ? "bg-rose-500" : quota.opencode_go.data.usage_percent > 50 ? "bg-amber-500" : "bg-emerald-500")}
-                              style={{ width: (Math.min(quota.opencode_go.data.usage_percent, 100)) + "%" }}
+                            <div className={"h-full rounded-full transition-all " + (entry.percentage > 80 ? "bg-rose-500" : entry.percentage > 50 ? "bg-amber-500" : "bg-emerald-500")}
+                              style={{ width: (Math.min(entry.percentage, 100)) + "%" }}
                             />
                           </div>
-                          {quota.opencode_go.data.remaining_usd != null && (
-                            <span className="text-[10px] text-slate-500">剩余 ¥{(quota.opencode_go.data.remaining_usd / 6 * (pricingConfig?.usd_to_cny ?? 6.82)).toFixed(2)}</span>
-                          )}
                         </div>
-                      ) : quota.opencode_go.data.workspace_url ? (
-                        <a
-                          href={quota.opencode_go.data.workspace_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-[11px] text-primary-600 hover:text-primary-700"
-                        >
-                          查看工作区 →
-                        </a>
-                      ) : null}
-                    </>
+                      ))}
+                    </div>
                   ) : (
                     <>
-                      {quota?.opencode_go?.data?.workspace_url ? (
-                        <a
-                          href={quota.opencode_go.data.workspace_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-[11px] text-primary-600 hover:text-primary-700"
-                        >
-                          查看工作区 →
-                        </a>
-                      ) : null}
-                      <p className="text-[11px] text-slate-400 italic">获取失败</p>
+                      {quota?.opencode_go?.error ? (
+                        <p className="text-[11px] text-slate-400 italic">{quota.opencode_go.error}</p>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic">获取失败</p>
+                      )}
                     </>
                   )}
                 </div>

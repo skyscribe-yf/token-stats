@@ -168,6 +168,7 @@ impl OpenCodeSource {
             time,
             api_key_prefix: "N/A".to_string(),
             provider,
+            original_provider: None,
             model,
             source: "opencode".to_string(),
             input_tokens,

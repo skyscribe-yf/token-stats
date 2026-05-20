@@ -215,6 +215,7 @@ impl PiSource {
                     time: batch_time.clone(),
                     api_key_prefix: format!("runtime:{}", batch_name),
                     provider,
+                    original_provider: None,
                     model,
                     source: "pi".to_string(),
                     input_tokens: tokens.input,

@@ -140,6 +140,7 @@ impl CodexSource {
                         time,
                         api_key_prefix: "N/A".to_string(),
                         provider: "openai".to_string(),
+                        original_provider: None,
                         model: session_model.clone(),
                         source: "codex".to_string(),
                         input_tokens: effective_input,

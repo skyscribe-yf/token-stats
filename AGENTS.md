@@ -31,6 +31,9 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
   5. **Kimi CLI**: `~/.kimi/sessions/*/wire.jsonl` (JSONL)
   - **ccswitch fallback**: `~/.cc-switch/cc-switch.db` (SQLite) — only loaded if `USE_CC_SWITCH` env var is set
 
+### Quota Data Sources
+- **OpenCode-go subscription**: Fetched via the `opencode-usage` Python CLI tool (not direct HTTP). The backend runs `opencode-usage` as a subprocess with a timeout, parses the Rich table output, and converts to structured entries (rolling/weekly/monthly percentage + reset timer). Handles: tool not installed, tool blocking for auth input (timeout), and successful output.
+
 ### Frontend (`frontend/`)
 - Vite + React 19 + TypeScript
 - Tailwind CSS v4 (via `@tailwindcss/vite` plugin)
@@ -156,7 +159,12 @@ providers = ["openai", "ainaiba"]
 1. **Single-file app** — `App.tsx` is large (~900 lines) by design; all components are inline closures.
 2. **Chinese UI labels** — Dashboard uses Chinese text (`ZH` constant object). Keep new UI text in Chinese.
 3. **Source-aware colors** — Each tool source has a fixed color in `SOURCE_COLORS`. Extend this when adding new sources.
-4. **Cost display** — All costs are displayed in **CNY (¥)**. Backend `TokenRecord.cost` keeps the *original* unit (USD for pi/ccswitch, raw for opencode, or 0 for derived sources). The `pricing::display_cost()` function converts to CNY on-the-fly using `pricing.toml`. Non-pi sources with zero computed cost show "N/A".
+4. **Cost display** — All costs are displayed in **CNY (¥)**. Backend `TokenRecord.cost` keeps the *original* unit. Currency varies by Pi provider config in `models.json`:
+   - `deepseek` Pi provider: **CNY** (official DeepSeek API prices in yuan)
+   - All other Pi providers (ainaiba, opencode-go, guancha, xiaomi-mimo, etc.): **USD**
+   - OpenCode DB records (`source="opencode"`): **USD** (from OpenCode API)
+   - Codex/Claude-code: no stored cost (`cost=0`), computed from tokens
+   The `pricing::display_cost()` function converts everything to CNY on-the-fly using `pricing.toml`, applying provider-specific discounts. Non-pi sources with zero computed cost show "N/A".
 5. **Preset time ranges** — Today, 6h, 12h, 1d, 3d, 7d, 14d, 30d, all, custom.
 
 ---
