@@ -254,7 +254,10 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         // 4a. DeepSeek official Pi provider: cost is in CNY, display as-is
         //     Use original_provider to distinguish from opencode-go records
         //     that were merged into deepseek vendor.
-        let effective_provider = record.original_provider.as_deref().unwrap_or(&record.provider);
+        let effective_provider = record
+            .original_provider
+            .as_deref()
+            .unwrap_or(&record.provider);
         if effective_provider == "deepseek" {
             return record.cost;
         }

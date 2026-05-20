@@ -115,7 +115,10 @@ async fn run_opencode_usage() -> Result<String, OpenCodeQuotaStatus> {
                         error: Some(if stderr.is_empty() {
                             "opencode-usage produced no output".to_string()
                         } else {
-                            format!("opencode-usage error: {}", super::truncate_error_body(&stderr))
+                            format!(
+                                "opencode-usage error: {}",
+                                super::truncate_error_body(&stderr)
+                            )
                         }),
                     });
                 }
@@ -123,12 +126,20 @@ async fn run_opencode_usage() -> Result<String, OpenCodeQuotaStatus> {
             } else {
                 // Non-zero exit code — likely auth failure or other error
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let error_msg = if stderr.contains("EOFError") || stderr.contains("EOF when reading") {
+                let error_msg = if stderr.contains("EOFError")
+                    || stderr.contains("EOF when reading")
+                {
                     "opencode-usage requires authentication. Run `opencode-usage` in terminal once to save credentials.".to_string()
                 } else if stderr.is_empty() {
-                    format!("opencode-usage exited with code {}", output.status.code().unwrap_or(-1))
+                    format!(
+                        "opencode-usage exited with code {}",
+                        output.status.code().unwrap_or(-1)
+                    )
                 } else {
-                    format!("opencode-usage error: {}", super::truncate_error_body(&stderr))
+                    format!(
+                        "opencode-usage error: {}",
+                        super::truncate_error_body(&stderr)
+                    )
                 };
                 Err(OpenCodeQuotaStatus {
                     available: false,
@@ -169,7 +180,7 @@ fn strip_ansi_codes(s: &str) -> String {
             // Skip the escape sequence
             if chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
-                // Consume parameter bytes (0-9, ;, etc.)
+                              // Consume parameter bytes (0-9, ;, etc.)
                 while let Some(&next) = chars.peek() {
                     if next.is_ascii_digit() || next == ';' || next == '?' {
                         chars.next();
@@ -212,7 +223,8 @@ fn parse_usage_table(output: &str) -> Vec<QuotaOpenCodeUsageEntry> {
         }
 
         // Skip header rows (┃) and border rows
-        if line.contains('┃') || line.contains('┏') || line.contains('┡') || line.contains('└') {
+        if line.contains('┃') || line.contains('┏') || line.contains('┡') || line.contains('└')
+        {
             continue;
         }
 
@@ -356,7 +368,10 @@ mod tests {
         // Simple color code
         assert_eq!(strip_ansi_codes("\x1b[31mred text\x1b[0m"), "red text");
         // Multiple codes
-        assert_eq!(strip_ansi_codes("\x1b[1;32mgreen\x1b[0m and \x1b[33myellow\x1b[0m"), "green and yellow");
+        assert_eq!(
+            strip_ansi_codes("\x1b[1;32mgreen\x1b[0m and \x1b[33myellow\x1b[0m"),
+            "green and yellow"
+        );
         // Empty string
         assert_eq!(strip_ansi_codes(""), "");
     }
