@@ -15,6 +15,7 @@ flexi_logger = { version = "0.31", features = ["trc"] }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+scraper = "0.22"
 toml = "0.8"
 
 [dev-dependencies]

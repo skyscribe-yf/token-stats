@@ -146,7 +146,7 @@ pub struct QuotaKimiCode {
     pub sub_type: Option<String>,
 }
 
-/// Single usage entry from the `opencode-usage` CLI tool.
+/// Single usage entry from the OpenCode-go workspace dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaOpenCodeUsageEntry {
     pub usage_type: String,

@@ -2,7 +2,7 @@
 //!
 //! Supports:
 //! - **Kimi Code**: Usage via `GET /usages` on the Kimi Code platform (OAuth access token)
-//! - **OpenCode-go**: Usage via `opencode-usage` CLI tool
+//! - **OpenCode-go**: Usage via direct HTTP request to workspace dashboard (HTML parsing)
 
 pub mod kimi;
 pub mod opencode;
@@ -98,9 +98,9 @@ impl QuotaFetcher {
         kimi::fetch_kimi_quota(&self.client).await
     }
 
-    /// Fetch OpenCode-go subscription/quota info via `opencode-usage` CLI.
+    /// Fetch OpenCode-go subscription/quota info via HTTP + HTML scraping.
     pub async fn fetch_opencode_quota(&self) -> OpenCodeQuotaStatus {
-        opencode::fetch_opencode_quota().await
+        opencode::fetch_opencode_quota(&self.client).await
     }
 }
 
