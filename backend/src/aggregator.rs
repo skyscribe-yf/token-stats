@@ -474,6 +474,7 @@ mod tests {
             time: time.to_string(),
             api_key_prefix: "test".to_string(),
             provider: provider.to_string(),
+            original_provider: None,
             model: model.to_string(),
             source: source.to_string(),
             input_tokens: total_tokens / 2,

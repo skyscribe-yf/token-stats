@@ -8,6 +8,11 @@ pub struct TokenRecord {
     #[serde(rename = "apiKeyPrefix", default)]
     pub api_key_prefix: String,
     pub provider: String,
+    /// The provider name before vendor merge was applied.
+    /// Used by display_cost() to determine the correct cost formula
+    /// (e.g. opencode-go records merged into deepseek still need USD→CNY conversion).
+    #[serde(default, skip_serializing)]
+    pub original_provider: Option<String>,
     pub model: String,
     #[serde(default)]
     pub source: String,
@@ -197,6 +202,7 @@ impl TokenRecord {
             time: time.to_string(),
             api_key_prefix: "test".to_string(),
             provider: provider.to_string(),
+            original_provider: None,
             model: model.to_string(),
             source: source.to_string(),
             input_tokens: total_tokens / 2,

@@ -125,37 +125,6 @@ pub struct KimiCodeTokenRefreshResponse {
 
 // ─── OpenCode types ──────────────────────────────────────────────────────────
 
-/// Raw response from the OpenAI-compatible billing subscription endpoint.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OpenAiSubscriptionResponse {
-    pub has_payment_method: Option<bool>,
-    pub canceled: Option<bool>,
-    pub canceled_at: Option<i64>,
-    pub delinquent: Option<bool>,
-    pub access_until: Option<i64>,
-    pub soft_limit: Option<i64>,
-    pub hard_limit: Option<i64>,
-    pub system_hard_limit: Option<i64>,
-    pub soft_limit_usd: Option<f64>,
-    pub hard_limit_usd: Option<f64>,
-    pub system_hard_limit_usd: Option<f64>,
-    pub plan: Option<OpenAiPlan>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OpenAiPlan {
-    pub title: Option<String>,
-    pub id: Option<String>,
-}
-
-/// Raw response from the billing usage endpoint.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OpenAiUsageResponse {
-    pub object: Option<String>,
-    pub total_usage: Option<f64>,
-    pub total_tokens_used: Option<i64>,
-}
-
 // ─── Dashboard DTOs ──────────────────────────────────────────────────────────
 
 /// Simplified Kimi Code quota info for the dashboard.
@@ -177,15 +146,19 @@ pub struct QuotaKimiCode {
     pub sub_type: Option<String>,
 }
 
+/// Single usage entry from the `opencode-usage` CLI tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaOpenCodeUsageEntry {
+    pub usage_type: String,
+    pub percentage: i32,
+    pub resets_in: String,
+}
+
 /// Simplified OpenCode-go quota info for the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaOpenCode {
     pub provider: String,
-    pub plan_type: Option<String>,
-    pub hard_limit_usd: Option<f64>,
-    pub total_usage_usd: Option<f64>,
-    pub usage_percent: Option<f64>,
-    pub remaining_usd: Option<f64>,
+    pub entries: Vec<QuotaOpenCodeUsageEntry>,
     pub workspace_url: Option<String>,
 }
 

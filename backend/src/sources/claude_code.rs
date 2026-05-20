@@ -136,6 +136,7 @@ impl ClaudeCodeSource {
                         time,
                         api_key_prefix: "N/A".to_string(),
                         provider,
+                        original_provider: None,
                         model,
                         source: "claude-code".to_string(),
                         input_tokens,

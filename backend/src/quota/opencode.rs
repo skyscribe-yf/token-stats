@@ -1,54 +1,21 @@
 //! OpenCode-go provider integration.
 //!
-//! Handles API key resolution, billing API calls to OpenCode-go's
-//! OpenAI-compatible billing endpoints, and response parsing.
+//! Uses the `opencode-usage` Python CLI tool to fetch subscription usage data.
+//! Falls back gracefully when the tool is not installed or requires interactive auth.
 
 use super::types::*;
-use chrono::Datelike;
-use std::path::PathBuf;
+use tokio::process::Command;
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+/// Timeout for the `opencode-usage` subprocess (seconds).
+/// If the tool blocks for interactive input, we kill it after this duration.
+const OPENCODE_USAGE_TIMEOUT_SECS: u64 = 10;
+
+/// Name of the CLI tool on PATH.
+const OPENCODE_USAGE_BIN: &str = "opencode-usage";
 
 // ─── Auth helpers ────────────────────────────────────────────────────────────
-
-/// Path to the OpenCode auth.json file.
-pub fn get_opencode_auth_path() -> PathBuf {
-    if let Ok(path) = std::env::var("OPENCODE_AUTH_PATH") {
-        return PathBuf::from(path);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("auth.json")
-}
-
-/// Read opencode-go API key from env var or local auth.json.
-pub fn get_opencode_api_key() -> Option<String> {
-    if let Ok(key) = std::env::var("OPENCODE_API_KEY") {
-        if !key.is_empty() {
-            return Some(key);
-        }
-    }
-
-    let path = get_opencode_auth_path();
-    if !path.exists() {
-        return None;
-    }
-
-    let content = std::fs::read_to_string(path).ok()?;
-    let auth: serde_json::Value = serde_json::from_str(&content).ok()?;
-
-    auth.get("opencode-go")
-        .and_then(|entry| entry.get("key"))
-        .and_then(|k| k.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-}
-
-/// OpenCode base URL for API calls.
-pub fn get_opencode_base_url() -> String {
-    std::env::var("OPENCODE_BASE_URL").unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string())
-}
 
 /// Build the OpenCode-go workspace dashboard URL from the workspace ID env var.
 pub fn get_opencode_workspace_url() -> Option<String> {
@@ -60,182 +27,241 @@ pub fn get_opencode_workspace_url() -> Option<String> {
 
 // ─── OpenCode Quota Fetching ─────────────────────────────────────────────────
 
-/// Fetch OpenCode-go subscription and usage, then build the status DTO.
-pub async fn fetch_opencode_quota(client: &reqwest::Client) -> OpenCodeQuotaStatus {
-    let api_key = match get_opencode_api_key() {
-        Some(k) => k,
-        None => return opencode_no_auth_status(),
+/// Fetch OpenCode-go subscription usage by running the `opencode-usage` CLI tool.
+pub async fn fetch_opencode_quota() -> OpenCodeQuotaStatus {
+    // Step 1: Check if the tool is installed
+    if !is_opencode_usage_installed().await {
+        return OpenCodeQuotaStatus {
+            available: false,
+            data: None,
+            error: Some(format!(
+                "{} not installed. Install with: uv tool install opencode-usage",
+                OPENCODE_USAGE_BIN
+            )),
+        };
+    }
+
+    // Step 2: Run the tool with a timeout
+    let output = match run_opencode_usage().await {
+        Ok(o) => o,
+        Err(e) => return e,
     };
 
-    let base_url = get_opencode_base_url();
-    let base = base_url.trim_end_matches('/');
+    // Step 3: Parse the table output
+    // Strip any ANSI escape codes that Rich might emit
+    let clean_output = strip_ansi_codes(&output);
+    let entries = parse_usage_table(&clean_output);
 
-    // Step 1: Fetch subscription info
-    let sub_url = format!("{}/v1/dashboard/billing/subscription", base);
-    let subscription = match fetch_subscription(client, &api_key, &sub_url).await {
-        Ok(sub) => sub,
-        Err(status) => return status,
-    };
-
-    let plan_type = subscription
-        .plan
-        .as_ref()
-        .and_then(|p| p.title.clone())
-        .or_else(|| subscription.plan.as_ref().and_then(|p| p.id.clone()));
-    let hard_limit_usd = subscription.hard_limit_usd;
-
-    // Step 2: Fetch current usage
-    let (total_usage_usd, usage_percent) =
-        fetch_opencode_usage(client, &api_key, base, hard_limit_usd).await;
-
-    let remaining_usd = match (hard_limit_usd, total_usage_usd) {
-        (Some(limit), Some(used)) => Some((limit - used).max(0.0)),
-        _ => None,
-    };
+    if entries.is_empty() {
+        return OpenCodeQuotaStatus {
+            available: false,
+            data: None,
+            error: Some("Could not parse usage data from opencode-usage output".to_string()),
+        };
+    }
 
     OpenCodeQuotaStatus {
         available: true,
         data: Some(QuotaOpenCode {
             provider: "opencode-go".to_string(),
-            plan_type,
-            hard_limit_usd,
-            total_usage_usd,
-            usage_percent,
-            remaining_usd,
-            workspace_url: None,
+            entries,
+            workspace_url: get_opencode_workspace_url(),
         }),
         error: None,
     }
 }
 
-fn opencode_no_auth_status() -> OpenCodeQuotaStatus {
-    if let Some(url) = get_opencode_workspace_url() {
-        OpenCodeQuotaStatus {
-            available: false,
-            data: Some(QuotaOpenCode {
-                provider: "opencode-go".to_string(),
-                plan_type: None,
-                hard_limit_usd: None,
-                total_usage_usd: None,
-                usage_percent: None,
-                remaining_usd: None,
-                workspace_url: Some(url),
-            }),
-            error: Some("API key not found. Visit workspace to check usage.".to_string()),
-        }
-    } else {
-        OpenCodeQuotaStatus {
-            available: false,
-            data: None,
-            error: Some(
-                "opencode-go API key not found in auth.json or OPENCODE_API_KEY".to_string(),
-            ),
-        }
+/// Check if `opencode-usage` is available on PATH.
+async fn is_opencode_usage_installed() -> bool {
+    // Try running with --help to see if the tool exists.
+    // Using `which` is simpler but may not be available on all systems.
+    match Command::new(OPENCODE_USAGE_BIN)
+        .arg("--help")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+    {
+        Ok(output) => output.status.success() || !output.stdout.is_empty(),
+        Err(_) => false,
     }
 }
 
-async fn fetch_subscription(
-    client: &reqwest::Client,
-    api_key: &str,
-    url: &str,
-) -> Result<OpenAiSubscriptionResponse, OpenCodeQuotaStatus> {
-    let response = match client
-        .get(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(OpenCodeQuotaStatus {
+/// Run `opencode-usage` with a timeout, capturing stdout.
+/// Returns the stdout string on success, or an error status on failure.
+async fn run_opencode_usage() -> Result<String, OpenCodeQuotaStatus> {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(OPENCODE_USAGE_TIMEOUT_SECS),
+        Command::new(OPENCODE_USAGE_BIN)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null()) // no stdin — prevents blocking on prompts
+            .output(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(output)) => {
+            // Process completed within timeout
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                if stdout.trim().is_empty() {
+                    // Tool exited successfully but produced no output
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    return Err(OpenCodeQuotaStatus {
+                        available: false,
+                        data: None,
+                        error: Some(if stderr.is_empty() {
+                            "opencode-usage produced no output".to_string()
+                        } else {
+                            format!(
+                                "opencode-usage error: {}",
+                                super::truncate_error_body(&stderr)
+                            )
+                        }),
+                    });
+                }
+                Ok(stdout)
+            } else {
+                // Non-zero exit code — likely auth failure or other error
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let error_msg = if stderr.contains("EOFError")
+                    || stderr.contains("EOF when reading")
+                {
+                    "opencode-usage requires authentication. Run `opencode-usage` in terminal once to save credentials.".to_string()
+                } else if stderr.is_empty() {
+                    format!(
+                        "opencode-usage exited with code {}",
+                        output.status.code().unwrap_or(-1)
+                    )
+                } else {
+                    format!(
+                        "opencode-usage error: {}",
+                        super::truncate_error_body(&stderr)
+                    )
+                };
+                Err(OpenCodeQuotaStatus {
+                    available: false,
+                    data: None,
+                    error: Some(error_msg),
+                })
+            }
+        }
+        Ok(Err(e)) => {
+            // Failed to spawn the process
+            Err(OpenCodeQuotaStatus {
                 available: false,
                 data: None,
-                error: Some(format!("Subscription request failed: {}", e)),
-            });
+                error: Some(format!("Failed to run opencode-usage: {}", e)),
+            })
         }
-    };
-
-    if !response.status().is_success() {
-        let status = response.status();
-        if status.as_u16() == 404 {
-            let workspace_url = get_opencode_workspace_url();
-            return Err(OpenCodeQuotaStatus {
+        Err(_) => {
+            // Timeout — the tool is likely blocking for interactive input
+            Err(OpenCodeQuotaStatus {
                 available: false,
-                data: Some(QuotaOpenCode {
-                    provider: "opencode-go".to_string(),
-                    plan_type: None,
-                    hard_limit_usd: None,
-                    total_usage_usd: None,
-                    usage_percent: None,
-                    remaining_usd: None,
-                    workspace_url,
-                }),
-                error: Some("Billing API not available. Visit workspace.".to_string()),
-            });
+                data: None,
+                error: Some(
+                    "opencode-usage requires authentication. Run `opencode-usage` in terminal once to save credentials.".to_string(),
+                ),
+            })
         }
-        let body = response.text().await.unwrap_or_default();
-        return Err(OpenCodeQuotaStatus {
-            available: false,
-            data: None,
-            error: Some(format!(
-                "Subscription API returned {}: {}",
-                status,
-                super::truncate_error_body(&body)
-            )),
-        });
     }
-
-    response.json().await.map_err(|e| OpenCodeQuotaStatus {
-        available: false,
-        data: None,
-        error: Some(format!("Failed to parse subscription response: {}", e)),
-    })
 }
 
-async fn fetch_opencode_usage(
-    client: &reqwest::Client,
-    api_key: &str,
-    base: &str,
-    hard_limit_usd: Option<f64>,
-) -> (Option<f64>, Option<f64>) {
-    let now = chrono::Utc::now();
-    let start_of_month = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
-        .unwrap_or_else(|| now.date_naive());
-    let usage_url = format!(
-        "{}/v1/dashboard/billing/usage?start_date={}&end_date={}",
-        base,
-        start_of_month.format("%Y-%m-%d"),
-        now.format("%Y-%m-%d")
-    );
-
-    let response = match client
-        .get(&usage_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-    {
-        Ok(r) if r.status().is_success() => r,
-        _ => return (None, None),
-    };
-
-    let usage: OpenAiUsageResponse = match response.json().await {
-        Ok(u) => u,
-        Err(_) => return (None, None),
-    };
-
-    let usage_percent = hard_limit_usd.and_then(|limit| {
-        if limit > 0.0 {
-            usage
-                .total_usage
-                .map(|used| (used / limit * 100.0).min(100.0))
+/// Strip ANSI escape sequences from a string.
+/// Rich may emit ANSI codes even when stdout is piped in some environments.
+fn strip_ansi_codes(s: &str) -> String {
+    // Simple regex-free approach: remove sequences like \x1b[...m
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip the escape sequence
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                              // Consume parameter bytes (0-9, ;, etc.)
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_digit() || next == ';' || next == '?' {
+                        chars.next();
+                    } else if ('@'..='~').contains(&next) {
+                        chars.next(); // final byte
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+            }
         } else {
-            None
+            result.push(c);
         }
-    });
+    }
+    result
+}
 
-    (usage.total_usage, usage_percent)
+/// Parse the Rich-rendered table output from `opencode-usage`.
+///
+/// Expected format (plain text when stdout is not a TTY):
+/// ```text
+///              Account Usage Limits              
+/// ┏━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+/// ┃ Usage Type   ┃ Capacity ┃ Reset Timer       ┃
+/// ┡━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+/// │ Rolling      │       0% │ 4 hours 4 minutes │
+/// │ Weekly       │       3% │ 4 days 16 hours   │
+/// │ Monthly      │      63% │ 21 days 1 hour    │
+/// └──────────────┴──────────┴───────────────────┘
+/// ```
+fn parse_usage_table(output: &str) -> Vec<QuotaOpenCodeUsageEntry> {
+    let mut entries = Vec::new();
+
+    for line in output.lines() {
+        // Data rows are delimited by │ (box-drawing light vertical)
+        // and contain a percentage value
+        if !line.contains('│') || !line.contains('%') {
+            continue;
+        }
+
+        // Skip header rows (┃) and border rows
+        if line.contains('┃') || line.contains('┏') || line.contains('┡') || line.contains('└')
+        {
+            continue;
+        }
+
+        if let Some(entry) = parse_usage_row(line) {
+            entries.push(entry);
+        }
+    }
+
+    entries
+}
+
+/// Parse a single data row like: `│ Rolling      │       0% │ 4 hours 4 minutes │`
+fn parse_usage_row(line: &str) -> Option<QuotaOpenCodeUsageEntry> {
+    // Split by │ and collect non-empty trimmed segments
+    let fields: Vec<&str> = line
+        .split('│')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if fields.len() != 3 {
+        return None;
+    }
+
+    let usage_type = fields[0].to_string();
+    let capacity_str = fields[1];
+    let resets_in = fields[2].to_string();
+
+    // Parse percentage: "0%", "3%", "63%"
+    let percentage_str = capacity_str.trim_end_matches('%');
+    let percentage: i32 = percentage_str.trim().parse().ok()?;
+
+    Some(QuotaOpenCodeUsageEntry {
+        usage_type,
+        percentage,
+        resets_in,
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -243,24 +269,6 @@ async fn fetch_opencode_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn reset_env_var(name: &str, old: Option<String>) {
-        match old {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
-        }
-    }
-
-    #[test]
-    fn test_get_opencode_base_url_default() {
-        temp_env::with_var("OPENCODE_BASE_URL", None::<&str>, || {
-            assert_eq!(get_opencode_base_url(), "https://opencode.ai/zen/v1");
-        });
-    }
 
     #[test]
     fn test_get_opencode_workspace_url() {
@@ -280,163 +288,91 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_openai_subscription() {
-        let json = r#"{
-            "has_payment_method": true,
-            "hard_limit_usd": 100.0,
-            "plan": {"title": "Go Plan", "id": "opencode-go-monthly"}
-        }"#;
-        let resp: OpenAiSubscriptionResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.has_payment_method, Some(true));
-        assert_eq!(resp.hard_limit_usd, Some(100.0));
+    fn test_parse_usage_table_success() {
+        let output = "\
+             Account Usage Limits              
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+┃ Usage Type   ┃ Capacity ┃ Reset Timer       ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+│ Rolling      │       0% │ 4 hours 4 minutes │
+│ Weekly       │       3% │ 4 days 16 hours   │
+│ Monthly      │      63% │ 21 days 1 hour    │
+└──────────────┴──────────┴───────────────────┘";
+
+        let entries = parse_usage_table(output);
+        assert_eq!(entries.len(), 3);
+
+        assert_eq!(entries[0].usage_type, "Rolling");
+        assert_eq!(entries[0].percentage, 0);
+        assert_eq!(entries[0].resets_in, "4 hours 4 minutes");
+
+        assert_eq!(entries[1].usage_type, "Weekly");
+        assert_eq!(entries[1].percentage, 3);
+        assert_eq!(entries[1].resets_in, "4 days 16 hours");
+
+        assert_eq!(entries[2].usage_type, "Monthly");
+        assert_eq!(entries[2].percentage, 63);
+        assert_eq!(entries[2].resets_in, "21 days 1 hour");
     }
 
     #[test]
-    fn test_parse_openai_subscription_empty() {
-        let json = "{}";
-        let resp: OpenAiSubscriptionResponse = serde_json::from_str(json).unwrap();
-        assert!(resp.hard_limit_usd.is_none());
+    fn test_parse_usage_table_empty() {
+        let entries = parse_usage_table("");
+        assert!(entries.is_empty());
     }
 
     #[test]
-    fn test_parse_openai_usage() {
-        let json = r#"{"object": "list", "total_usage": 25.50}"#;
-        let resp: OpenAiUsageResponse = serde_json::from_str(json).unwrap();
-        assert!((resp.total_usage.unwrap() - 25.50).abs() < 0.01);
+    fn test_parse_usage_table_no_data_rows() {
+        let output = "\
+             Account Usage Limits              
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+┃ Usage Type   ┃ Capacity ┃ Reset Timer       ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+└──────────────┴──────────┴───────────────────┘";
+        let entries = parse_usage_table(output);
+        assert!(entries.is_empty());
     }
 
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn test_fetch_opencode_quota_success() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/subscription"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "hard_limit_usd": 100.0,
-                "plan": {"title": "Go Plan"}
-            })))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/usage"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "total_usage": 25.50
-            })))
-            .mount(&mock_server)
-            .await;
-
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
-        std::env::set_var("OPENCODE_API_KEY", "sk-test-opencode");
-        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
-
-        let client = reqwest::Client::new();
-        let status = fetch_opencode_quota(&client).await;
-
-        reset_env_var("OPENCODE_API_KEY", old_key);
-        reset_env_var("OPENCODE_BASE_URL", old_url);
-
-        assert!(status.available);
-        let data = status.data.unwrap();
-        assert_eq!(data.plan_type, Some("Go Plan".to_string()));
-        assert_eq!(data.hard_limit_usd, Some(100.0));
-        assert!((data.total_usage_usd.unwrap() - 25.50).abs() < 0.01);
+    #[test]
+    fn test_parse_usage_row() {
+        let line = "│ Rolling      │       0% │ 4 hours 4 minutes │";
+        let entry = parse_usage_row(line).unwrap();
+        assert_eq!(entry.usage_type, "Rolling");
+        assert_eq!(entry.percentage, 0);
+        assert_eq!(entry.resets_in, "4 hours 4 minutes");
     }
 
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn test_fetch_opencode_quota_404() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let mock_server = MockServer::start().await;
+    #[test]
+    fn test_parse_usage_row_high_percentage() {
+        let line = "│ Monthly      │      95% │ 5 days 3 hours    │";
+        let entry = parse_usage_row(line).unwrap();
+        assert_eq!(entry.usage_type, "Monthly");
+        assert_eq!(entry.percentage, 95);
+        assert_eq!(entry.resets_in, "5 days 3 hours");
+    }
 
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/subscription"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&mock_server)
-            .await;
+    #[test]
+    fn test_parse_usage_row_invalid() {
+        // Header row (uses ┃ not │)
+        assert!(parse_usage_row("┃ Usage Type   ┃ Capacity ┃ Reset Timer       ┃").is_none());
+        // Border row
+        assert!(parse_usage_row("└──────────────┴──────────┴───────────────────┘").is_none());
+        // Wrong number of fields
+        assert!(parse_usage_row("│ Rolling      │       0%").is_none());
+    }
 
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
-        let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
-        std::env::set_var("OPENCODE_API_KEY", "sk-test");
-        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
-        std::env::set_var("OPENCODE_GO_WORKSPACE_ID", "wrk_TEST404");
-
-        let client = reqwest::Client::new();
-        let status = fetch_opencode_quota(&client).await;
-
-        reset_env_var("OPENCODE_API_KEY", old_key);
-        reset_env_var("OPENCODE_BASE_URL", old_url);
-        reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
-
-        assert!(!status.available);
-        let data = status.data.unwrap();
+    #[test]
+    fn test_strip_ansi_codes() {
+        // No ANSI codes
+        assert_eq!(strip_ansi_codes("hello world"), "hello world");
+        // Simple color code
+        assert_eq!(strip_ansi_codes("\x1b[31mred text\x1b[0m"), "red text");
+        // Multiple codes
         assert_eq!(
-            data.workspace_url,
-            Some("https://opencode.ai/workspace/wrk_TEST404/go".to_string())
+            strip_ansi_codes("\x1b[1;32mgreen\x1b[0m and \x1b[33myellow\x1b[0m"),
+            "green and yellow"
         );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn test_fetch_opencode_quota_no_key() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_auth = std::env::var("OPENCODE_AUTH_PATH").ok();
-        let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
-        std::env::remove_var("OPENCODE_API_KEY");
-        std::env::set_var("OPENCODE_AUTH_PATH", "/tmp/nonexistent-auth.json");
-        std::env::remove_var("OPENCODE_GO_WORKSPACE_ID");
-
-        let client = reqwest::Client::new();
-        let status = fetch_opencode_quota(&client).await;
-
-        reset_env_var("OPENCODE_API_KEY", old_key);
-        reset_env_var("OPENCODE_AUTH_PATH", old_auth);
-        reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
-
-        assert!(!status.available);
-        assert!(status.data.is_none());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn test_fetch_opencode_quota_usage_unavailable() {
-        let _lock = ENV_MUTEX.lock().unwrap();
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/subscription"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "hard_limit_usd": 100.0,
-                "plan": {"title": "Go Plan"}
-            })))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/dashboard/billing/usage"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&mock_server)
-            .await;
-
-        let old_key = std::env::var("OPENCODE_API_KEY").ok();
-        let old_url = std::env::var("OPENCODE_BASE_URL").ok();
-        std::env::set_var("OPENCODE_API_KEY", "sk-test");
-        std::env::set_var("OPENCODE_BASE_URL", mock_server.uri());
-
-        let client = reqwest::Client::new();
-        let status = fetch_opencode_quota(&client).await;
-
-        reset_env_var("OPENCODE_API_KEY", old_key);
-        reset_env_var("OPENCODE_BASE_URL", old_url);
-
-        assert!(status.available);
-        let data = status.data.unwrap();
-        assert_eq!(data.plan_type, Some("Go Plan".to_string()));
-        assert!(data.total_usage_usd.is_none());
+        // Empty string
+        assert_eq!(strip_ansi_codes(""), "");
     }
 }

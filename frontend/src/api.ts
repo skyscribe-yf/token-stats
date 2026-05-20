@@ -171,13 +171,15 @@ export interface KimiQuotaStatus {
 
 // ─── OpenCode-go Quota ────────────────────────────────────────────────────────
 
+export interface QuotaOpenCodeUsageEntry {
+  usage_type: string;
+  percentage: number;
+  resets_in: string;
+}
+
 export interface QuotaOpenCode {
   provider: string;
-  plan_type: string | null;
-  hard_limit_usd: number | null;
-  total_usage_usd: number | null;
-  usage_percent: number | null;
-  remaining_usd: number | null;
+  entries: QuotaOpenCodeUsageEntry[];
   workspace_url: string | null;
 }
 

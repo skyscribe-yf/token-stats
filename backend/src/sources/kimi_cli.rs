@@ -108,6 +108,7 @@ impl KimiCliSource {
                                         time,
                                         api_key_prefix: "N/A".to_string(),
                                         provider: "kimi".to_string(),
+                                        original_provider: None,
                                         model: model.clone(),
                                         source: "kimi-cli".to_string(),
                                         input_tokens: input_other,

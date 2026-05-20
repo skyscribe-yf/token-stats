@@ -174,6 +174,7 @@ impl CcSwitchSource {
                         time,
                         api_key_prefix: "N/A".to_string(),
                         provider,
+                        original_provider: None,
                         model: request_model,
                         source,
                         input_tokens: effective_input,

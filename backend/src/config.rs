@@ -177,6 +177,7 @@ providers = ["openai", "ainaiba"]
             time: "2026-05-17T00:00:00Z".to_string(),
             api_key_prefix: "test".to_string(),
             provider: provider.to_string(),
+            original_provider: None,
             model: "test-model".to_string(),
             source: "test".to_string(),
             input_tokens: 100,

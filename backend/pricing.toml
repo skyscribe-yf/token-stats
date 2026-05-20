@@ -14,7 +14,11 @@ kimi_per_token = 0.000000132666667
 # OpenCode 折扣：官方 10 美金可用 60 美金额度，实际成本 = 原始 cost / 6
 opencode_divisor = 6.0
 
+# Ainaba 折扣：实际成本 = 原始 cost / 40
+ainaba_divisor = 40.0
+
 # 模型价格（USD per 1_000_000 tokens）
+# 用于 codex/claude-code 等无原始 cost 的源，从 token 用量计算
 # cache_write 对 OpenAI 模型等于 input（首次缓存按正常输入计费）
 # 对 Anthropic 模型约为 input * 1.25（5 分钟缓存）
 [[model]]
@@ -58,3 +62,29 @@ input = 1.00
 output = 5.00
 cache_read = 0.10
 cache_write = 1.25
+
+# DeepSeek 模型价格（USD per 1_000_000 tokens）
+# 官方定价（CNY）：v4-pro input=4, cache_read=0.4, output=16
+#                     v4-flash input=1, cache_read=0.1, output=4
+# 转换为 USD：CNY / 6.82
+# 用于 claude-code 等无原始 cost 的源
+[[model]]
+name = "deepseek-v4-pro"
+input = 0.5865
+output = 2.346
+cache_read = 0.05865
+cache_write = 0.5865
+
+[[model]]
+name = "deepseek-v4-flash"
+input = 0.1466
+output = 0.5865
+cache_read = 0.01466
+cache_write = 0.1466
+
+[[model]]
+name = "deepseek-v4-flash-free"
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0

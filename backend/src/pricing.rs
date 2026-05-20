@@ -1,9 +1,13 @@
 //! Real-time cost calculation and pricing configuration.
 //!
-//! All stored `TokenRecord.cost` values are kept in their **original** units
-//! (USD for pi/ccswitch, raw opencode units, or 0 for derived sources).
-//! The `display_cost()` function converts them to **CNY** on-the-fly using
-//! the current `pricing.toml` configuration.
+//! Stored `TokenRecord.cost` currency varies by source/provider:
+//! - Pi provider `deepseek`: **CNY** (official DeepSeek API prices in yuan)
+//! - Pi other providers (ainaiba, opencode-go, guancha, etc.): **USD**
+//! - OpenCode DB records (source="opencode"): **USD**
+//! - Codex/Claude-code: no stored cost, computed from tokens
+//!
+//! The `display_cost()` function converts everything to **CNY** on-the-fly
+//! using the current `pricing.toml` configuration.
 
 use crate::models::TokenRecord;
 use serde::{Deserialize, Serialize};
@@ -17,6 +21,7 @@ pub struct SpecialPricing {
     pub xunfei_per_call: f64,
     pub kimi_per_token: f64,
     pub opencode_divisor: f64,
+    pub ainaba_divisor: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +53,7 @@ impl Default for PricingConfig {
                 xunfei_per_call: 199.0 / 90_000.0,
                 kimi_per_token: 199.0 / 1_500_000_000.0,
                 opencode_divisor: 6.0,
+                ainaba_divisor: 1.0,
             },
             model: Vec::new(),
         }
@@ -216,6 +222,13 @@ fn resolve_model_price<'a>(
 
 /// Compute the display cost (CNY) for a single record based on the current
 /// pricing configuration.
+///
+/// Currency conventions by Pi provider (from models.json):
+/// - `deepseek`: cost is in **CNY** (official DeepSeek API)
+/// - All other providers (ainaiba, opencode-go, guancha, xiaomi-mimo, etc.):
+///   cost is in **USD**
+/// - OpenCode DB records (source="opencode"): cost is in USD
+/// - Codex/Claude-code: no stored cost, computed from tokens using pricing.toml (USD)
 pub fn display_cost(record: &TokenRecord) -> f64 {
     let state = state_cell().lock().unwrap();
     let cfg = &state.config;
@@ -230,19 +243,45 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         return record.total_tokens as f64 * cfg.special.kimi_per_token;
     }
 
-    // 3. OpenCode: raw cost / divisor → USD → CNY
+    // 3. OpenCode source (direct from OpenCode DB): cost is in USD
+    //    Apply OpenCode Go plan divisor + convert to CNY
     if record.source == "opencode" && record.cost > 0.0 {
         return record.cost / cfg.special.opencode_divisor * cfg.usd_to_cny;
     }
 
-    // 4. Sources that already carry original USD cost (pi, ccswitch, and any
-    //    other source with a positive cost we treat as USD by default)
+    // 4. Records with stored cost (Pi source, or others that recorded cost)
     if record.cost > 0.0 {
-        return record.cost * cfg.usd_to_cny;
+        // 4a. DeepSeek official Pi provider: cost is in CNY, display as-is
+        //     Use original_provider to distinguish from opencode-go records
+        //     that were merged into deepseek vendor.
+        let effective_provider = record
+            .original_provider
+            .as_deref()
+            .unwrap_or(&record.provider);
+        if effective_provider == "deepseek" {
+            return record.cost;
+        }
+
+        // 4b. opencode-go Pi provider: cost is in USD from OpenCode API
+        //     Apply OpenCode Go plan divisor + convert to CNY
+        if effective_provider == "opencode-go" {
+            return record.cost / cfg.special.opencode_divisor * cfg.usd_to_cny;
+        }
+
+        // 4c. Other Pi providers: cost is in USD, convert to CNY
+        let mut cny = record.cost * cfg.usd_to_cny;
+
+        // Ainaba 40x discount: all records going through ainaibahub.com
+        // (provider="ainaba" after vendor merge, covering both Pi and Codex)
+        if record.provider == "ainaba" {
+            cny /= cfg.special.ainaba_divisor;
+        }
+
+        return cny;
     }
 
     // 5. Derived sources without original cost: codex, claude-code, etc.
-    //    Compute from per-model token rates.
+    //    Compute from per-model token rates. pricing.toml model prices are in USD.
     if record.source == "codex" || record.source == "claude-code" {
         if let Some(price) = resolve_model_price(&state, &record.model, &record.provider) {
             let input_cost = record.input_tokens as f64 * price.input / 1_000_000.0;
@@ -251,7 +290,12 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             let cache_write_cost =
                 record.cache_write_tokens as f64 * price.cache_write / 1_000_000.0;
             let usd = input_cost + cache_read_cost + output_cost + cache_write_cost;
-            return usd * cfg.usd_to_cny;
+            let mut cny = usd * cfg.usd_to_cny;
+            // Ainaba 40x discount: all records going through ainaibahub.com
+            if record.provider == "ainaba" {
+                cny /= cfg.special.ainaba_divisor;
+            }
+            return cny;
         }
     }
 
