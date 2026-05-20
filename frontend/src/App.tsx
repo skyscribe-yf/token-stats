@@ -391,6 +391,19 @@ export default function App() {
     resolution,
   ]);
 
+  // Filtered models derived from stats (respects source/vendor filters)
+  const filteredModels = useMemo(() => {
+    if (!stats?.by_model) return filters.models;
+    return [...new Set(stats.by_model.map((m) => m.model))].sort();
+  }, [stats, filters.models]);
+
+  // Effective model: if selectedModel is no longer in filtered set, treat as empty
+  const effectiveModel = useMemo(() => {
+    if (!selectedModel) return "";
+    if (filteredModels.includes(selectedModel)) return selectedModel;
+    return "";
+  }, [selectedModel, filteredModels]);
+
   const loadRequests = useCallback(async () => {
     if (!effectiveRange.from || !effectiveRange.to) return;
 
@@ -404,7 +417,7 @@ export default function App() {
         effectiveRange.from,
         effectiveRange.to,
         vendorFilter,
-        selectedModel || undefined,
+        effectiveModel || undefined,
         sourceFilter,
         page,
         50,
@@ -418,7 +431,7 @@ export default function App() {
     effectiveRange.from,
     effectiveRange.to,
     vendorFilter,
-    selectedModel,
+    effectiveModel,
     sourceFilter,
     page,
     tzOffset,
@@ -522,15 +535,6 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showChartFilter]);
 
-  // Reset model selection if it's no longer available after filter changes
-  useEffect(() => {
-    if (!selectedModel || !stats?.by_model) return;
-    const availableModels = new Set(stats.by_model.map((m) => m.model));
-    if (!availableModels.has(selectedModel)) {
-      setSelectedModel("");
-    }
-  }, [stats, selectedModel]);
-
   const chartData = useMemo(() => {
     if (!stats?.by_date) return [];
     return stats.by_date.map((d) => {
@@ -603,11 +607,6 @@ export default function App() {
     }
     return rows;
   }, [stats]);
-
-  const filteredModels = useMemo(() => {
-    if (!stats?.by_model) return filters.models;
-    return [...new Set(stats.by_model.map((m) => m.model))].sort();
-  }, [stats, filters.models]);
 
   const showRatioAxis = useMemo(
     () => chartMetrics.has("cacheHitRatio") || chartMetrics.has("cacheHitRatioNoXunfei"),
