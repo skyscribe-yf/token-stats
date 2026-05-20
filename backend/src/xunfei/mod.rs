@@ -473,12 +473,16 @@ mod tests {
 
     #[test]
     fn test_resolve_xunfei_sso_session_ex_from_env() {
-        temp_env::with_var("XUNFEI_SSO_SESSION_ID_EX", Some("test-session-ex-456"), || {
-            assert_eq!(
-                resolve_xunfei_sso_session_ex(),
-                Some("test-session-ex-456".to_string())
-            );
-        });
+        temp_env::with_var(
+            "XUNFEI_SSO_SESSION_ID_EX",
+            Some("test-session-ex-456"),
+            || {
+                assert_eq!(
+                    resolve_xunfei_sso_session_ex(),
+                    Some("test-session-ex-456".to_string())
+                );
+            },
+        );
     }
 
     #[test]

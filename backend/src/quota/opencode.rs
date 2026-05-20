@@ -81,7 +81,13 @@ pub async fn fetch_opencode_quota(client: &Client) -> OpenCodeQuotaStatus {
         }
     };
 
-    fetch_opencode_quota_impl(client, &workspace_id, &auth_cookie, get_opencode_workspace_url()).await
+    fetch_opencode_quota_impl(
+        client,
+        &workspace_id,
+        &auth_cookie,
+        get_opencode_workspace_url(),
+    )
+    .await
 }
 
 /// Fetch OpenCode-go subscription usage for the **EX** workspace.
@@ -110,7 +116,10 @@ pub async fn fetch_opencode_quota_ex(client: &Client) -> OpenCodeQuotaStatus {
         }
     };
 
-    let workspace_url = Some(format!("{}/workspace/{}/go", OPENCODE_BASE_URL, workspace_id));
+    let workspace_url = Some(format!(
+        "{}/workspace/{}/go",
+        OPENCODE_BASE_URL, workspace_id
+    ));
     fetch_opencode_quota_impl(client, &workspace_id, &auth_cookie, workspace_url).await
 }
 
@@ -130,10 +139,7 @@ async fn fetch_opencode_quota_impl(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
              (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
-        .header(
-            "Cookie",
-            format!("auth={}; oc_locale=en", auth_cookie),
-        )
+        .header("Cookie", format!("auth={}; oc_locale=en", auth_cookie))
         .timeout(std::time::Duration::from_secs(OPENCODE_TIMEOUT_SECS))
         .send()
         .await
@@ -237,8 +243,10 @@ fn extract_usage_entries(text: &str) -> Vec<QuotaOpenCodeUsageEntry> {
                 let after_usage = remainder[usage_pos + "Usage".len()..].trim_start();
 
                 // Read numeric digits = percentage
-                let pct_digits: String =
-                    after_usage.chars().take_while(|c| c.is_ascii_digit()).collect();
+                let pct_digits: String = after_usage
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 if pct_digits.is_empty() {
                     continue;
                 }
