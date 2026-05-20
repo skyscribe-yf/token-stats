@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 101381,
+    "output": 24211,
+    "cacheRead": 3845376,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 73,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 1882,
+  "lastToolCall": "read: /home/skyscribe/srcs/skyscribe-20260512T082928/lane-2/taskplane-tasks/miniprogram/MP-021-my-favorites-cart/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 93088,
+    "contextWindow": 262144,
+    "percent": 35.51025390625
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "batchId": "20260512T082928",
+  "mergeNumber": 1,
+  "sessionName": "orch-skyscribe-merge-1",
+  "waveIndex": 2,
+  "status": "failed",
+  "agent": {
+    "agentId": "orch-skyscribe-merge-1",
+    "status": "crashed",
+    "elapsedMs": 90226,
+    "toolCalls": 12,
+    "contextPct": 6.317901611328125,
+    "costUsd": 0,
+    "lastTool": "write: /home/skyscribe/srcs/mini-program/.pi/merge-result-w2-lane1-skyscribe-20260512T082928.json",
+    "inputTokens": 8421,
+    "outputTokens": 874,
+    "cacheReadTokens": 143616,
+    "cacheWriteTokens": 0
+  },
+  "updatedAt": 1778575450866
+}

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "batchId": "20260511T121520",
+  "wavePlan": [
+    [
+      "TP-004"
+    ]
+  ],
+  "baseBranch": "main",
+  "orchBranch": "orch/skyscribe-20260511T121520",
+  "mode": "repo",
+  "startedAt": 1778472920259,
+  "totalWaves": 1
+}

@@ -1,0 +1,20 @@
+{
+  "batchId": "20260508T094931",
+  "agentId": "orch-skyscribe-lane-1-worker",
+  "role": "worker",
+  "laneNumber": 1,
+  "taskId": "MP-001",
+  "repoId": "default",
+  "pid": 93467,
+  "parentPid": 93400,
+  "startedAt": 1778204972476,
+  "status": "exited",
+  "cwd": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T094931/lane-1",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T094931/lane-1/taskplane-tasks/miniprogram/MP-001-home-ui-mode-toggle/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T094931/lane-1/taskplane-tasks/miniprogram/MP-001-home-ui-mode-toggle/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T094931/lane-1/taskplane-tasks/miniprogram/MP-001-home-ui-mode-toggle/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T094931/lane-1/taskplane-tasks/miniprogram/MP-001-home-ui-mode-toggle/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T094931/lane-1/taskplane-tasks/miniprogram/MP-001-home-ui-mode-toggle"
+  }
+}

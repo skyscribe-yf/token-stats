@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 5095,
+    "output": 1674,
+    "cacheRead": 66816,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 8,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 122,
+  "lastToolCall": "bash: ls /home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/miniprogram/tests/ | grep admin",
+  "error": null,
+  "contextUsage": {
+    "tokens": 16046,
+    "contextWindow": 262144,
+    "percent": 6.121063232421875
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 12085,
+    "output": 2419,
+    "cacheRead": 188672,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 17,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 77,
+  "lastToolCall": "edit: /home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 23746,
+    "contextWindow": 262144,
+    "percent": 9.058380126953125
+  }
+}

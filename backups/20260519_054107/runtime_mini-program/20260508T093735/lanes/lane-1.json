@@ -1,0 +1,31 @@
+{
+  "batchId": "20260508T093735",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "EXAMPLE-001",
+  "segmentId": "EXAMPLE-001::default",
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "exited",
+    "elapsedMs": 43215,
+    "toolCalls": 11,
+    "contextPct": 2.4994,
+    "costUsd": 0.03318603999999999,
+    "lastTool": "edit: /home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world/STATUS.md",
+    "inputTokens": 23663,
+    "outputTokens": 2414,
+    "cacheReadTokens": 234752,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 3: Delivery",
+    "checked": 5,
+    "total": 5,
+    "iteration": 1,
+    "reviews": 0
+  },
+  "updatedAt": 1778204300028
+}

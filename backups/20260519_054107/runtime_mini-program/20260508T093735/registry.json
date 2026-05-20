@@ -1,0 +1,74 @@
+{
+  "batchId": "20260508T093735",
+  "updatedAt": 1778204362086,
+  "agents": {
+    "orch-skyscribe-lane-1-worker": {
+      "batchId": "20260508T093735",
+      "agentId": "orch-skyscribe-lane-1-worker",
+      "role": "worker",
+      "laneNumber": 1,
+      "taskId": "EXAMPLE-001",
+      "repoId": "default",
+      "pid": 89445,
+      "parentPid": 89374,
+      "startedAt": 1778204256807,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world"
+      }
+    },
+    "orch-skyscribe-lane-2-worker": {
+      "batchId": "20260508T093735",
+      "agentId": "orch-skyscribe-lane-2-worker",
+      "role": "worker",
+      "laneNumber": 2,
+      "taskId": "EXAMPLE-002",
+      "repoId": "default",
+      "pid": 89451,
+      "parentPid": 89374,
+      "startedAt": 1778204256816,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke"
+      }
+    },
+    "orch-skyscribe-merge-1": {
+      "batchId": "20260508T093735",
+      "agentId": "orch-skyscribe-merge-1",
+      "role": "merger",
+      "laneNumber": null,
+      "taskId": null,
+      "repoId": "default",
+      "pid": 90099,
+      "parentPid": 89374,
+      "startedAt": 1778204321652,
+      "status": "killed",
+      "cwd": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/merge",
+      "packet": null
+    },
+    "orch-skyscribe-merge-2": {
+      "batchId": "20260508T093735",
+      "agentId": "orch-skyscribe-merge-2",
+      "role": "merger",
+      "laneNumber": null,
+      "taskId": null,
+      "repoId": "default",
+      "pid": 90172,
+      "parentPid": 89374,
+      "startedAt": 1778204344009,
+      "status": "killed",
+      "cwd": "/home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/merge",
+      "packet": null
+    }
+  }
+}

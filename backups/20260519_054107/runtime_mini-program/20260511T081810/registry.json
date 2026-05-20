@@ -1,0 +1,120 @@
+{
+  "batchId": "20260511T081810",
+  "updatedAt": 1778467476387,
+  "agents": {
+    "orch-skyscribe-lane-1-worker": {
+      "batchId": "20260511T081810",
+      "agentId": "orch-skyscribe-lane-1-worker",
+      "role": "worker",
+      "laneNumber": 1,
+      "taskId": "MP-003",
+      "repoId": "default",
+      "pid": 33490,
+      "parentPid": 27432,
+      "startedAt": 1778462224487,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-1",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-1/taskplane-tasks/miniprogram/MP-003-admin-entry/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-1/taskplane-tasks/miniprogram/MP-003-admin-entry/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-1/taskplane-tasks/miniprogram/MP-003-admin-entry/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-1/taskplane-tasks/miniprogram/MP-003-admin-entry/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-1/taskplane-tasks/miniprogram/MP-003-admin-entry"
+      }
+    },
+    "orch-skyscribe-lane-2-worker": {
+      "batchId": "20260511T081810",
+      "agentId": "orch-skyscribe-lane-2-worker",
+      "role": "worker",
+      "laneNumber": 2,
+      "taskId": "MP-005",
+      "repoId": "default",
+      "pid": 44363,
+      "parentPid": 27432,
+      "startedAt": 1778466731524,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business"
+      }
+    },
+    "orch-skyscribe-lane-3-worker": {
+      "batchId": "20260511T081810",
+      "agentId": "orch-skyscribe-lane-3-worker",
+      "role": "worker",
+      "laneNumber": 3,
+      "taskId": "MP-006",
+      "repoId": "default",
+      "pid": 41942,
+      "parentPid": 27432,
+      "startedAt": 1778465666559,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-3",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops"
+      }
+    },
+    "orch-skyscribe-lane-4-worker": {
+      "batchId": "20260511T081810",
+      "agentId": "orch-skyscribe-lane-4-worker",
+      "role": "worker",
+      "laneNumber": 4,
+      "taskId": "MP-007",
+      "repoId": "default",
+      "pid": 43849,
+      "parentPid": 27432,
+      "startedAt": 1778466573408,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-4",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing"
+      }
+    },
+    "orch-skyscribe-lane-5-worker": {
+      "batchId": "20260511T081810",
+      "agentId": "orch-skyscribe-lane-5-worker",
+      "role": "worker",
+      "laneNumber": 5,
+      "taskId": "MP-008",
+      "repoId": "default",
+      "pid": 44468,
+      "parentPid": 27432,
+      "startedAt": 1778466821555,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai"
+      }
+    },
+    "orch-skyscribe-merge-1": {
+      "batchId": "20260511T081810",
+      "agentId": "orch-skyscribe-merge-1",
+      "role": "merger",
+      "laneNumber": null,
+      "taskId": null,
+      "repoId": "default",
+      "pid": 44880,
+      "parentPid": 44854,
+      "startedAt": 1778467171609,
+      "status": "running",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/merge",
+      "packet": null
+    }
+  }
+}

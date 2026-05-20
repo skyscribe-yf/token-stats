@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 10113,
+    "output": 2450,
+    "cacheRead": 177664,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 15,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 137,
+  "lastToolCall": "bash: cd /home/skyscribe/srcs/skyscribe-20260511T194206/lane-3 && git add -A && git commit -m \"chore(TP-004): iteration 3 verification - all suites pass, task complete\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 21504,
+    "contextWindow": 262144,
+    "percent": 8.203125
+  }
+}

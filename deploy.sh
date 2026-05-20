@@ -7,10 +7,44 @@ echo "🚀 Token Stats Dashboard — Deploy"
 echo "=================================="
 echo ""
 
-# ── 1. Stop old backend ──────────────────────────────────────────────
+# ── 1. Stop old backend & clean up port ──────────────────────────────
 echo "🛑 Stopping old backend..."
+
+BINARY_NAME="token-stats-backend"
+PORT="3000"
+
+# 1a. Stop systemd service
 sudo systemctl stop token-stats 2>/dev/null || true
-sleep 1
+
+# 1b. Kill any stray processes matching the binary name (outside systemd)
+PIDS=$(pgrep -f "$BINARY_NAME" || true)
+if [ -n "$PIDS" ]; then
+    echo "⚠️  Found stray $BINARY_NAME processes: $PIDS"
+    echo "$PIDS" | xargs -r kill -TERM 2>/dev/null || true
+    sleep 2
+    # Force kill if still alive
+    PIDS_STILL=$(pgrep -f "$BINARY_NAME" || true)
+    if [ -n "$PIDS_STILL" ]; then
+        echo "$PIDS_STILL" | xargs -r kill -KILL 2>/dev/null || true
+        sleep 1
+    fi
+fi
+
+# 1c. Wait until the TCP port is fully released
+WAIT_MAX=15
+WAIT_COUNT=0
+while ss -tlnp 2>/dev/null | grep -q ":$PORT "; do
+    WAIT_COUNT=$((WAIT_COUNT + 1))
+    if [ "$WAIT_COUNT" -ge "$WAIT_MAX" ]; then
+        echo "❌ Port $PORT is still in use after ${WAIT_MAX}s — aborting"
+        ss -tlnp | grep ":$PORT "
+        exit 1
+    fi
+    echo "⏳ Waiting for port $PORT to be released... ($WAIT_COUNT/$WAIT_MAX)"
+    sleep 1
+done
+
+echo "✅ Port $PORT is clean"
 
 # ── 2. Build backend ─────────────────────────────────────────────────
 echo "🔧 Building Rust backend..."

@@ -1,0 +1,40 @@
+{
+  "batchId": "20260511T062757",
+  "updatedAt": 1778459456016,
+  "agents": {
+    "orch-skyscribe-lane-1-worker": {
+      "batchId": "20260511T062757",
+      "agentId": "orch-skyscribe-lane-1-worker",
+      "role": "worker",
+      "laneNumber": 1,
+      "taskId": "MP-002",
+      "repoId": "default",
+      "pid": 19743,
+      "parentPid": 19604,
+      "startedAt": 1778455149395,
+      "status": "running",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T062757/lane-1",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/miniprogram/MP-002-admin-utils/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/miniprogram/MP-002-admin-utils/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/miniprogram/MP-002-admin-utils/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/miniprogram/MP-002-admin-utils/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/miniprogram/MP-002-admin-utils"
+      }
+    },
+    "orch-skyscribe-merge-1": {
+      "batchId": "20260511T062757",
+      "agentId": "orch-skyscribe-merge-1",
+      "role": "merger",
+      "laneNumber": null,
+      "taskId": null,
+      "repoId": "default",
+      "pid": 19630,
+      "parentPid": 19604,
+      "startedAt": 1778455108603,
+      "status": "killed",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T062757/merge",
+      "packet": null
+    }
+  }
+}

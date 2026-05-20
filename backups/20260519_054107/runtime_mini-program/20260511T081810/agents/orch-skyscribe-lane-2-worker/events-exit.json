@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 5583,
+    "output": 1109,
+    "cacheRead": 105216,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 8,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 107,
+  "lastToolCall": "bash: test -f /home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/.task-wrap-up && echo \"WRAP_UP_SIGNAL\" || echo \"No wrap-up signal\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 19826,
+    "contextWindow": 262144,
+    "percent": 7.563018798828125
+  }
+}

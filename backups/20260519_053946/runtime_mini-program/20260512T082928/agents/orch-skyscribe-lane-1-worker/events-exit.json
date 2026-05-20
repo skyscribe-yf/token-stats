@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 51789,
+    "output": 10904,
+    "cacheRead": 1141504,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 40,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 791,
+  "lastToolCall": "bash: cd /home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel && test -f .task-wrap-up && echo \"WRAP_UP_SIGNAL\" || echo \"No wrap-up signal\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 49741,
+    "contextWindow": 262144,
+    "percent": 18.974685668945312
+  }
+}

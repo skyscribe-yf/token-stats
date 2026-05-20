@@ -1,0 +1,94 @@
+{
+  "batchId": "20260511T194206",
+  "updatedAt": 1778544701770,
+  "agents": {
+    "orch-skyscribe-lane-1-worker": {
+      "batchId": "20260511T194206",
+      "agentId": "orch-skyscribe-lane-1-worker",
+      "role": "worker",
+      "laneNumber": 1,
+      "taskId": "MP-014",
+      "repoId": "default",
+      "pid": 68843,
+      "parentPid": 66325,
+      "startedAt": 1778538775391,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle"
+      }
+    },
+    "orch-skyscribe-lane-2-worker": {
+      "batchId": "20260511T194206",
+      "agentId": "orch-skyscribe-lane-2-worker",
+      "role": "worker",
+      "laneNumber": 2,
+      "taskId": "MP-010",
+      "repoId": "default",
+      "pid": 41895,
+      "parentPid": 66325,
+      "startedAt": 1778503553429,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure"
+      }
+    },
+    "orch-skyscribe-lane-3-worker": {
+      "batchId": "20260511T194206",
+      "agentId": "orch-skyscribe-lane-3-worker",
+      "role": "worker",
+      "laneNumber": 3,
+      "taskId": "TP-004",
+      "repoId": "default",
+      "pid": 81547,
+      "parentPid": 66325,
+      "startedAt": 1778500374091,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-3",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-3/taskplane-tasks/TP-004-full-regression/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-3/taskplane-tasks/TP-004-full-regression/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-3/taskplane-tasks/TP-004-full-regression/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-3/taskplane-tasks/TP-004-full-regression/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-3/taskplane-tasks/TP-004-full-regression"
+      }
+    },
+    "orch-skyscribe-merge-1": {
+      "batchId": "20260511T194206",
+      "agentId": "orch-skyscribe-merge-1",
+      "role": "merger",
+      "laneNumber": null,
+      "taskId": null,
+      "repoId": "default",
+      "pid": 71436,
+      "parentPid": 66325,
+      "startedAt": 1778544627358,
+      "status": "killed",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T194206/merge",
+      "packet": null
+    },
+    "orch-skyscribe-merge-2": {
+      "batchId": "20260511T194206",
+      "agentId": "orch-skyscribe-merge-2",
+      "role": "merger",
+      "laneNumber": null,
+      "taskId": null,
+      "repoId": "default",
+      "pid": 54458,
+      "parentPid": 66325,
+      "startedAt": 1778508061802,
+      "status": "killed",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T194206/merge",
+      "packet": null
+    }
+  }
+}

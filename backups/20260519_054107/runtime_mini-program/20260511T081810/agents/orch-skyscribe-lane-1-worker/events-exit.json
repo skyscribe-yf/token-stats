@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 6083,
+    "output": 1518,
+    "cacheRead": 126720,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 7,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 59,
+  "lastToolCall": "bash: cd /home/skyscribe/srcs/skyscribe-20260511T081810/lane-1 && git add taskplane-tasks/miniprogram/MP-003-admin-entry/STATUS.md && git commit -m \"chore(MP-003): final status update - all steps complete\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 20236,
+    "contextWindow": 262144,
+    "percent": 7.71942138671875
+  }
+}

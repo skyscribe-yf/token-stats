@@ -1,0 +1,21 @@
+{
+  "batchId": "20260511T081810",
+  "mergeNumber": 1,
+  "sessionName": "orch-skyscribe-merge-1",
+  "waveIndex": 2,
+  "status": "running",
+  "agent": {
+    "agentId": "orch-skyscribe-merge-1",
+    "status": "running",
+    "elapsedMs": 304895,
+    "toolCalls": 38,
+    "contextPct": 8.654022216796875,
+    "costUsd": 0,
+    "lastTool": "bash: git log --oneline --merges -5",
+    "inputTokens": 18407,
+    "outputTokens": 7772,
+    "cacheReadTokens": 584192,
+    "cacheWriteTokens": 0
+  },
+  "updatedAt": 1778467476399
+}

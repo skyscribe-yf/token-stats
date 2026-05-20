@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 5425,
+    "output": 830,
+    "cacheRead": 107264,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 7,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 89,
+  "lastToolCall": "read: /home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/TP-003-backend-contract-gaps/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 19900,
+    "contextWindow": 262144,
+    "percent": 7.59124755859375
+  }
+}

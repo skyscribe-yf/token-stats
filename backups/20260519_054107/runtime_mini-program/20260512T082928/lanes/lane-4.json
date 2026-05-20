@@ -1,0 +1,31 @@
+{
+  "batchId": "20260512T082928",
+  "laneNumber": 4,
+  "laneId": "lane-4",
+  "repoId": "default",
+  "taskId": "AD-010",
+  "segmentId": "AD-010::default",
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-4-worker",
+    "status": "exited",
+    "elapsedMs": 0,
+    "toolCalls": 0,
+    "contextPct": 0,
+    "costUsd": 0,
+    "lastTool": "",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Unknown",
+    "checked": 0,
+    "total": 0,
+    "iteration": 0,
+    "reviews": 0
+  },
+  "updatedAt": 1778545771150
+}

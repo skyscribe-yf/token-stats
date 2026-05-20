@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 23259,
+    "output": 2247,
+    "cacheRead": 162048,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 15,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 119,
+  "lastToolCall": "bash: cd /home/skyscribe/srcs/skyscribe-20260511T104716/lane-2 && git add taskplane-tasks/miniprogram/MP-009-backup-restore/STATUS.md && git commit -m \"chore(MP-009): iteration 3 status sync — task already complete\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 21575,
+    "contextWindow": 262144,
+    "percent": 8.230209350585938
+  }
+}

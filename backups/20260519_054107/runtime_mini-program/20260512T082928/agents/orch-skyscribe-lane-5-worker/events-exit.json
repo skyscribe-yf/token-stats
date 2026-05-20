@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 18617,
+    "output": 3219,
+    "cacheRead": 276736,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 18,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 214,
+  "lastToolCall": "bash: git add taskplane-tasks/TP-004-full-regression/STATUS.md && git commit -m \"chore(TP-004): finalize STATUS.md current step\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 34745,
+    "contextWindow": 262144,
+    "percent": 13.254165649414062
+  }
+}

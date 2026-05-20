@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T104716",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "MP-004",
+  "segmentId": "MP-004::default",
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "crashed",
+    "elapsedMs": 913771,
+    "toolCalls": 33,
+    "contextPct": 12.913131713867188,
+    "costUsd": 0,
+    "lastTool": "bash: cd miniprogram && npm test 2>&1 | tail -20",
+    "inputTokens": 36744,
+    "outputTokens": 8268,
+    "cacheReadTokens": 792320,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 4: Run tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 3,
+    "reviews": 0
+  },
+  "updatedAt": 1778470747002
+}

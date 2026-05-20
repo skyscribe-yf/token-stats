@@ -1,0 +1,31 @@
+{
+  "batchId": "20260508T093735",
+  "laneNumber": 2,
+  "laneId": "lane-2",
+  "repoId": "default",
+  "taskId": "EXAMPLE-002",
+  "segmentId": "EXAMPLE-002::default",
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-2-worker",
+    "status": "exited",
+    "elapsedMs": 48118,
+    "toolCalls": 13,
+    "contextPct": 2.4866,
+    "costUsd": 0.03494243999999999,
+    "lastTool": "read: /home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke/STATUS.md",
+    "inputTokens": 24045,
+    "outputTokens": 2602,
+    "cacheReadTokens": 284672,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 3: Delivery",
+    "checked": 5,
+    "total": 5,
+    "iteration": 1,
+    "reviews": 0
+  },
+  "updatedAt": 1778204304937
+}

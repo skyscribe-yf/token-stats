@@ -1,0 +1,20 @@
+{
+  "batchId": "20260511T081810",
+  "agentId": "orch-skyscribe-lane-5-worker",
+  "role": "worker",
+  "laneNumber": 5,
+  "taskId": "MP-008",
+  "repoId": "default",
+  "pid": 44468,
+  "parentPid": 27432,
+  "startedAt": 1778466821555,
+  "status": "exited",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/taskplane-tasks/miniprogram/MP-008-users-roles-ai"
+  }
+}

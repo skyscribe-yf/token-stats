@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T081810",
+  "laneNumber": 4,
+  "laneId": "lane-4",
+  "repoId": "default",
+  "taskId": "MP-007",
+  "segmentId": null,
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-4-worker",
+    "status": "crashed",
+    "elapsedMs": 181240,
+    "toolCalls": 15,
+    "contextPct": 8.477401733398438,
+    "costUsd": 0,
+    "lastTool": "read: /home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing/STATUS.md",
+    "inputTokens": 26058,
+    "outputTokens": 3269,
+    "cacheReadTokens": 265984,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 5: Run tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 2,
+    "reviews": 0
+  },
+  "updatedAt": 1778466754661
+}

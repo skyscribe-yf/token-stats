@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T081810",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "MP-003",
+  "segmentId": null,
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "crashed",
+    "elapsedMs": 58821,
+    "toolCalls": 7,
+    "contextPct": 7.71942138671875,
+    "costUsd": 0,
+    "lastTool": "bash: cd /home/skyscribe/srcs/skyscribe-20260511T081810/lane-1 && git add taskplane-tasks/miniprogram/MP-003-admin-entry/STATUS.md && git commit -m \"chore(MP-003): final status update - all steps complete\"",
+    "inputTokens": 6083,
+    "outputTokens": 1518,
+    "cacheReadTokens": 126720,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 7: Run tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 3,
+    "reviews": 0
+  },
+  "updatedAt": 1778462283318
+}

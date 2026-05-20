@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T194206",
+  "laneNumber": 3,
+  "laneId": "lane-3",
+  "repoId": "default",
+  "taskId": "TP-004",
+  "segmentId": "TP-004::default",
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-3-worker",
+    "status": "crashed",
+    "elapsedMs": 137180,
+    "toolCalls": 15,
+    "contextPct": 8.203125,
+    "costUsd": 0,
+    "lastTool": "bash: cd /home/skyscribe/srcs/skyscribe-20260511T194206/lane-3 && git add -A && git commit -m \"chore(TP-004): iteration 3 verification - all suites pass, task complete\"",
+    "inputTokens": 10113,
+    "outputTokens": 2450,
+    "cacheReadTokens": 177664,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 5: Update documentation",
+    "checked": 0,
+    "total": 0,
+    "iteration": 3,
+    "reviews": 0
+  },
+  "updatedAt": 1778500511283
+}

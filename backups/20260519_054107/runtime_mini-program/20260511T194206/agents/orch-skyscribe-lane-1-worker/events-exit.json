@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 91256,
+    "output": 34104,
+    "cacheRead": 4513536,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 88,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 5844,
+  "lastToolCall": "bash: git log --oneline -10",
+  "error": null,
+  "contextUsage": {
+    "tokens": 89724,
+    "contextWindow": 262144,
+    "percent": 34.22698974609375
+  }
+}

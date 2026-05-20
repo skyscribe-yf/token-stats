@@ -1,0 +1,46 @@
+{
+  "batchId": "20260511T104716",
+  "updatedAt": 1778472709267,
+  "agents": {
+    "orch-skyscribe-lane-1-worker": {
+      "batchId": "20260511T104716",
+      "agentId": "orch-skyscribe-lane-1-worker",
+      "role": "worker",
+      "laneNumber": 1,
+      "taskId": "MP-004",
+      "repoId": "default",
+      "pid": 48975,
+      "parentPid": 45228,
+      "startedAt": 1778469833220,
+      "status": "exited",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-1",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-1/taskplane-tasks/miniprogram/MP-004-dashboard-ai/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-1/taskplane-tasks/miniprogram/MP-004-dashboard-ai/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-1/taskplane-tasks/miniprogram/MP-004-dashboard-ai/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-1/taskplane-tasks/miniprogram/MP-004-dashboard-ai/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-1/taskplane-tasks/miniprogram/MP-004-dashboard-ai"
+      }
+    },
+    "orch-skyscribe-lane-2-worker": {
+      "batchId": "20260511T104716",
+      "agentId": "orch-skyscribe-lane-2-worker",
+      "role": "worker",
+      "laneNumber": 2,
+      "taskId": "MP-009",
+      "repoId": "default",
+      "pid": 51951,
+      "parentPid": 45228,
+      "startedAt": 1778472584841,
+      "status": "running",
+      "cwd": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-2",
+      "packet": {
+        "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-2/taskplane-tasks/miniprogram/MP-009-backup-restore/PROMPT.md",
+        "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-2/taskplane-tasks/miniprogram/MP-009-backup-restore/STATUS.md",
+        "donePath": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-2/taskplane-tasks/miniprogram/MP-009-backup-restore/.DONE",
+        "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-2/taskplane-tasks/miniprogram/MP-009-backup-restore/.reviews",
+        "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T104716/lane-2/taskplane-tasks/miniprogram/MP-009-backup-restore"
+      }
+    }
+  }
+}
