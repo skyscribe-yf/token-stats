@@ -516,6 +516,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_missing_workspace_id() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
@@ -534,6 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_fetch_opencode_quota_missing_auth_cookie() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();

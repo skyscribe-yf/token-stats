@@ -170,19 +170,20 @@ impl XunfeiFetcher {
     pub async fn fetch_all_statuses(&self) -> XunfeiMultiStatus {
         let (primary, ex) = tokio::join!(self.fetch_status(), self.fetch_status_ex());
 
-        let mut accounts = Vec::with_capacity(2);
-        accounts.push(XunfeiAccountStatus {
-            label: "primary".to_string(),
-            available: primary.available,
-            data: primary.data,
-            error: primary.error,
-        });
-        accounts.push(XunfeiAccountStatus {
-            label: "ex".to_string(),
-            available: ex.available,
-            data: ex.data,
-            error: ex.error,
-        });
+        let accounts = vec![
+            XunfeiAccountStatus {
+                label: "primary".to_string(),
+                available: primary.available,
+                data: primary.data,
+                error: primary.error,
+            },
+            XunfeiAccountStatus {
+                label: "ex".to_string(),
+                available: ex.available,
+                data: ex.data,
+                error: ex.error,
+            },
+        ];
 
         XunfeiMultiStatus { accounts }
     }
