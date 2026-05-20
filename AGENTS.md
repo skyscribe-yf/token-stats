@@ -32,7 +32,7 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
   - **ccswitch fallback**: `~/.cc-switch/cc-switch.db` (SQLite) — only loaded if `USE_CC_SWITCH` env var is set
 
 ### Quota Data Sources
-- **OpenCode-go subscription**: Fetched via the `opencode-usage` Python CLI tool (not direct HTTP). The backend runs `opencode-usage` as a subprocess with a timeout, parses the Rich table output, and converts to structured entries (rolling/weekly/monthly percentage + reset timer). Handles: tool not installed, tool blocking for auth input (timeout), and successful output.
+- **OpenCode-go subscription**: Fetched directly via HTTP to the workspace dashboard (`https://opencode.ai/workspace/{id}/go`) using `reqwest` + `scraper` for HTML parsing. Reads `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE` from environment variables. Extracts Rolling/Weekly/Monthly usage percentages and reset timers from the `<div data-slot="usage">` element.
 
 ### Frontend (`frontend/`)
 - Vite + React 19 + TypeScript
@@ -225,6 +225,8 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `USE_CC_SWITCH` | unset | Set to any value to also load legacy cc-switch SQLite data |
 | `KIMI_SESSIONS_PATH` | `~/.kimi/sessions` | Override Kimi sessions directory |
 | `VENDOR_MERGE_CONFIG` | auto-detect | Override vendor merge config path (see below) |
+| `OPENCODE_GO_WORKSPACE_ID` | unset | OpenCode-go workspace ID (required for quota display) |
+| `OPENCODE_GO_AUTH_COOKIE` | unset | OpenCode-go `auth` cookie value (required for quota display) |
 
 ---
 
