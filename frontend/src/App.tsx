@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
   Download,
   Upload,
+  Receipt,
 } from "lucide-react";
 import {
   fetchStats,
@@ -31,6 +32,8 @@ import {
   fetchQuota,
   fetchXunfei,
   fetchRefresh,
+  fetchPricing,
+  type PricingConfig,
   exportBackup,
   restoreBackup,
   type StatsResponse,
@@ -294,6 +297,10 @@ export default function App() {
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
+  // Pricing logic modal
+  const [showPricing, setShowPricing] = useState(false);
+  const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
+
   const tzOffset = useMemo(() => -new Date().getTimezoneOffset(), []);
 
   const effectiveRange = appliedRange;
@@ -508,6 +515,19 @@ export default function App() {
     };
     doRefresh();
   }, [loadData, loadRequests]);
+
+  // Load pricing config once on mount
+  useEffect(() => {
+    const loadPricing = async () => {
+      try {
+        const cfg = await fetchPricing();
+        setPricingConfig(cfg);
+      } catch {
+        /* pricing config is optional */
+      }
+    };
+    loadPricing();
+  }, []);
 
   // Close custom panel on outside click
   useEffect(() => {
@@ -856,6 +876,15 @@ export default function App() {
             <div className="flex-1" />
 
             <button
+              onClick={() => setShowPricing(true)}
+              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+              title="查看计价逻辑"
+            >
+              <Receipt className="w-3 h-3" />
+              计价
+            </button>
+
+            <button
               onClick={async () => {
                 try {
                   const res = await exportBackup();
@@ -947,6 +976,72 @@ export default function App() {
               {restoreError && (
                 <div className="mt-2 text-xs text-rose-700">{restoreError}</div>
               )}
+            </div>
+          )}
+
+          {/* Pricing logic modal */}
+          {showPricing && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+              <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-bold text-slate-800">计价逻辑</h2>
+                  <button
+                    onClick={() => setShowPricing(false)}
+                    className="p-1 rounded hover:bg-slate-100 text-slate-400"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                {pricingConfig ? (
+                  <div className="space-y-4 text-xs text-slate-600">
+                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                      <p className="font-semibold text-slate-700 mb-1">汇率</p>
+                      <p>1 USD = {pricingConfig.usd_to_cny} CNY（汇率日期: {pricingConfig.rate_date}）</p>
+                    </div>
+
+                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                      <p className="font-semibold text-slate-700 mb-1">特殊计费规则</p>
+                      <ul className="list-disc list-inside space-y-0.5">
+                        <li>讯飞 (xunfei): 按调用次数计费，每次 ¥{pricingConfig.special.xunfei_per_call.toFixed(6)}（199元 / 90000次）</li>
+                        <li>Kimi CLI: 按 Token 估算，每 Token ¥{pricingConfig.special.kimi_per_token.toExponential(3)}（199元 / 15亿 Token）</li>
+                        <li>OpenCode: 原始 cost ÷ {pricingConfig.special.opencode_divisor} 后再按汇率换算（10美金可用60美金额度）</li>
+                        <li>pi / ccswitch: 原始 USD cost 直接按汇率换算为 CNY</li>
+                        <li>codex / claude-code: 无原始 cost，按下方模型价格表计算后换算</li>
+                      </ul>
+                    </div>
+
+                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                      <p className="font-semibold text-slate-700 mb-1">模型价格表（USD / 1M tokens）</p>
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="text-slate-400 border-b border-slate-200">
+                            <th className="pb-1 font-medium">模型</th>
+                            <th className="pb-1 font-medium">Input</th>
+                            <th className="pb-1 font-medium">Output</th>
+                            <th className="pb-1 font-medium">Cache</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pricingConfig.model.map((m) => (
+                            <tr key={m.name} className="border-b border-slate-100 last:border-0">
+                              <td className="py-1 font-medium text-slate-700">{m.name}</td>
+                              <td className="py-1">${m.input}</td>
+                              <td className="py-1">${m.output}</td>
+                              <td className="py-1">${m.cache_read}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <p className="text-[10px] text-slate-400">
+                      修改 backend/pricing.toml 后运行 ./scripts/reload-pricing.sh 即可生效，无需重启服务。
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">加载中...</p>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1203,13 +1298,13 @@ export default function App() {
                           {quota.opencode_go.data.plan_type || "No Plan"}
                         </span>
                         {quota.opencode_go.data.hard_limit_usd != null && (
-                          <span className="text-slate-400">上限 ${quota.opencode_go.data.hard_limit_usd.toFixed(0)}</span>
+                          <span className="text-slate-400">上限 ¥{(quota.opencode_go.data.hard_limit_usd / 6 * (pricingConfig?.usd_to_cny ?? 6.82)).toFixed(0)}</span>
                         )}
                       </div>
                       {quota.opencode_go.data.usage_percent != null ? (
                         <div>
                           <div className="flex justify-between text-[10px] text-slate-500">
-                            <span>已用 ${quota.opencode_go.data.total_usage_usd?.toFixed(2) ?? "?"}</span>
+                            <span>已用 {quota.opencode_go.data.total_usage_usd != null ? `¥${((quota.opencode_go.data.total_usage_usd / 6) * (pricingConfig?.usd_to_cny ?? 6.82)).toFixed(2)}` : "?"}</span>
                             <span>{quota.opencode_go.data.usage_percent.toFixed(0)}%</span>
                           </div>
                           <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
@@ -1218,7 +1313,7 @@ export default function App() {
                             />
                           </div>
                           {quota.opencode_go.data.remaining_usd != null && (
-                            <span className="text-[10px] text-slate-500">剩余 ${quota.opencode_go.data.remaining_usd.toFixed(2)}</span>
+                            <span className="text-[10px] text-slate-500">剩余 ¥{(quota.opencode_go.data.remaining_usd / 6 * (pricingConfig?.usd_to_cny ?? 6.82)).toFixed(2)}</span>
                           )}
                         </div>
                       ) : quota.opencode_go.data.workspace_url ? (

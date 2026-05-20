@@ -126,6 +126,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/filters", get(routes::get_filters))
         .route("/api/quota", get(routes::get_quota))
         .route("/api/xunfei", get(routes::get_xunfei))
+        .route("/api/pricing", get(routes::get_pricing))
+        .route("/api/pricing/reload", post(routes::reload_pricing))
         .route("/api/export", get(routes::export_data))
         .route("/api/refresh", post(routes::refresh_data))
         .route("/api/restore", post(routes::restore_backup));

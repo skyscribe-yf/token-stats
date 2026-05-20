@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::pricing;
 use crate::time::TimeBound;
 use chrono::{FixedOffset, Timelike, Utc};
 use std::collections::{HashMap, HashSet};
@@ -25,7 +26,7 @@ impl StatAccum {
         self.cache_read_tokens += r.cache_read_tokens;
         self.cache_write_tokens += r.cache_write_tokens;
         self.total_tokens += r.total_tokens;
-        self.cost += r.cost;
+        self.cost += pricing::display_cost(r);
     }
 
     fn cache_hit_ratio(&self) -> f64 {
@@ -207,7 +208,7 @@ pub fn paginate_requests(
                 cache_read_tokens: r.cache_read_tokens,
                 cache_write_tokens: r.cache_write_tokens,
                 total_tokens: r.total_tokens,
-                cost: r.cost,
+                cost: pricing::display_cost(r),
                 cache_hit_ratio: r.cache_hit_ratio(),
             }
         })
