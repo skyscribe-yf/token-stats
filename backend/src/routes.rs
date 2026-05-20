@@ -1,6 +1,7 @@
 use crate::aggregator;
 use crate::app::AppState;
 use crate::models::*;
+use crate::pricing;
 use crate::quota::{QuotaFetcher, QuotaResponse};
 use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
@@ -192,6 +193,15 @@ pub async fn get_xunfei() -> impl IntoResponse {
     let fetcher = XunfeiFetcher::new();
     let status = fetcher.fetch_status().await;
     Json(status)
+}
+
+pub async fn get_pricing() -> impl IntoResponse {
+    Json(pricing::get_config())
+}
+
+pub async fn reload_pricing() -> impl IntoResponse {
+    pricing::reload();
+    Json(serde_json::json!({ "success": true }))
 }
 
 // ─── Restore ─────────────────────────────────────────────────────────────────

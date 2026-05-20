@@ -52,7 +52,8 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 | `src/models.rs` | All data structs: `TokenRecord`, `StatsResponse`, `AggregatedStats`, etc. |
 | `src/parser.rs` | Parse all 3 data sources (JSONL + SQLite) |
 | `src/aggregator.rs` | Filter, aggregate, sort, paginate records |
-| `src/routes.rs` | Axum handlers: `/api/stats`, `/api/requests`, `/api/filters` |
+| `src/routes.rs` | Axum handlers: `/api/stats`, `/api/requests`, `/api/filters`, `/api/pricing` |
+| `src/pricing.rs` | Real-time cost calculation: model prices, USD→CNY conversion, special rules (xunfei per-call, kimi per-token, opencode /6) |
 
 ### Frontend
 
@@ -73,6 +74,8 @@ All endpoints accept `tz_offset` (minutes from UTC, e.g. `480` for UTC+8).
 | `GET /api/stats?from=&to=&source=&provider=&tz_offset=` | Full aggregation: overall + by_vendor + by_date + by_model + by_source |
 | `GET /api/requests?from=&to=&provider=&model=&source=&page=&limit=&tz_offset=` | Paginated raw requests, sorted desc by time |
 | `GET /api/filters` | Available vendors, models, sources |
+| `GET /api/pricing` | Current pricing config (models, exchange rate, special rules) |
+| `POST /api/pricing/reload` | Reload `pricing.toml` without restarting |
 
 ### Time Bound Formats
 `from`/`to` accept:
@@ -153,7 +156,7 @@ providers = ["openai", "ainaiba"]
 1. **Single-file app** — `App.tsx` is large (~900 lines) by design; all components are inline closures.
 2. **Chinese UI labels** — Dashboard uses Chinese text (`ZH` constant object). Keep new UI text in Chinese.
 3. **Source-aware colors** — Each tool source has a fixed color in `SOURCE_COLORS`. Extend this when adding new sources.
-4. **Cost display** — Non-pi sources with zero cost show "N/A" (Kimi CLI doesn't report cost).
+4. **Cost display** — All costs are displayed in **CNY (¥)**. Backend `TokenRecord.cost` keeps the *original* unit (USD for pi/ccswitch, raw for opencode, or 0 for derived sources). The `pricing::display_cost()` function converts to CNY on-the-fly using `pricing.toml`. Non-pi sources with zero computed cost show "N/A".
 5. **Preset time ranges** — Today, 6h, 12h, 1d, 3d, 7d, 14d, 30d, all, custom.
 
 ---
@@ -251,6 +254,8 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 2. **Base path** — Frontend runs at `/token-stats/`, not root. API calls use `/token-stats/api/*`. Vite `base: "/token-stats/"` handles this.
 3. **nginx strips prefix** — `location /token-stats/` proxies to backend at `/` (trailing slash matters).
 4. **SQLite read-only** — ccswitch DB opened with `SQLITE_OPEN_READ_ONLY`. Never write to it.
-5. **Kimi CLI has no cost** — `cost` is always `0.0` for Kimi. Frontend shows "N/A" for these.
+5. **Kimi CLI cost is estimated** — Kimi CLI doesn't report cost natively. Backend estimates it as `total_tokens * (199元 / 1.5B tokens)` based on the subscription price.
+
+6. **Pricing configuration** — `backend/pricing.toml` controls model prices, USD→CNY exchange rate, and special billing rules. Run `./scripts/reload-pricing.sh` to apply changes without restart.
 6. **Date vs DateTime bounds** — Date-only upper bound (`to=2025-05-17`) includes the entire day. DateTime upper bound is exclusive-ish (compares naive UTC datetime).
 7. **Sort stability** — Requests sorted by time DESC, then source ASC, provider ASC, model ASC.

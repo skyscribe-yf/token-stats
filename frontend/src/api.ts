@@ -273,6 +273,41 @@ export async function fetchRefresh(): Promise<{ success: boolean; added: number;
   return res.json();
 }
 
+// ─── Pricing Config ───────────────────────────────────────────────────────────
+
+export interface ModelPriceConfig {
+  name: string;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+export interface SpecialPricing {
+  xunfei_per_call: number;
+  kimi_per_token: number;
+  opencode_divisor: number;
+}
+
+export interface PricingConfig {
+  usd_to_cny: number;
+  rate_date: string;
+  special: SpecialPricing;
+  model: ModelPriceConfig[];
+}
+
+export async function fetchPricing(): Promise<PricingConfig> {
+  const res = await fetch(`${API_BASE}/api/pricing`);
+  if (!res.ok) throw new Error("Failed to fetch pricing");
+  return res.json();
+}
+
+export async function reloadPricing(): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/pricing/reload`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to reload pricing");
+  return res.json();
+}
+
 export async function exportBackup(): Promise<Response> {
   const res = await fetch(`${API_BASE}/api/export`);
   if (!res.ok) throw new Error("Failed to export backup");

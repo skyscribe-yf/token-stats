@@ -1,0 +1,60 @@
+# Token pricing configuration
+# 汇率：1 USD = ? CNY（人民币）
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+# 特殊计费规则（直接以人民币计价）
+[special]
+# 讯飞订阅：199 元 / 90000 次调用
+xunfei_per_call = 0.002211111111
+
+# Kimi CLI：199 元 / 15 亿 Token（1_500_000_000）
+kimi_per_token = 0.000000132666667
+
+# OpenCode 折扣：官方 10 美金可用 60 美金额度，实际成本 = 原始 cost / 6
+opencode_divisor = 6.0
+
+# 模型价格（USD per 1_000_000 tokens）
+# cache_write 对 OpenAI 模型等于 input（首次缓存按正常输入计费）
+# 对 Anthropic 模型约为 input * 1.25（5 分钟缓存）
+[[model]]
+name = "gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "gpt-5.4"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 2.50
+
+[[model]]
+name = "gpt-5.4-mini"
+input = 0.75
+output = 4.50
+cache_read = 0.075
+cache_write = 0.75
+
+[[model]]
+name = "claude-sonnet-4-6"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 3.75
+
+[[model]]
+name = "claude-opus-4-7"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "claude-haiku-4-5"
+input = 1.00
+output = 5.00
+cache_read = 0.10
+cache_write = 1.25

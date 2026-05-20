@@ -16,9 +16,9 @@ export function formatCost(cost: number, source?: string): string {
   if (cost == null || Number.isNaN(cost)) return "-";
   // For non-pi sources with zero cost, show N/A
   if (cost === 0 && source && source !== "pi") return "N/A";
-  if (cost === 0) return "$0.00";
-  if (cost < 0.01) return "<$0.01";
-  return "$" + cost.toFixed(2);
+  if (cost === 0) return "¥0.00";
+  if (cost < 0.01) return "<¥0.01";
+  return "¥" + cost.toFixed(2);
 }
 
 export function formatPercent(pct: number): string {

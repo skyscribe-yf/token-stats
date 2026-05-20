@@ -8,6 +8,7 @@ mod aggregator;
 mod app;
 mod config;
 mod models;
+mod pricing;
 mod quota;
 mod routes;
 mod sources;
@@ -63,6 +64,7 @@ async fn main() {
         args.log_level
     );
 
+    pricing::init();
     let state = app::AppState::new();
     state.spawn_refresh_task();
 
