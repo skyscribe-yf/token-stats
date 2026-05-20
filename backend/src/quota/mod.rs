@@ -102,6 +102,11 @@ impl QuotaFetcher {
     pub async fn fetch_opencode_quota(&self) -> OpenCodeQuotaStatus {
         opencode::fetch_opencode_quota(&self.client).await
     }
+
+    /// Fetch OpenCode-go **EX** workspace subscription/quota info.
+    pub async fn fetch_opencode_quota_ex(&self) -> OpenCodeQuotaStatus {
+        opencode::fetch_opencode_quota_ex(&self.client).await
+    }
 }
 
 impl Default for QuotaFetcher {

@@ -167,6 +167,7 @@ pub struct QuotaOpenCode {
 pub struct QuotaResponse {
     pub kimi: Option<KimiQuotaStatus>,
     pub opencode_go: Option<OpenCodeQuotaStatus>,
+    pub opencode_go_ex: Option<OpenCodeQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

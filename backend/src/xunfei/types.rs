@@ -12,6 +12,21 @@ pub struct XunfeiStatus {
     pub error: Option<String>,
 }
 
+/// A single account within the multi-account Xunfei response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XunfeiAccountStatus {
+    pub label: String,
+    pub available: bool,
+    pub data: Option<XunfeiStatusData>,
+    pub error: Option<String>,
+}
+
+/// Multi-account Xunfei response (primary + optional EX account).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XunfeiMultiStatus {
+    pub accounts: Vec<XunfeiAccountStatus>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XunfeiStatusData {
     pub plan_name: String,
