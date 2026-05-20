@@ -5,7 +5,8 @@ Recover missing token usage data from two sources:
   2. DeepSeek official platform export ZIPs
 
 Outputs recovered records to usage.jsonl with dedup guarantees:
-  - Pi sessions: dedup by (timestamp_ms, provider, model, totalTokens)
+  - Pi sessions: Counter-based dedup using (date, provider, model, totalTokens, inputTokens, outputTokens)
+    This handles both real-timestamp and midnight-timestamp providers correctly.
   - DeepSeek export: dedup by comparing daily 4-tuple
     (input_cache_miss, input_cache_hit, output_tokens, request_count)
     against existing daily totals for the same (date, model)
@@ -22,31 +23,30 @@ import sys
 import zipfile
 import tempfile
 import shutil
-from collections import defaultdict
+from collections import defaultdict, Counter
 from datetime import datetime, timezone
 
 USAGE_JSONL = os.path.expanduser("~/.pi/token-logs/usage.jsonl")
 PI_SESSIONS_DIR = os.path.expanduser("~/.pi/agent/sessions")
 DEEPSEEK_ZIPS = sorted(glob.glob("/mnt/d/Downloads/usage_data_2026_*.zip"))
 
-# ── Dedup: load existing usage.jsonl ────────────────────────────────────────
 
 def load_existing():
-    """Load existing records from usage.jsonl.
+    """Load existing records from usage.jsonl for dedup.
     
     Returns:
-      timestamp_keys: set of (timestamp_ms, provider, model, totalTokens) for per-request dedup
+      record_keys: Counter of (date, provider, model, total, input, output) for per-request dedup
       daily_totals: dict (date, model) -> {input, output, cache_read, cache_write, count, cost}
-                    for daily aggregate dedup
+                    for DeepSeek export daily aggregate dedup
     """
-    timestamp_keys = set()
+    record_keys = Counter()
     daily_totals = defaultdict(lambda: {
         "count": 0, "input": 0, "output": 0,
         "cache_read": 0, "cache_write": 0, "cost": 0.0
     })
 
     if not os.path.exists(USAGE_JSONL):
-        return timestamp_keys, daily_totals
+        return record_keys, daily_totals
 
     with open(USAGE_JSONL) as f:
         for line in f:
@@ -58,52 +58,43 @@ def load_existing():
             except json.JSONDecodeError:
                 continue
 
-            # Per-request dedup key: (time, provider, model, totalTokens)
-            time_str = obj.get("time", "")
             provider = obj.get("provider", "")
             model = obj.get("model", "")
             total = obj.get("totalTokens", 0)
-            
-            # Parse time to ms for precise dedup
-            ts_ms = 0
-            if time_str and time_str != "unknown":
-                try:
-                    dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                    ts_ms = int(dt.timestamp() * 1000)
-                except (ValueError, AttributeError):
-                    pass
-            
-            timestamp_keys.add((ts_ms, provider, model, total))
-
-            # Daily aggregate dedup: sum by (date, model) for deepseek
             date = obj.get("date", "")
+            input_t = obj.get("inputTokens", 0)
+            output_t = obj.get("outputTokens", 0)
+
+            # Per-request dedup key
+            key = (date, provider, model, total, input_t, output_t)
+            record_keys[key] += 1
+
+            # Daily aggregate dedup for DeepSeek export
             if "deepseek" in provider.lower() or "deepseek" in model.lower():
-                key = (date, model)
-                r = daily_totals[key]
+                dm_key = (date, model)
+                r = daily_totals[dm_key]
                 r["count"] += 1
-                r["input"] += obj.get("inputTokens", 0)
-                r["output"] += obj.get("outputTokens", 0)
+                r["input"] += input_t
+                r["output"] += output_t
                 r["cache_read"] += obj.get("cacheReadTokens", 0)
                 r["cache_write"] += obj.get("cacheWriteTokens", 0)
                 r["cost"] += obj.get("cost", 0.0)
 
-    return timestamp_keys, daily_totals
+    return record_keys, daily_totals
 
-
-# ── Source 1: Pi session JSONL files ─────────────────────────────────────────
 
 def recover_pi_sessions(existing_keys, dry_run=False):
     """Extract token usage from Pi session JSONL files.
     
-    Each assistant message in a session file contains:
-      message.provider, message.model, message.timestamp, message.usage
-    
-    Dedup: skip if (timestamp_ms, provider, model, totalTokens) already in existing_keys.
+    Dedup: Counter-based matching using (date, provider, model, total, input, output).
+    For each key, we track how many existing records have that key and how many
+    session records we've already matched. A session record is considered duplicate
+    only if we haven't exceeded the count of existing records with that key.
     """
     session_files = glob.glob(os.path.join(PI_SESSIONS_DIR, "**", "*.jsonl"), recursive=True)
     new_records = []
     skipped = 0
-    errors = 0
+    matched = Counter()  # Track how many of each key we've matched against existing
 
     for f in session_files:
         with open(f) as fh:
@@ -118,7 +109,6 @@ def recover_pi_sessions(existing_keys, dry_run=False):
 
                 if obj.get("type") != "message":
                     continue
-
                 msg = obj.get("message", {})
                 if msg.get("role") != "assistant":
                     continue
@@ -132,8 +122,6 @@ def recover_pi_sessions(existing_keys, dry_run=False):
                 cache_read = usage.get("cacheRead", 0)
                 cache_write = usage.get("cacheWrite", 0)
                 total_t = usage.get("totalTokens", 0)
-                cost_obj = usage.get("cost", {})
-                cost = cost_obj.get("total", 0.0) if isinstance(cost_obj, dict) else 0.0
 
                 # Skip zero-usage records
                 if input_t == 0 and output_t == 0 and cache_read == 0 and cache_write == 0:
@@ -146,20 +134,22 @@ def recover_pi_sessions(existing_keys, dry_run=False):
                 if timestamp > 0:
                     dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
                     date_str = dt.strftime("%Y-%m-%d")
-                    time_str = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    ts_ms = timestamp
+                    # Preserve sub-second precision in time field
+                    time_str = dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{timestamp % 1000:03d}Z"
                 else:
-                    # Fallback: extract date from filename
                     basename = os.path.basename(f)
                     date_str = basename[:10] if len(basename) >= 10 else "unknown"
                     time_str = "unknown"
-                    ts_ms = 0
 
-                # Dedup check
-                dedup_key = (ts_ms, provider, model, total_t)
-                if dedup_key in existing_keys:
+                # Dedup check: Counter-based matching
+                key = (date_str, provider, model, total_t, input_t, output_t)
+                if matched[key] < existing_keys.get(key, 0):
+                    matched[key] += 1
                     skipped += 1
                     continue
+
+                cost_obj = usage.get("cost", {})
+                cost = cost_obj.get("total", 0.0) if isinstance(cost_obj, dict) else 0.0
 
                 # Build usage.jsonl record
                 record = {
@@ -178,28 +168,29 @@ def recover_pi_sessions(existing_keys, dry_run=False):
                 }
 
                 new_records.append(record)
-                existing_keys.add(dedup_key)
+                # Track the new record in our matched counter
+                matched[key] += 1
 
     return new_records, skipped
 
 
 # ── Source 2: DeepSeek platform export ───────────────────────────────────────
 
-# Map DeepSeek api_key_name to our provider names
 API_KEY_MAP = {
     "opencode": "opencode-go",
     "pi": "deepseek",
-    "ai小北": "deepseek",  # ai小北 uses deepseek API directly
+    "ai小北": "deepseek",
 }
 
+SOURCE_MAP = {
+    "opencode": "opencode",
+    "pi": "pi",
+    "ai小北": "deepseek-ai",
+}
+
+
 def load_deepseek_export():
-    """Load DeepSeek export ZIPs and return daily aggregate records.
-    
-    Each (date, model, api_key_name) group has 4 rows:
-      output_tokens, request_count, input_cache_hit_tokens, input_cache_miss_tokens
-    
-    Returns dict: (date, model, api_key_name) -> {input_miss, cache_hit, output, req, cost}
-    """
+    """Load DeepSeek export ZIPs and return daily aggregate records."""
     records = {}
     cost_data = {}
 
@@ -209,11 +200,10 @@ def load_deepseek_export():
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmpdir)
 
-        # Parse amount CSVs
         for fname in glob.glob(os.path.join(tmpdir, "amount-*.csv")):
             with open(fname, newline="", encoding="utf-8-sig") as f:
                 reader = csv.reader(f)
-                next(reader)  # skip header
+                next(reader)
                 for row in reader:
                     if len(row) < 8:
                         continue
@@ -227,7 +217,7 @@ def load_deepseek_export():
                     if key not in records:
                         records[key] = {
                             "input_miss": 0, "cache_hit": 0,
-                            "output": 0, "req": 0, "cost": 0.0
+                            "output": 0, "req": 0
                         }
                     if type_ == "input_cache_miss_tokens":
                         records[key]["input_miss"] = amount
@@ -238,7 +228,6 @@ def load_deepseek_export():
                     elif type_ == "request_count":
                         records[key]["req"] = amount
 
-        # Parse cost CSVs
         for fname in glob.glob(os.path.join(tmpdir, "cost-*.csv")):
             with open(fname, newline="", encoding="utf-8-sig") as f:
                 reader = csv.reader(f)
@@ -256,93 +245,37 @@ def load_deepseek_export():
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # Attach cost to records
-    for (date, model, api_key_name), r in records.items():
-        cost_key = (date, model)
-        # Distribute cost proportionally by output tokens across api_key_names
-        r["cost"] = cost_data.get(cost_key, 0.0)
-
     return records, cost_data
 
 
-def recover_deepseek_export(existing_daily_totals, dry_run=False):
+def recover_deepseek_export(existing_daily_totals, existing_dm_pairs, dry_run=False):
     """Convert DeepSeek daily aggregates to usage.jsonl records.
     
-    Dedup strategy: for each (date, model), compare the 4-tuple from the export
-    against the daily sum of existing deepseek records. If they match exactly,
-    skip (we already have complete data). If not, insert a synthetic daily
-    aggregate record.
-    
-    Note: DeepSeek export is UTC-based daily data. We insert one record per
-    (date, model, api_key_name) group with a synthetic timestamp at 12:00 UTC.
+    Conservative dedup: only add records for (date, model) combinations
+    where there are NO existing records at all. This avoids double-counting
+    with Pi session records or original usage.jsonl records.
     """
     ds_records, ds_cost = load_deepseek_export()
     new_records = []
     skipped = 0
 
-    # Aggregate existing by (date, model) for comparison
-    existing_by_dm = defaultdict(lambda: {
-        "count": 0, "input": 0, "output": 0,
-        "cache_read": 0, "cache_write": 0, "cost": 0.0
-    })
-    for (date, model), r in existing_daily_totals.items():
-        existing_by_dm[(date, model)] = dict(r)  # copy
-
-    # Aggregate export by (date, model) for comparison
-    export_by_dm = defaultdict(lambda: {
-        "input_miss": 0, "cache_hit": 0, "output": 0, "req": 0, "cost": 0.0
-    })
-    for (date, model, api_key_name), r in ds_records.items():
-        key = (date, model)
-        export_by_dm[key]["input_miss"] += r["input_miss"]
-        export_by_dm[key]["cache_hit"] += r["cache_hit"]
-        export_by_dm[key]["output"] += r["output"]
-        export_by_dm[key]["req"] += r["req"]
-
-    # Now process each (date, model, api_key_name) group
+    # Process each (date, model, api_key_name) group
     for key in sorted(ds_records.keys()):
         date, model, api_key_name = key
         r = ds_records[key]
 
-        # Check if this specific api_key_name's data is already covered
-        # by existing records. We compare at the (date, model) level.
+        # Skip if we already have ANY records for this (date, model)
         dm_key = (date, model)
-        ex = existing_by_dm.get(dm_key, {
-            "count": 0, "input": 0, "output": 0,
-            "cache_read": 0, "cache_write": 0, "cost": 0.0
-        })
-        ds_dm = export_by_dm.get(dm_key, {
-            "input_miss": 0, "cache_hit": 0, "output": 0, "req": 0, "cost": 0.0
-        })
-
-        # If the daily totals match exactly, skip this entire day
-        if (ds_dm["input_miss"] == ex["input"]
-            and ds_dm["cache_hit"] == ex["cache_read"]
-            and ds_dm["output"] == ex["output"]):
+        if dm_key in existing_dm_pairs:
             skipped += 1
             continue
 
-        # Map api_key_name to our provider
         provider = API_KEY_MAP.get(api_key_name, "deepseek")
-
-        # Determine source based on api_key_name
-        if api_key_name == "opencode":
-            source = "opencode"
-        elif api_key_name == "pi":
-            source = "pi"
-        elif api_key_name == "ai小北":
-            source = "deepseek-ai"  # custom source for ai小北
-        else:
-            source = "deepseek"
+        source = SOURCE_MAP.get(api_key_name, "deepseek")
 
         # Build synthetic daily aggregate record
-        # Use noon UTC as the timestamp
         time_str = f"{date}T12:00:00Z"
         total_tokens = r["input_miss"] + r["cache_hit"] + r["output"]
-
-        # Cost: distribute from ds_cost proportionally
-        # For now, use 0 and let pricing module compute it
-        cost = 0.0
 
         record = {
             "date": date,
@@ -355,7 +288,7 @@ def recover_deepseek_export(existing_daily_totals, dry_run=False):
             "cacheReadTokens": r["cache_hit"],
             "cacheWriteTokens": 0,
             "totalTokens": total_tokens,
-            "cost": cost,
+            "cost": 0.0,  # Let pricing module compute
             "source": source,
         }
 
@@ -363,8 +296,6 @@ def recover_deepseek_export(existing_daily_totals, dry_run=False):
 
     return new_records, skipped
 
-
-# ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     dry_run = "--dry-run" in sys.argv
@@ -378,8 +309,15 @@ def main():
 
     # Load existing data for dedup
     print("Loading existing usage.jsonl for dedup...")
-    existing_keys, existing_daily = load_existing()
-    print(f"  Loaded {len(existing_keys)} per-request keys, {len(existing_daily)} daily deepseek totals")
+    existing_keys, daily_totals = load_existing()
+    print(f"  {sum(existing_keys.values())} existing records, {len(existing_keys)} unique keys")
+    print(f"  {len(daily_totals)} daily deepseek totals")
+    
+    # Also compute existing (date, model) pairs for deepseek
+    existing_dm_pairs = set()
+    for (date, model) in daily_totals.keys():
+        existing_dm_pairs.add((date, model))
+    print(f"  {len(existing_dm_pairs)} existing (date, model) pairs for deepseek")
     print()
 
     all_new_records = []
@@ -395,7 +333,7 @@ def main():
     # Source 2: DeepSeek export
     if do_deepseek:
         print("Recovering from DeepSeek platform export...")
-        ds_records, ds_skipped = recover_deepseek_export(existing_daily, dry_run)
+        ds_records, ds_skipped = recover_deepseek_export(daily_totals, existing_dm_pairs, dry_run)
         print(f"  Found {len(ds_records)} new daily aggregates, skipped {ds_skipped} matching days")
         all_new_records.extend(ds_records)
         print()
@@ -407,16 +345,20 @@ def main():
     # Summary
     print(f"=== Summary ===")
     print(f"Total new records: {len(all_new_records)}")
-    
-    # Group by source
+
     by_source = defaultdict(int)
     by_date = defaultdict(int)
+    by_provider = defaultdict(int)
     for r in all_new_records:
         by_source[r.get("source", "unknown")] += 1
-        by_date[r.get("date", "unknown")[:7]] += 1  # by month
-    
+        by_date[r.get("date", "unknown")[:10]] += 1
+        by_provider[r.get("provider", "unknown")] += 1
+
     print(f"By source: {dict(by_source)}")
-    print(f"By month: {dict(sorted(by_date.items()))}")
+    print(f"By provider: {dict(by_provider)}")
+    print(f"By date:")
+    for d in sorted(by_date.keys()):
+        print(f"  {d}: {by_date[d]}")
     print()
 
     # Preview first 5 records
@@ -438,7 +380,7 @@ def main():
     with open(USAGE_JSONL, "a") as f:
         for r in all_new_records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    
+
     print("Done! Records appended successfully.")
     print(f"Run 'wc -l {USAGE_JSONL}' to verify.")
 
