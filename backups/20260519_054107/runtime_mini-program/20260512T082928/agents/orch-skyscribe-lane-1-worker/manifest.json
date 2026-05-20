@@ -1,0 +1,20 @@
+{
+  "batchId": "20260512T082928",
+  "agentId": "orch-skyscribe-lane-1-worker",
+  "role": "worker",
+  "laneNumber": 1,
+  "taskId": "AD-002",
+  "repoId": "default",
+  "pid": 4220,
+  "parentPid": 99025,
+  "startedAt": 1778574521589,
+  "status": "exited",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-1",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel"
+  }
+}

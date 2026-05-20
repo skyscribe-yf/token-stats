@@ -1,0 +1,20 @@
+{
+  "batchId": "20260511T081810",
+  "agentId": "orch-skyscribe-lane-2-worker",
+  "role": "worker",
+  "laneNumber": 2,
+  "taskId": "MP-005",
+  "repoId": "default",
+  "pid": 44363,
+  "parentPid": 27432,
+  "startedAt": 1778466731524,
+  "status": "exited",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T081810/lane-2/taskplane-tasks/miniprogram/MP-005-cms-business"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "batchId": "20260511T194206",
+  "agentId": "orch-skyscribe-lane-1-worker",
+  "role": "worker",
+  "laneNumber": 1,
+  "taskId": "MP-014",
+  "repoId": "default",
+  "pid": 68843,
+  "parentPid": 66325,
+  "startedAt": 1778538775391,
+  "status": "exited",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T194206/lane-1/taskplane-tasks/miniprogram/MP-014-fifteen-minute-life-circle"
+  }
+}

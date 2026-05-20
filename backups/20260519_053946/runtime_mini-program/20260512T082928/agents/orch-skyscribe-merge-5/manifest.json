@@ -1,0 +1,14 @@
+{
+  "batchId": "20260512T082928",
+  "agentId": "orch-skyscribe-merge-5",
+  "role": "merger",
+  "laneNumber": null,
+  "taskId": null,
+  "repoId": "default",
+  "pid": 1007,
+  "parentPid": 99025,
+  "startedAt": 1778572621400,
+  "status": "killed",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260512T082928/merge",
+  "packet": null
+}

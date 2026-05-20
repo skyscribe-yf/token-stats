@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T062757",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "MP-002",
+  "segmentId": null,
+  "status": "running",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "running",
+    "elapsedMs": 0,
+    "toolCalls": 107,
+    "contextPct": 38.26751708984375,
+    "costUsd": 0,
+    "lastTool": "read: /home/skyscribe/srcs/skyscribe-20260511T062757/lane-1/taskplane-tasks/miniprogram/MP-002-admin-utils/STATUS.md",
+    "inputTokens": 98028,
+    "outputTokens": 33849,
+    "cacheReadTokens": 5734144,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 9: Run all mini-program tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 1,
+    "reviews": 0
+  },
+  "updatedAt": 1778459456016
+}

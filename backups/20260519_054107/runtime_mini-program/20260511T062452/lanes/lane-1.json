@@ -1,0 +1,45 @@
+{
+  "batchId": "20260511T062452",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "TP-003",
+  "segmentId": "TP-003::default",
+  "status": "running",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "running",
+    "elapsedMs": 0,
+    "toolCalls": 18,
+    "contextPct": 2.5986,
+    "costUsd": 0.03233392,
+    "lastTool": "grep: /admin/auth/me",
+    "inputTokens": 25040,
+    "outputTokens": 2294,
+    "cacheReadTokens": 135296,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": {
+    "agentId": "orch-skyscribe-lane-1-reviewer",
+    "status": "running",
+    "elapsedMs": 2319,
+    "toolCalls": 0,
+    "contextPct": 0,
+    "costUsd": 0,
+    "lastTool": "",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 0,
+    "reviewType": "plan",
+    "reviewStep": 1
+  },
+  "progress": {
+    "currentStep": "Step 1: Write failing tests for `GET /admin/auth/me`",
+    "checked": 0,
+    "total": 0,
+    "iteration": 1,
+    "reviews": 0
+  },
+  "updatedAt": 1778451942582
+}

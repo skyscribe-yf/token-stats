@@ -1,0 +1,20 @@
+{
+  "batchId": "20260512T082928",
+  "agentId": "orch-skyscribe-lane-5-worker",
+  "role": "worker",
+  "laneNumber": 5,
+  "taskId": "TP-004",
+  "repoId": "default",
+  "pid": 76325,
+  "parentPid": 72474,
+  "startedAt": 1778547391769,
+  "status": "exited",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-5",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-5/taskplane-tasks/TP-004-full-regression/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-5/taskplane-tasks/TP-004-full-regression/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-5/taskplane-tasks/TP-004-full-regression/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-5/taskplane-tasks/TP-004-full-regression/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/skyscribe-20260512T082928/lane-5/taskplane-tasks/TP-004-full-regression"
+  }
+}

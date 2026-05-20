@@ -1,0 +1,31 @@
+{
+  "batchId": "20260512T082928",
+  "laneNumber": 2,
+  "laneId": "lane-2",
+  "repoId": "default",
+  "taskId": "MP-021",
+  "segmentId": null,
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-2-worker",
+    "status": "exited",
+    "elapsedMs": 1881709,
+    "toolCalls": 73,
+    "contextPct": 35.51025390625,
+    "costUsd": 0,
+    "lastTool": "read: /home/skyscribe/srcs/skyscribe-20260512T082928/lane-2/taskplane-tasks/miniprogram/MP-021-my-favorites-cart/STATUS.md",
+    "inputTokens": 101381,
+    "outputTokens": 24211,
+    "cacheReadTokens": 3845376,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 6: Documentation",
+    "checked": 17,
+    "total": 17,
+    "iteration": 1,
+    "reviews": 0
+  },
+  "updatedAt": 1778574603748
+}

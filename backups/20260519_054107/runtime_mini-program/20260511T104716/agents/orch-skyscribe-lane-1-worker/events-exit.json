@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 36744,
+    "output": 8268,
+    "cacheRead": 792320,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 33,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 914,
+  "lastToolCall": "bash: cd miniprogram && npm test 2>&1 | tail -20",
+  "error": null,
+  "contextUsage": {
+    "tokens": 33851,
+    "contextWindow": 262144,
+    "percent": 12.913131713867188
+  }
+}

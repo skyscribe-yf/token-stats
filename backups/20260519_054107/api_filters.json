@@ -1,0 +1,37 @@
+{
+    "vendors": [
+        "ainaba",
+        "deepseek",
+        "guancha",
+        "kimi",
+        "opencode-go",
+        "xiaomi-mimo",
+        "xunfei"
+    ],
+    "models": [
+        "astron-code-latest",
+        "big-pickle",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-free",
+        "deepseek-v4-pro",
+        "glm-5.1",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.5",
+        "hy3-preview-free",
+        "kimi-for-coding",
+        "kimi-k2.6",
+        "mimo-v2-pro",
+        "mimo-v2.5",
+        "mimo-v2.5-pro",
+        "minimax-m2.7",
+        "qwen3.6-plus"
+    ],
+    "sources": [
+        "claude-code",
+        "codex",
+        "kimi-cli",
+        "opencode",
+        "pi"
+    ]
+}

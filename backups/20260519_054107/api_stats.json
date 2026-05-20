@@ -1,0 +1,713 @@
+{
+    "overall": {
+        "total_calls": 20767,
+        "total_input_tokens": 507682399,
+        "total_output_tokens": 7909195,
+        "total_cache_read_tokens": 1119499848,
+        "total_cache_write_tokens": 183318,
+        "total_tokens": 1635274760,
+        "total_cost": 108.96956620659999,
+        "avg_cache_hit_ratio": 61.3514376244573,
+        "weighted_cache_hit_ratio": 68.7999054847112
+    },
+    "by_vendor": [
+        {
+            "provider": "xunfei",
+            "calls": 7039,
+            "input_tokens": 448913245,
+            "output_tokens": 1398598,
+            "cache_read_tokens": 5875840,
+            "cache_write_tokens": 0,
+            "total_tokens": 456187683,
+            "cost": 0.17447435999999997,
+            "cache_hit_ratio": 1.2919923089183196
+        },
+        {
+            "provider": "kimi",
+            "calls": 4312,
+            "input_tokens": 15881335,
+            "output_tokens": 1891608,
+            "cache_read_tokens": 368405075,
+            "cache_write_tokens": 0,
+            "total_tokens": 386178018,
+            "cost": 0.045538,
+            "cache_hit_ratio": 95.86731807663976
+        },
+        {
+            "provider": "opencode-go",
+            "calls": 3560,
+            "input_tokens": 18135355,
+            "output_tokens": 1499752,
+            "cache_read_tokens": 313519861,
+            "cache_write_tokens": 183318,
+            "total_tokens": 333338286,
+            "cost": 44.74741379959994,
+            "cache_hit_ratio": 94.53186498354363
+        },
+        {
+            "provider": "deepseek",
+            "calls": 4132,
+            "input_tokens": 11004198,
+            "output_tokens": 2308750,
+            "cache_read_tokens": 276541696,
+            "cache_write_tokens": 0,
+            "total_tokens": 289854644,
+            "cost": 39.656371232000104,
+            "cache_hit_ratio": 96.17306376838752
+        },
+        {
+            "provider": "ainaba",
+            "calls": 1545,
+            "input_tokens": 13158263,
+            "output_tokens": 746547,
+            "cache_read_tokens": 144886912,
+            "cache_write_tokens": 0,
+            "total_tokens": 158791722,
+            "cost": 16.690203000000004,
+            "cache_hit_ratio": 91.67436588937309
+        },
+        {
+            "provider": "guancha",
+            "calls": 94,
+            "input_tokens": 317677,
+            "output_tokens": 31788,
+            "cache_read_tokens": 6451456,
+            "cache_write_tokens": 0,
+            "total_tokens": 6800921,
+            "cost": 7.514833575000002,
+            "cache_hit_ratio": 95.30697653599066
+        },
+        {
+            "provider": "xiaomi-mimo",
+            "calls": 85,
+            "input_tokens": 272326,
+            "output_tokens": 32152,
+            "cache_read_tokens": 3819008,
+            "cache_write_tokens": 0,
+            "total_tokens": 4123486,
+            "cost": 0.14073224,
+            "cache_hit_ratio": 93.34383357604146
+        }
+    ],
+    "by_date": [
+        {
+            "date": "2026-04-27",
+            "calls": 41,
+            "input_tokens": 36657,
+            "output_tokens": 21796,
+            "cache_read_tokens": 1445504,
+            "cache_write_tokens": 0,
+            "total_tokens": 1503957,
+            "cost": 0.34923133999999995,
+            "cache_hit_ratio": 97.52678690101818
+        },
+        {
+            "date": "2026-04-28",
+            "calls": 1091,
+            "input_tokens": 3228832,
+            "output_tokens": 512712,
+            "cache_read_tokens": 66411456,
+            "cache_write_tokens": 0,
+            "total_tokens": 70153000,
+            "cost": 4.020598859999998,
+            "cache_hit_ratio": 95.36355737069898
+        },
+        {
+            "date": "2026-04-29",
+            "calls": 777,
+            "input_tokens": 1700924,
+            "output_tokens": 419806,
+            "cache_read_tokens": 38097344,
+            "cache_write_tokens": 0,
+            "total_tokens": 40218074,
+            "cost": 3.580480339999999,
+            "cache_hit_ratio": 95.72613561977118
+        },
+        {
+            "date": "2026-04-30",
+            "calls": 271,
+            "input_tokens": 594453,
+            "output_tokens": 120215,
+            "cache_read_tokens": 13489664,
+            "cache_write_tokens": 0,
+            "total_tokens": 14204332,
+            "cost": 2.150308808,
+            "cache_hit_ratio": 95.77926681523591
+        },
+        {
+            "date": "2026-05-01",
+            "calls": 1181,
+            "input_tokens": 7423120,
+            "output_tokens": 697165,
+            "cache_read_tokens": 93279297,
+            "cache_write_tokens": 183318,
+            "total_tokens": 101582900,
+            "cost": 10.316999224,
+            "cache_hit_ratio": 92.62865756240984
+        },
+        {
+            "date": "2026-05-02",
+            "calls": 127,
+            "input_tokens": 464512,
+            "output_tokens": 68699,
+            "cache_read_tokens": 8205312,
+            "cache_write_tokens": 0,
+            "total_tokens": 8738523,
+            "cost": 1.462180012,
+            "cache_hit_ratio": 94.6421980423132
+        },
+        {
+            "date": "2026-05-03",
+            "calls": 770,
+            "input_tokens": 2919990,
+            "output_tokens": 468876,
+            "cache_read_tokens": 55572224,
+            "cache_write_tokens": 0,
+            "total_tokens": 58961090,
+            "cost": 8.522550588000007,
+            "cache_hit_ratio": 95.00789968387929
+        },
+        {
+            "date": "2026-05-04",
+            "calls": 537,
+            "input_tokens": 1831281,
+            "output_tokens": 321064,
+            "cache_read_tokens": 37476096,
+            "cache_write_tokens": 0,
+            "total_tokens": 39628441,
+            "cost": 4.996738787999998,
+            "cache_hit_ratio": 95.34112642520003
+        },
+        {
+            "date": "2026-05-05",
+            "calls": 261,
+            "input_tokens": 2281447,
+            "output_tokens": 163420,
+            "cache_read_tokens": 25629824,
+            "cache_write_tokens": 0,
+            "total_tokens": 28074691,
+            "cost": 0.7174538360000001,
+            "cache_hit_ratio": 91.82607270016476
+        },
+        {
+            "date": "2026-05-06",
+            "calls": 170,
+            "input_tokens": 858307,
+            "output_tokens": 96182,
+            "cache_read_tokens": 14386304,
+            "cache_write_tokens": 0,
+            "total_tokens": 15340793,
+            "cost": 1.1684996280000002,
+            "cache_hit_ratio": 94.36976778220185
+        },
+        {
+            "date": "2026-05-08",
+            "calls": 6,
+            "input_tokens": 175625,
+            "output_tokens": 31728,
+            "cache_read_tokens": 6011136,
+            "cache_write_tokens": 0,
+            "total_tokens": 6218489,
+            "cost": 0.7187074000000001,
+            "cache_hit_ratio": 97.16127712061287
+        },
+        {
+            "date": "2026-05-09",
+            "calls": 522,
+            "input_tokens": 1948310,
+            "output_tokens": 275982,
+            "cache_read_tokens": 49527168,
+            "cache_write_tokens": 0,
+            "total_tokens": 51751460,
+            "cost": 0.5639077079999998,
+            "cache_hit_ratio": 96.21507157252624
+        },
+        {
+            "date": "2026-05-10",
+            "calls": 1012,
+            "input_tokens": 5445046,
+            "output_tokens": 542121,
+            "cache_read_tokens": 81726241,
+            "cache_write_tokens": 0,
+            "total_tokens": 87713408,
+            "cost": 7.0308409496,
+            "cache_hit_ratio": 93.75362440157618
+        },
+        {
+            "date": "2026-05-11",
+            "calls": 813,
+            "input_tokens": 3033067,
+            "output_tokens": 307311,
+            "cache_read_tokens": 61787776,
+            "cache_write_tokens": 0,
+            "total_tokens": 65128154,
+            "cost": 5.273189800000001,
+            "cache_hit_ratio": 95.32084610500976
+        },
+        {
+            "date": "2026-05-12",
+            "calls": 1150,
+            "input_tokens": 4428482,
+            "output_tokens": 417472,
+            "cache_read_tokens": 111290852,
+            "cache_write_tokens": 0,
+            "total_tokens": 116136806,
+            "cost": 18.00071695999999,
+            "cache_hit_ratio": 96.17308374761299
+        },
+        {
+            "date": "2026-05-13",
+            "calls": 1692,
+            "input_tokens": 8091471,
+            "output_tokens": 633505,
+            "cache_read_tokens": 142129001,
+            "cache_write_tokens": 0,
+            "total_tokens": 150853977,
+            "cost": 15.379310214999991,
+            "cache_hit_ratio": 94.61360299813197
+        },
+        {
+            "date": "2026-05-14",
+            "calls": 2466,
+            "input_tokens": 142333049,
+            "output_tokens": 534323,
+            "cache_read_tokens": 38359370,
+            "cache_write_tokens": 0,
+            "total_tokens": 181226742,
+            "cost": 6.023021819999996,
+            "cache_hit_ratio": 21.229097608129315
+        },
+        {
+            "date": "2026-05-15",
+            "calls": 1431,
+            "input_tokens": 87928031,
+            "output_tokens": 323319,
+            "cache_read_tokens": 9571653,
+            "cache_write_tokens": 0,
+            "total_tokens": 97823003,
+            "cost": 2.4331874699999996,
+            "cache_hit_ratio": 9.817111817511122
+        },
+        {
+            "date": "2026-05-16",
+            "calls": 2532,
+            "input_tokens": 101242108,
+            "output_tokens": 732065,
+            "cache_read_tokens": 88917130,
+            "cache_write_tokens": 0,
+            "total_tokens": 190891303,
+            "cost": 4.645663139999995,
+            "cache_hit_ratio": 46.75930074982737
+        },
+        {
+            "date": "2026-05-17",
+            "calls": 2632,
+            "input_tokens": 92909747,
+            "output_tokens": 768574,
+            "cache_read_tokens": 97319552,
+            "cache_write_tokens": 0,
+            "total_tokens": 190997873,
+            "cost": 3.2438450399999974,
+            "cache_hit_ratio": 51.159076184158145
+        },
+        {
+            "date": "2026-05-18",
+            "calls": 1285,
+            "input_tokens": 38807940,
+            "output_tokens": 452860,
+            "cache_read_tokens": 78866944,
+            "cache_write_tokens": 0,
+            "total_tokens": 118127744,
+            "cost": 8.372134279999994,
+            "cache_hit_ratio": 67.02105098314777
+        }
+    ],
+    "by_model": [
+        {
+            "model": "astron-code-latest",
+            "provider": "xunfei",
+            "sources": [
+                "claude-code",
+                "pi"
+            ],
+            "calls": 7039,
+            "input_tokens": 448913245,
+            "output_tokens": 1398598,
+            "cache_read_tokens": 5875840,
+            "cache_write_tokens": 0,
+            "total_tokens": 456187683,
+            "cost": 0.17447435999999997,
+            "cache_hit_ratio": 1.2919923089183196
+        },
+        {
+            "model": "kimi-for-coding",
+            "provider": "kimi",
+            "sources": [
+                "claude-code",
+                "kimi-cli",
+                "opencode",
+                "pi"
+            ],
+            "calls": 4312,
+            "input_tokens": 15881335,
+            "output_tokens": 1891608,
+            "cache_read_tokens": 368405075,
+            "cache_write_tokens": 0,
+            "total_tokens": 386178018,
+            "cost": 0.045538,
+            "cache_hit_ratio": 95.86731807663976
+        },
+        {
+            "model": "deepseek-v4-pro",
+            "provider": "deepseek",
+            "sources": [
+                "claude-code",
+                "opencode",
+                "pi"
+            ],
+            "calls": 2981,
+            "input_tokens": 6320558,
+            "output_tokens": 1627175,
+            "cache_read_tokens": 214881792,
+            "cache_write_tokens": 0,
+            "total_tokens": 222829525,
+            "cost": 36.76142114000004,
+            "cache_hit_ratio": 97.1426352387305
+        },
+        {
+            "model": "deepseek-v4-pro",
+            "provider": "opencode-go",
+            "sources": [
+                "pi"
+            ],
+            "calls": 1515,
+            "input_tokens": 5830588,
+            "output_tokens": 559786,
+            "cache_read_tokens": 146844800,
+            "cache_write_tokens": 0,
+            "total_tokens": 153235174,
+            "cost": 23.052004399999987,
+            "cache_hit_ratio": 96.18105571803099
+        },
+        {
+            "model": "gpt-5.5",
+            "provider": "ainaba",
+            "sources": [
+                "codex",
+                "pi"
+            ],
+            "calls": 1347,
+            "input_tokens": 11804813,
+            "output_tokens": 654639,
+            "cache_read_tokens": 132158464,
+            "cache_write_tokens": 0,
+            "total_tokens": 144617916,
+            "cost": 16.690203000000004,
+            "cache_hit_ratio": 91.80012205473761
+        },
+        {
+            "model": "deepseek-v4-flash",
+            "provider": "opencode-go",
+            "sources": [
+                "opencode",
+                "pi"
+            ],
+            "calls": 1049,
+            "input_tokens": 4561398,
+            "output_tokens": 490317,
+            "cache_read_tokens": 103995008,
+            "cache_write_tokens": 0,
+            "total_tokens": 109046723,
+            "cost": 6.905793769599997,
+            "cache_hit_ratio": 95.79813097349593
+        },
+        {
+            "model": "deepseek-v4-flash",
+            "provider": "deepseek",
+            "sources": [
+                "claude-code",
+                "opencode",
+                "pi"
+            ],
+            "calls": 1151,
+            "input_tokens": 4683640,
+            "output_tokens": 681575,
+            "cache_read_tokens": 61659904,
+            "cache_write_tokens": 0,
+            "total_tokens": 67025119,
+            "cost": 2.8949500920000024,
+            "cache_hit_ratio": 92.94032287452114
+        },
+        {
+            "model": "mimo-v2.5-pro",
+            "provider": "opencode-go",
+            "sources": [
+                "pi"
+            ],
+            "calls": 333,
+            "input_tokens": 1118117,
+            "output_tokens": 119272,
+            "cache_read_tokens": 23757696,
+            "cache_write_tokens": 0,
+            "total_tokens": 24995085,
+            "cost": 6.2274721999999985,
+            "cache_hit_ratio": 95.50520419171828
+        },
+        {
+            "model": "glm-5.1",
+            "provider": "opencode-go",
+            "sources": [
+                "opencode",
+                "pi"
+            ],
+            "calls": 186,
+            "input_tokens": 3241953,
+            "output_tokens": 65233,
+            "cache_read_tokens": 11977637,
+            "cache_write_tokens": 0,
+            "total_tokens": 15284823,
+            "cost": 7.939945019999998,
+            "cache_hit_ratio": 78.69881514548027
+        },
+        {
+            "model": "gpt-5.4",
+            "provider": "ainaba",
+            "sources": [
+                "codex",
+                "pi"
+            ],
+            "calls": 193,
+            "input_tokens": 1336238,
+            "output_tokens": 90573,
+            "cache_read_tokens": 12637440,
+            "cache_write_tokens": 0,
+            "total_tokens": 14064251,
+            "cost": 0.0,
+            "cache_hit_ratio": 90.43746392324196
+        },
+        {
+            "model": "hy3-preview-free",
+            "provider": "opencode-go",
+            "sources": [
+                "opencode"
+            ],
+            "calls": 288,
+            "input_tokens": 1872550,
+            "output_tokens": 187608,
+            "cache_read_tokens": 11527808,
+            "cache_write_tokens": 0,
+            "total_tokens": 13587966,
+            "cost": 0.0,
+            "cache_hit_ratio": 86.02611960068529
+        },
+        {
+            "model": "deepseek-v4-flash-free",
+            "provider": "opencode-go",
+            "sources": [
+                "opencode"
+            ],
+            "calls": 113,
+            "input_tokens": 666614,
+            "output_tokens": 56136,
+            "cache_read_tokens": 12785664,
+            "cache_write_tokens": 0,
+            "total_tokens": 13508414,
+            "cost": 0.0,
+            "cache_hit_ratio": 95.04460136788728
+        },
+        {
+            "model": "kimi-k2.6",
+            "provider": "guancha",
+            "sources": [
+                "pi"
+            ],
+            "calls": 94,
+            "input_tokens": 317677,
+            "output_tokens": 31788,
+            "cache_read_tokens": 6451456,
+            "cache_write_tokens": 0,
+            "total_tokens": 6800921,
+            "cost": 7.514833575000002,
+            "cache_hit_ratio": 95.30697653599066
+        },
+        {
+            "model": "mimo-v2.5-pro",
+            "provider": "xiaomi-mimo",
+            "sources": [
+                "claude-code",
+                "pi"
+            ],
+            "calls": 54,
+            "input_tokens": 129041,
+            "output_tokens": 25074,
+            "cache_read_tokens": 3091200,
+            "cache_write_tokens": 0,
+            "total_tokens": 3245315,
+            "cost": 0.08002359999999999,
+            "cache_hit_ratio": 95.99281544455835
+        },
+        {
+            "model": "big-pickle",
+            "provider": "opencode-go",
+            "sources": [
+                "opencode"
+            ],
+            "calls": 40,
+            "input_tokens": 240,
+            "output_tokens": 13244,
+            "cache_read_tokens": 2214337,
+            "cache_write_tokens": 183318,
+            "total_tokens": 2411139,
+            "cost": 0.0,
+            "cache_hit_ratio": 99.98916271594982
+        },
+        {
+            "model": "mimo-v2-pro",
+            "provider": "xiaomi-mimo",
+            "sources": [
+                "claude-code",
+                "pi"
+            ],
+            "calls": 28,
+            "input_tokens": 104956,
+            "output_tokens": 6665,
+            "cache_read_tokens": 651200,
+            "cache_write_tokens": 0,
+            "total_tokens": 762821,
+            "cost": 0.038422399999999995,
+            "cache_hit_ratio": 86.11979538613726
+        },
+        {
+            "model": "kimi-k2.6",
+            "provider": "opencode-go",
+            "sources": [
+                "pi"
+            ],
+            "calls": 19,
+            "input_tokens": 300707,
+            "output_tokens": 5570,
+            "cache_read_tokens": 268047,
+            "cache_write_tokens": 0,
+            "total_tokens": 574324,
+            "cost": 0.3508391699999999,
+            "cache_hit_ratio": 47.128811401765965
+        },
+        {
+            "model": "qwen3.6-plus",
+            "provider": "opencode-go",
+            "sources": [
+                "pi"
+            ],
+            "calls": 9,
+            "input_tokens": 468879,
+            "output_tokens": 1440,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_tokens": 470319,
+            "cost": 0.23875949999999999,
+            "cache_hit_ratio": 0.0
+        },
+        {
+            "model": "minimax-m2.7",
+            "provider": "opencode-go",
+            "sources": [
+                "pi"
+            ],
+            "calls": 8,
+            "input_tokens": 74309,
+            "output_tokens": 1146,
+            "cache_read_tokens": 148864,
+            "cache_write_tokens": 0,
+            "total_tokens": 224319,
+            "cost": 0.032599739999999995,
+            "cache_hit_ratio": 66.7034094626142
+        },
+        {
+            "model": "mimo-v2.5",
+            "provider": "xiaomi-mimo",
+            "sources": [
+                "pi"
+            ],
+            "calls": 3,
+            "input_tokens": 38329,
+            "output_tokens": 413,
+            "cache_read_tokens": 76608,
+            "cache_write_tokens": 0,
+            "total_tokens": 115350,
+            "cost": 0.02228624,
+            "cache_hit_ratio": 66.65216596918312
+        },
+        {
+            "model": "gpt-5.4-mini",
+            "provider": "ainaba",
+            "sources": [
+                "codex"
+            ],
+            "calls": 5,
+            "input_tokens": 17212,
+            "output_tokens": 1335,
+            "cache_read_tokens": 91008,
+            "cache_write_tokens": 0,
+            "total_tokens": 109555,
+            "cost": 0.0,
+            "cache_hit_ratio": 84.0953613010534
+        }
+    ],
+    "by_source": [
+        {
+            "source": "pi",
+            "calls": 9081,
+            "input_tokens": 260269635,
+            "output_tokens": 2884011,
+            "cache_read_tokens": 476734487,
+            "cache_write_tokens": 0,
+            "total_tokens": 739888133,
+            "cost": 67.00670124499992,
+            "cache_hit_ratio": 64.68545734945022
+        },
+        {
+            "source": "opencode",
+            "calls": 4280,
+            "input_tokens": 14741359,
+            "output_tokens": 2468195,
+            "cache_read_tokens": 282221249,
+            "cache_write_tokens": 183318,
+            "total_tokens": 299614121,
+            "cost": 41.96286496160004,
+            "cache_hit_ratio": 95.03595449296431
+        },
+        {
+            "source": "claude-code",
+            "calls": 4193,
+            "input_tokens": 216002140,
+            "output_tokens": 1086920,
+            "cache_read_tokens": 66762264,
+            "cache_write_tokens": 0,
+            "total_tokens": 283851324,
+            "cost": 0.0,
+            "cache_hit_ratio": 23.610561674516852
+        },
+        {
+            "source": "kimi-cli",
+            "calls": 1849,
+            "input_tokens": 4592843,
+            "output_tokens": 775903,
+            "cache_read_tokens": 168314072,
+            "cache_write_tokens": 0,
+            "total_tokens": 173682818,
+            "cost": 0.0,
+            "cache_hit_ratio": 97.34374822429744
+        },
+        {
+            "source": "codex",
+            "calls": 1364,
+            "input_tokens": 12076422,
+            "output_tokens": 694166,
+            "cache_read_tokens": 125467776,
+            "cache_write_tokens": 0,
+            "total_tokens": 138238364,
+            "cost": 0.0,
+            "cache_hit_ratio": 91.21996988924244
+        }
+    ]
+}

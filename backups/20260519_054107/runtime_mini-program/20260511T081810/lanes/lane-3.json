@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T081810",
+  "laneNumber": 3,
+  "laneId": "lane-3",
+  "repoId": "default",
+  "taskId": "MP-006",
+  "segmentId": null,
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-3-worker",
+    "status": "crashed",
+    "elapsedMs": 76880,
+    "toolCalls": 17,
+    "contextPct": 9.058380126953125,
+    "costUsd": 0,
+    "lastTool": "edit: /home/skyscribe/srcs/skyscribe-20260511T081810/lane-3/taskplane-tasks/miniprogram/MP-006-report-ops/STATUS.md",
+    "inputTokens": 12085,
+    "outputTokens": 2419,
+    "cacheReadTokens": 188672,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 4: Run tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 4,
+    "reviews": 0
+  },
+  "updatedAt": 1778465743452
+}

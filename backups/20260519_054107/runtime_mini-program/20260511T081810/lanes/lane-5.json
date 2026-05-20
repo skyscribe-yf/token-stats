@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T081810",
+  "laneNumber": 5,
+  "laneId": "lane-5",
+  "repoId": "default",
+  "taskId": "MP-008",
+  "segmentId": null,
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-5-worker",
+    "status": "crashed",
+    "elapsedMs": 122216,
+    "toolCalls": 8,
+    "contextPct": 6.121063232421875,
+    "costUsd": 0,
+    "lastTool": "bash: ls /home/skyscribe/srcs/skyscribe-20260511T081810/lane-5/miniprogram/tests/ | grep admin",
+    "inputTokens": 5095,
+    "outputTokens": 1674,
+    "cacheReadTokens": 66816,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 1: Write failing field-mapping tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 3,
+    "reviews": 0
+  },
+  "updatedAt": 1778466943790
+}

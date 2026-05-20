@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "batchId": "20260511T062757",
+  "wavePlan": [
+    [
+      "TP-003"
+    ],
+    [
+      "MP-002"
+    ],
+    [
+      "MP-003",
+      "MP-005",
+      "MP-006",
+      "MP-007",
+      "MP-008"
+    ],
+    [
+      "MP-004",
+      "MP-009"
+    ],
+    [
+      "TP-004"
+    ]
+  ],
+  "baseBranch": "main",
+  "orchBranch": "orch/skyscribe-20260511T062757",
+  "mode": "repo",
+  "startedAt": 1778452077025,
+  "totalWaves": 5
+}

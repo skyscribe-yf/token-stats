@@ -1,0 +1,31 @@
+{
+  "batchId": "20260508T094931",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "MP-001",
+  "segmentId": "MP-001::default",
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "exited",
+    "elapsedMs": 1033308,
+    "toolCalls": 96,
+    "contextPct": 8.6506,
+    "costUsd": 0.21961092000000004,
+    "lastTool": "notify_supervisor: Task MP-001 complete. All 6 steps finished, all 183 tests passing (17 suites), 6 new tests added. Implementation summary:\n\n**Step 1** — app.js: `UI_MODE_KEY`, `globalData.uiMode` from storage, `setUiMode()` method. My page onClearCache keeps `'ui_mode'`.\n\n**Step 2** — My page: mode selector card wit",
+    "inputTokens": 61179,
+    "outputTokens": 25543,
+    "cacheReadTokens": 5367296,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 6: Documentation & Delivery",
+    "checked": 22,
+    "total": 22,
+    "iteration": 1,
+    "reviews": 10
+  },
+  "updatedAt": 1778206005790
+}

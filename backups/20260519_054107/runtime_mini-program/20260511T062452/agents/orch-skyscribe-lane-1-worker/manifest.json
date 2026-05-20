@@ -1,0 +1,20 @@
+{
+  "batchId": "20260511T062452",
+  "agentId": "orch-skyscribe-lane-1-worker",
+  "role": "worker",
+  "laneNumber": 1,
+  "taskId": "TP-003",
+  "repoId": "default",
+  "pid": 16184,
+  "parentPid": 16097,
+  "startedAt": 1778451894237,
+  "status": "running",
+  "cwd": "/home/skyscribe/srcs/skyscribe-20260511T062452/lane-1",
+  "packet": {
+    "promptPath": "/home/skyscribe/srcs/skyscribe-20260511T062452/lane-1/taskplane-tasks/TP-003-backend-contract-gaps/PROMPT.md",
+    "statusPath": "/home/skyscribe/srcs/skyscribe-20260511T062452/lane-1/taskplane-tasks/TP-003-backend-contract-gaps/STATUS.md",
+    "donePath": "/home/skyscribe/srcs/skyscribe-20260511T062452/lane-1/taskplane-tasks/TP-003-backend-contract-gaps/.DONE",
+    "reviewsDir": "/home/skyscribe/srcs/skyscribe-20260511T062452/lane-1/taskplane-tasks/TP-003-backend-contract-gaps/.reviews",
+    "taskFolder": "/home/skyscribe/srcs/skyscribe-20260511T062452/lane-1/taskplane-tasks/TP-003-backend-contract-gaps"
+  }
+}

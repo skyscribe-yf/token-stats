@@ -1,0 +1,31 @@
+{
+  "batchId": "20260512T082928",
+  "laneNumber": 5,
+  "laneId": "lane-5",
+  "repoId": "default",
+  "taskId": "TP-004",
+  "segmentId": "TP-004::default",
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-5-worker",
+    "status": "crashed",
+    "elapsedMs": 214242,
+    "toolCalls": 18,
+    "contextPct": 13.254165649414062,
+    "costUsd": 0,
+    "lastTool": "bash: git add taskplane-tasks/TP-004-full-regression/STATUS.md && git commit -m \"chore(TP-004): finalize STATUS.md current step\"",
+    "inputTokens": 18617,
+    "outputTokens": 3219,
+    "cacheReadTokens": 276736,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 5: Update documentation",
+    "checked": 0,
+    "total": 0,
+    "iteration": 3,
+    "reviews": 0
+  },
+  "updatedAt": 1778547606028
+}

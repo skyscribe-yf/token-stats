@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T121520",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "TP-004",
+  "segmentId": "TP-004::default",
+  "status": "failed",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "crashed",
+    "elapsedMs": 1536727,
+    "toolCalls": 122,
+    "contextPct": 30.4534912109375,
+    "costUsd": 0,
+    "lastTool": "read: /home/skyscribe/srcs/skyscribe-20260511T121520/lane-1/taskplane-tasks/TP-004-full-regression/STATUS.md",
+    "inputTokens": 79107,
+    "outputTokens": 27549,
+    "cacheReadTokens": 5190144,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 5: Update documentation",
+    "checked": 0,
+    "total": 0,
+    "iteration": 3,
+    "reviews": 0
+  },
+  "updatedAt": 1778477976827
+}

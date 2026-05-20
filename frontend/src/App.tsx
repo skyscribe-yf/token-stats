@@ -8,7 +8,7 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  LineChart,
+  ComposedChart,
   Line,
   PieChart,
   Pie,
@@ -72,7 +72,6 @@ const ZH = {
   totalCost: "总费用",
   dailyTokenUsage: "每日 Token 用量",
   vendorBreakdown: "供应商分布",
-  cacheHitTrend: "缓存命中率趋势",
   tokenDistribution: "Token 分布",
   vendorAndModel: "供应商 & 模型表现",
   detailedRequests: "详细请求",
@@ -117,7 +116,19 @@ const ZH = {
   cacheHitNoXunfei: "缓存命中率(无讯飞)",
   xunfeiNoCacheNote: "讯飞无缓存机制",
   subscription: "订阅",
+  chartMetrics: "图表指标",
+  cacheLabel: "缓存",
 } as const;
+
+const CHART_METRIC_OPTIONS = [
+  { key: "cache", label: "缓存", color: "#8b5cf6" },
+  { key: "input", label: "输入", color: "#10b981" },
+  { key: "output", label: "输出", color: "#f59e0b" },
+  { key: "cacheHitRatio", label: "缓存命中率", color: "#f43f5e" },
+  { key: "cacheHitRatioNoXunfei", label: "缓存命中率(无讯飞)", color: "#06b6d4" },
+] as const;
+
+type ChartMetricKey = (typeof CHART_METRIC_OPTIONS)[number]["key"];
 
 function CustomTooltip({
   active,
@@ -132,15 +143,18 @@ function CustomTooltip({
   return (
     <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
       {label && <p className="font-semibold text-slate-700 mb-1">{label}</p>}
-      {payload.map((p, i) => (
-        <p key={i} className="text-slate-600">
-          <span
-            className="inline-block w-2 h-2 rounded-full mr-1.5"
-            style={{ background: p.color }}
-          />
-          {p.name}: {formatNumber(Number(p.value ?? 0))}
-        </p>
-      ))}
+      {payload.map((p, i) => {
+        const isRatio = p.name?.includes("命中率");
+        return (
+          <p key={i} className="text-slate-600">
+            <span
+              className="inline-block w-2 h-2 rounded-full mr-1.5"
+              style={{ background: p.color }}
+            />
+            {p.name}: {isRatio ? formatPercent(Number(p.value ?? 0)) : formatNumber(Number(p.value ?? 0))}
+          </p>
+        );
+      })}
     </div>
   );
 }
@@ -266,6 +280,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+
+  // Chart metric filter
+  const [chartMetrics, setChartMetrics] = useState<Set<ChartMetricKey>>(
+    () => new Set(["cache", "input", "output", "cacheHitRatio"])
+  );
+  const [showChartFilter, setShowChartFilter] = useState(false);
 
   // Backup / restore
   const [showRestore, setShowRestore] = useState(false);
@@ -489,6 +509,28 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showCustomPanel]);
 
+  // Close chart filter panel on outside click
+  useEffect(() => {
+    if (!showChartFilter) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".chart-metric-panel") && !target.closest(".chart-metric-btn")) {
+        setShowChartFilter(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showChartFilter]);
+
+  // Reset model selection if it's no longer available after filter changes
+  useEffect(() => {
+    if (!selectedModel || !stats?.by_model) return;
+    const availableModels = new Set(stats.by_model.map((m) => m.model));
+    if (!availableModels.has(selectedModel)) {
+      setSelectedModel("");
+    }
+  }, [stats, selectedModel]);
+
   const chartData = useMemo(() => {
     if (!stats?.by_date) return [];
     return stats.by_date.map((d) => {
@@ -512,6 +554,7 @@ export default function App() {
         output: d.output_tokens,
         cacheRead: d.cache_read_tokens,
         cacheWrite: d.cache_write_tokens,
+        cache: d.cache_read_tokens + d.cache_write_tokens,
         total: d.total_tokens,
         cost: d.cost,
         cacheHitRatio: d.cache_hit_ratio,
@@ -560,6 +603,16 @@ export default function App() {
     }
     return rows;
   }, [stats]);
+
+  const filteredModels = useMemo(() => {
+    if (!stats?.by_model) return filters.models;
+    return [...new Set(stats.by_model.map((m) => m.model))].sort();
+  }, [stats, filters.models]);
+
+  const showRatioAxis = useMemo(
+    () => chartMetrics.has("cacheHitRatio") || chartMetrics.has("cacheHitRatioNoXunfei"),
+    [chartMetrics]
+  );
 
   const applyCustom = () => {
     if (customFrom && customTo) {
@@ -1202,13 +1255,50 @@ export default function App() {
             {/* Charts Row - reduced height, pie merged into vendor card */}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-              {/* Daily Trends + Cache Hit Ratio */}
+              {/* Daily Token Usage - Stacked Bar + Cache Hit Ratio Line */}
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                <h3 className="text-xs font-semibold text-slate-700 mb-2">
-                  {ZH.dailyTokenUsage} & {ZH.cacheHitTrend}
-                </h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold text-slate-700">
+                    {ZH.dailyTokenUsage}
+                  </h3>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowChartFilter((v) => !v)}
+                      className={`chart-metric-btn inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
+                        showChartFilter
+                          ? "bg-primary-100 text-primary-700"
+                          : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                      }`}
+                    >
+                      <SlidersHorizontal className="w-3 h-3" />
+                      {ZH.chartMetrics}
+                    </button>
+                    {showChartFilter && (
+                      <div className="chart-metric-panel absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl p-1.5 min-w-[160px] z-30">
+                        {CHART_METRIC_OPTIONS.map((opt) => (
+                          <label
+                            key={opt.key}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={chartMetrics.has(opt.key)}
+                              onChange={() => toggleInSet(chartMetrics, setChartMetrics, opt.key)}
+                              className="rounded border-slate-300 text-primary-600 focus:ring-primary-500"
+                            />
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ background: opt.color }}
+                            />
+                            <span className="text-xs text-slate-700">{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={chartData}>
+                  <ComposedChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis
                       dataKey="date"
@@ -1223,64 +1313,70 @@ export default function App() {
                       tickFormatter={(v: number) => formatNumber(v)}
                       width={50}
                     />
-                    <YAxis
-                      yAxisId="ratio"
-                      orientation="right"
-                      tick={{ fontSize: 10, fill: "#f43f5e" }}
-                      domain={[0, 100]}
-                      unit="%"
-                      width={40}
-                    />
+                    {showRatioAxis && (
+                      <YAxis
+                        yAxisId="ratio"
+                        orientation="right"
+                        tick={{ fontSize: 10, fill: "#f43f5e" }}
+                        domain={[0, 100]}
+                        unit="%"
+                        width={40}
+                      />
+                    )}
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <Line
-                      yAxisId="tokens"
-                      type="monotone"
-                      dataKey="input"
-                      name={ZH.inputLabel}
-                      stroke="#10b981"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="tokens"
-                      type="monotone"
-                      dataKey="output"
-                      name={ZH.outputLabel}
-                      stroke="#f59e0b"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="tokens"
-                      type="monotone"
-                      dataKey="cacheRead"
-                      name={ZH.cacheReadLabel}
-                      stroke="#8b5cf6"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="ratio"
-                      type="monotone"
-                      dataKey="cacheHitRatio"
-                      name={ZH.cacheHitLabel}
-                      stroke="#f43f5e"
-                      strokeWidth={2}
-                      strokeDasharray="6 3"
-                      dot={{ r: 2 }}
-                    />
-                    <Line
-                      yAxisId="ratio"
-                      type="monotone"
-                      dataKey="cacheHitRatioNoXunfei"
-                      name={ZH.cacheHitNoXunfei}
-                      stroke="#06b6d4"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 2"
-                      dot={{ r: 1.5 }}
-                    />
-                  </LineChart>
+                    {chartMetrics.has("cache") && (
+                      <Bar
+                        yAxisId="tokens"
+                        dataKey="cache"
+                        name={ZH.cacheLabel}
+                        stackId="tokens"
+                        fill="#8b5cf6"
+                      />
+                    )}
+                    {chartMetrics.has("input") && (
+                      <Bar
+                        yAxisId="tokens"
+                        dataKey="input"
+                        name={ZH.inputLabel}
+                        stackId="tokens"
+                        fill="#10b981"
+                      />
+                    )}
+                    {chartMetrics.has("output") && (
+                      <Bar
+                        yAxisId="tokens"
+                        dataKey="output"
+                        name={ZH.outputLabel}
+                        stackId="tokens"
+                        fill="#f59e0b"
+                      />
+                    )}
+                    {chartMetrics.has("cacheHitRatio") && showRatioAxis && (
+                      <Line
+                        yAxisId="ratio"
+                        type="monotone"
+                        dataKey="cacheHitRatio"
+                        name={ZH.cacheHitLabel}
+                        stroke="#f43f5e"
+                        strokeWidth={2}
+                        strokeDasharray="6 3"
+                        dot={{ r: 2 }}
+                      />
+                    )}
+                    {chartMetrics.has("cacheHitRatioNoXunfei") && showRatioAxis && (
+                      <Line
+                        yAxisId="ratio"
+                        type="monotone"
+                        dataKey="cacheHitRatioNoXunfei"
+                        name={ZH.cacheHitNoXunfei}
+                        stroke="#06b6d4"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 2"
+                        dot={{ r: 1.5 }}
+                      />
+                    )}
+                  </ComposedChart>
                 </ResponsiveContainer>
                 <p className="text-[10px] text-slate-400 mt-1">* {ZH.xunfeiNoCacheNote}</p>
               </div>
@@ -1446,7 +1542,7 @@ export default function App() {
                     className="px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-primary-500 outline-none bg-white"
                   >
                     <option value="">{ZH.allModels}</option>
-                    {filters.models.map((m) => (
+                    {filteredModels.map((m) => (
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>

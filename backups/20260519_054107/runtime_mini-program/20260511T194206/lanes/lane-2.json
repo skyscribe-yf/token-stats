@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T194206",
+  "laneNumber": 2,
+  "laneId": "lane-2",
+  "repoId": "default",
+  "taskId": "MP-010",
+  "segmentId": "MP-010::default",
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-2-worker",
+    "status": "exited",
+    "elapsedMs": 838297,
+    "toolCalls": 79,
+    "contextPct": 32.50541687011719,
+    "costUsd": 0,
+    "lastTool": "bash: test -f \"/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure/.task-wrap-up\" && echo \"WRAP_UP_SIGNAL\" || echo \"No wrap-up signal\"",
+    "inputTokens": 84885,
+    "outputTokens": 14402,
+    "cacheReadTokens": 2986496,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 8: Documentation & Delivery",
+    "checked": 48,
+    "total": 49,
+    "iteration": 2,
+    "reviews": 11
+  },
+  "updatedAt": 1778504391732
+}

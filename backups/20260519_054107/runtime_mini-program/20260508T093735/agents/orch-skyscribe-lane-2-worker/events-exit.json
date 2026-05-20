@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 24045,
+    "output": 2602,
+    "cacheRead": 284672,
+    "cacheWrite": 0
+  },
+  "cost": 0.03494243999999999,
+  "toolCalls": 13,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 48,
+  "lastToolCall": "read: /home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-2/taskplane-tasks/EXAMPLE-002-parallel-smoke/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 24866,
+    "contextWindow": 1000000,
+    "percent": 2.4866
+  }
+}

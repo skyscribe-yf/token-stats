@@ -1,0 +1,22 @@
+{
+  "exitCode": 143,
+  "exitSignal": null,
+  "tokens": {
+    "input": 16805,
+    "output": 442,
+    "cacheRead": 46592,
+    "cacheWrite": 0
+  },
+  "cost": 0.12058100000000002,
+  "toolCalls": 4,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 18,
+  "lastToolCall": "write: /home/skyscribe/srcs/mini-program/.pi/merge-result-w1-lane2-skyscribe-20260508T093735.json",
+  "error": null,
+  "contextUsage": {
+    "tokens": 15729,
+    "contextWindow": 1050000,
+    "percent": 1.498
+  }
+}

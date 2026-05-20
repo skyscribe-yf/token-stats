@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 23663,
+    "output": 2414,
+    "cacheRead": 234752,
+    "cacheWrite": 0
+  },
+  "cost": 0.03318603999999999,
+  "toolCalls": 11,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 43,
+  "lastToolCall": "edit: /home/skyscribe/srcs/mini-program/.worktrees/skyscribe-20260508T093735/lane-1/taskplane-tasks/EXAMPLE-001-hello-world/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 24994,
+    "contextWindow": 1000000,
+    "percent": 2.4994
+  }
+}

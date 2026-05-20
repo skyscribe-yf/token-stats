@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 79107,
+    "output": 27549,
+    "cacheRead": 5190144,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 122,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 1537,
+  "lastToolCall": "read: /home/skyscribe/srcs/skyscribe-20260511T121520/lane-1/taskplane-tasks/TP-004-full-regression/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 79832,
+    "contextWindow": 262144,
+    "percent": 30.4534912109375
+  }
+}

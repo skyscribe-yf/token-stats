@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 26058,
+    "output": 3269,
+    "cacheRead": 265984,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 15,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 181,
+  "lastToolCall": "read: /home/skyscribe/srcs/skyscribe-20260511T081810/lane-4/taskplane-tasks/miniprogram/MP-007-marketing/STATUS.md",
+  "error": null,
+  "contextUsage": {
+    "tokens": 22223,
+    "contextWindow": 262144,
+    "percent": 8.477401733398438
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 61179,
+    "output": 25543,
+    "cacheRead": 5367296,
+    "cacheWrite": 0
+  },
+  "cost": 0.21961092000000004,
+  "toolCalls": 96,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 1033,
+  "lastToolCall": "notify_supervisor: Task MP-001 complete. All 6 steps finished, all 183 tests passing (17 suites), 6 new tests added. Implementation summary:\n\n**Step 1** — app.js: `UI_MODE_KEY`, `globalData.uiMode` from storage, `setUiMode()` method. My page onClearCache keeps `'ui_mode'`.\n\n**Step 2** — My page: mode selector card wit",
+  "error": null,
+  "contextUsage": {
+    "tokens": 86506,
+    "contextWindow": 1000000,
+    "percent": 8.6506
+  }
+}

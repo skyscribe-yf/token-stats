@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T194206",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "MP-014",
+  "segmentId": "MP-014::default",
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "exited",
+    "elapsedMs": 5843743,
+    "toolCalls": 88,
+    "contextPct": 34.22698974609375,
+    "costUsd": 0,
+    "lastTool": "bash: git log --oneline -10",
+    "inputTokens": 91256,
+    "outputTokens": 34104,
+    "cacheReadTokens": 4513536,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 8: Documentation & Delivery",
+    "checked": 50,
+    "total": 50,
+    "iteration": 1,
+    "reviews": 3
+  },
+  "updatedAt": 1778544619143
+}

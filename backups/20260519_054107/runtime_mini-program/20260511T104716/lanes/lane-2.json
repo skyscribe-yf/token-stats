@@ -1,0 +1,31 @@
+{
+  "batchId": "20260511T104716",
+  "laneNumber": 2,
+  "laneId": "lane-2",
+  "repoId": "default",
+  "taskId": "MP-009",
+  "segmentId": "MP-009::default",
+  "status": "running",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-2-worker",
+    "status": "running",
+    "elapsedMs": 0,
+    "toolCalls": 20,
+    "contextPct": 10.086822509765625,
+    "costUsd": 0,
+    "lastTool": "read: taskplane-tasks/miniprogram/MP-009-backup-restore/STATUS.md",
+    "inputTokens": 14038,
+    "outputTokens": 2166,
+    "cacheReadTokens": 254976,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 5: Run tests",
+    "checked": 0,
+    "total": 0,
+    "iteration": 4,
+    "reviews": 0
+  },
+  "updatedAt": 1778472763531
+}

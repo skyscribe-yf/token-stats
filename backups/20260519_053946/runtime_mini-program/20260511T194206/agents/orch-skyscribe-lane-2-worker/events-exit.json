@@ -1,0 +1,22 @@
+{
+  "exitCode": 0,
+  "exitSignal": null,
+  "tokens": {
+    "input": 84885,
+    "output": 14402,
+    "cacheRead": 2986496,
+    "cacheWrite": 0
+  },
+  "cost": null,
+  "toolCalls": 79,
+  "retries": 0,
+  "compactions": 0,
+  "durationSec": 838,
+  "lastToolCall": "bash: test -f \"/home/skyscribe/srcs/skyscribe-20260511T194206/lane-2/taskplane-tasks/miniprogram/MP-010-tab-bar-restructure/.task-wrap-up\" && echo \"WRAP_UP_SIGNAL\" || echo \"No wrap-up signal\"",
+  "error": null,
+  "contextUsage": {
+    "tokens": 85211,
+    "contextWindow": 262144,
+    "percent": 32.50541687011719
+  }
+}

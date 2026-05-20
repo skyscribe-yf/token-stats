@@ -1,0 +1,31 @@
+{
+  "batchId": "20260512T082928",
+  "laneNumber": 1,
+  "laneId": "lane-1",
+  "repoId": "default",
+  "taskId": "AD-002",
+  "segmentId": null,
+  "status": "complete",
+  "worker": {
+    "agentId": "orch-skyscribe-lane-1-worker",
+    "status": "exited",
+    "elapsedMs": 790597,
+    "toolCalls": 40,
+    "contextPct": 18.974685668945312,
+    "costUsd": 0,
+    "lastTool": "bash: cd /home/skyscribe/srcs/skyscribe-20260512T082928/lane-1/taskplane-tasks/admin/AD-002-merchant-audit-excel && test -f .task-wrap-up && echo \"WRAP_UP_SIGNAL\" || echo \"No wrap-up signal\"",
+    "inputTokens": 51789,
+    "outputTokens": 10904,
+    "cacheReadTokens": 1141504,
+    "cacheWriteTokens": 0
+  },
+  "reviewer": null,
+  "progress": {
+    "currentStep": "Step 9: Documentation",
+    "checked": 18,
+    "total": 18,
+    "iteration": 2,
+    "reviews": 0
+  },
+  "updatedAt": 1778575312192
+}
