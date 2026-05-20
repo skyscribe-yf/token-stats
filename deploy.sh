@@ -92,7 +92,17 @@ if [ -n "${XUNFEI_SSO_SESSION_ID:-}" ]; then
     echo "Environment=\"XUNFEI_SSO_SESSION_ID=$XUNFEI_SSO_SESSION_ID\"" | sudo tee -a /etc/systemd/system/token-stats.service.d/xunfei.conf > /dev/null
     echo "✅ Injected XUNFEI_SSO_SESSION_ID into systemd env"
 else
-    echo "⚠️  XUNFEI_SSO_SESSION_ID not set in current shell — xunfei data will be unavailable"
+    echo "⚠️  XUNFEI_SSO_SESSION_ID not set in current shell — xunfei primary account will be unavailable"
+fi
+
+# Inject XUNFEI_SSO_SESSION_ID_EX from current shell into systemd env drop-in
+if [ -n "${XUNFEI_SSO_SESSION_ID_EX:-}" ]; then
+    sudo mkdir -p /etc/systemd/system/token-stats.service.d
+    echo "[Service]" | sudo tee /etc/systemd/system/token-stats.service.d/xunfei-ex.conf > /dev/null
+    echo "Environment=\"XUNFEI_SSO_SESSION_ID_EX=$XUNFEI_SSO_SESSION_ID_EX\"" | sudo tee -a /etc/systemd/system/token-stats.service.d/xunfei-ex.conf > /dev/null
+    echo "✅ Injected XUNFEI_SSO_SESSION_ID_EX into systemd env"
+else
+    echo "⚠️  XUNFEI_SSO_SESSION_ID_EX not set in current shell — xunfei EX account will be unavailable"
 fi
 
 # Inject OpenCode-go credentials from current shell into systemd env drop-in
@@ -103,7 +113,18 @@ if [ -n "${OPENCODE_GO_WORKSPACE_ID:-}" ] && [ -n "${OPENCODE_GO_AUTH_COOKIE:-}"
     echo "Environment=\"OPENCODE_GO_AUTH_COOKIE=$OPENCODE_GO_AUTH_COOKIE\"" | sudo tee -a /etc/systemd/system/token-stats.service.d/opencode.conf > /dev/null
     echo "✅ Injected OPENCODE_GO_WORKSPACE_ID and OPENCODE_GO_AUTH_COOKIE into systemd env"
 else
-    echo "⚠️  OPENCODE_GO_WORKSPACE_ID and/or OPENCODE_GO_AUTH_COOKIE not set in current shell — OpenCode-go quota will be unavailable"
+    echo "⚠️  OPENCODE_GO_WORKSPACE_ID and/or OPENCODE_GO_AUTH_COOKIE not set in current shell — OpenCode-go primary account will be unavailable"
+fi
+
+# Inject OpenCode-go EX credentials from current shell into systemd env drop-in
+if [ -n "${OPENCODE_GO_WORKSPACE_ID_EX:-}" ] && [ -n "${OPENCODE_GO_AUTH_COOKIE_EX:-}" ]; then
+    sudo mkdir -p /etc/systemd/system/token-stats.service.d
+    echo "[Service]" | sudo tee /etc/systemd/system/token-stats.service.d/opencode-ex.conf > /dev/null
+    echo "Environment=\"OPENCODE_GO_WORKSPACE_ID_EX=$OPENCODE_GO_WORKSPACE_ID_EX\"" | sudo tee -a /etc/systemd/system/token-stats.service.d/opencode-ex.conf > /dev/null
+    echo "Environment=\"OPENCODE_GO_AUTH_COOKIE_EX=$OPENCODE_GO_AUTH_COOKIE_EX\"" | sudo tee -a /etc/systemd/system/token-stats.service.d/opencode-ex.conf > /dev/null
+    echo "✅ Injected OPENCODE_GO_WORKSPACE_ID_EX and OPENCODE_GO_AUTH_COOKIE_EX into systemd env"
+else
+    echo "⚠️  OPENCODE_GO_WORKSPACE_ID_EX and/or OPENCODE_GO_AUTH_COOKIE_EX not set in current shell — OpenCode-go EX account will be unavailable"
 fi
 
 sudo systemctl daemon-reload

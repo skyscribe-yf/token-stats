@@ -16,3 +16,4 @@
 /backend/static/favicon.svg
 /backend/static/icons.svg
 .worktrees/
+.pi/

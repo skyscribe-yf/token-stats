@@ -40,7 +40,7 @@ import {
   type PaginatedRequests,
   type FilterOptions,
   type QuotaResponse,
-  type XunfeiStatus,
+  type XunfeiMultiStatus,
   type RestoreResponse,
 } from "./api";
 import {
@@ -269,7 +269,7 @@ export default function App() {
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
   const [quota, setQuota] = useState<QuotaResponse | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(true);
-  const [xunfei, setXunfei] = useState<XunfeiStatus | null>(null);
+  const [xunfei, setXunfei] = useState<XunfeiMultiStatus | null>(null);
   const [xunfeiLoading, setXunfeiLoading] = useState(true);
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
@@ -1125,9 +1125,14 @@ export default function App() {
                   {quotaLoading || xunfeiLoading
                     ? "加载中..."
                     : [
-                        xunfei?.available && xunfei.data
-                          ? "讯飞: " + (xunfei.data.usage.rp5h_limit > 0 ? "5h " + (xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + (xunfei.data.usage.rpw_limit > 0 ? "周 " + (xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100).toFixed(0) + "%, " : "") + "月 " + (xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0) + "%"
-                          : xunfei && !xunfeiLoading ? "讯飞: 获取失败" : null,
+                          ...(xunfei?.accounts?.map((acc) =>
+                          acc.available && acc.data
+                            ? `讯飞${acc.label === "ex" ? " EX" : ""}: ` + (acc.data.usage.rp5h_limit > 0 ? "5h " + (acc.data.usage.rp5h_used / Math.max(acc.data.usage.rp5h_limit, 1) * 100).toFixed(0) + "%, " : "") + (acc.data.usage.rpw_limit > 0 ? "周 " + (acc.data.usage.rpw_used / Math.max(acc.data.usage.rpw_limit, 1) * 100).toFixed(0) + "%, " : "") + "月 " + (acc.data.usage.package_used / Math.max(acc.data.usage.package_limit, 1) * 100).toFixed(0) + "%"
+                            : null
+                        ) ?? []),
+                        xunfei && !xunfeiLoading && (!xunfei.accounts || xunfei.accounts.every(a => !a.available))
+                          ? "讯飞: 获取失败"
+                          : null,
                         quota?.kimi?.available && quota.kimi.data
                           ? "Kimi: " + (quota.kimi.data.rp5h_limit > 0 ? "5h " + (quota.kimi.data.rp5h_used / Math.max(quota.kimi.data.rp5h_limit, 1) * 100).toFixed(0) + "%" + (formatResetTime(quota.kimi.data.rp5h_reset_time) ? "(" + formatResetTime(quota.kimi.data.rp5h_reset_time)!.replace("后重置", "") + "), " : ", ") : "") + "周 " + (quota.kimi.data.weekly_used / Math.max(quota.kimi.data.weekly_limit, 1) * 100).toFixed(0) + "%" + (formatResetTime(quota.kimi.data.weekly_reset_time) ? "(" + formatResetTime(quota.kimi.data.weekly_reset_time)!.replace("后重置", "") + ")" : "")
                           : quota?.kimi && !quotaLoading ? "Kimi: 获取失败" : null,
@@ -1136,83 +1141,90 @@ export default function App() {
                           : quota?.opencode_go?.error
                             ? "OpenCode: " + quota.opencode_go.error
                             : quota?.opencode_go && !quotaLoading ? "OpenCode: 获取失败" : null,
+                        quota?.opencode_go_ex?.available && quota.opencode_go_ex.data
+                          ? "OpenCode EX: " + (quota.opencode_go_ex.data.entries.find(e => e.usage_type === "Monthly")?.percentage?.toFixed(0) ?? "?") + "%月已用"
+                          : quota?.opencode_go_ex?.error
+                            ? "OpenCode EX: " + quota.opencode_go_ex.error
+                            : quota?.opencode_go_ex && !quotaLoading ? "OpenCode EX: 获取失败" : null,
                       ]
                         .filter(Boolean)
                         .join(" · ") || "无可用订阅"}
                 </span>
               </summary>
-              <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {/* Xunfei */}
-                <div className={"bg-white rounded-xl border " + (xunfei?.available && xunfei.data?.status === "active" ? "border-emerald-200" : "border-slate-200") + " p-3 shadow-sm"}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className={"w-1.5 h-1.5 rounded-full " + (xunfeiLoading ? "bg-amber-400" : xunfei?.available && xunfei.data?.status === "active" ? "bg-emerald-500" : "bg-slate-300")} />
-                      <span className="text-[11px] font-semibold text-slate-700">讯飞编程套餐</span>
-                    </div>
-                    <span className="text-[10px] text-slate-400">xfyun.cn</span>
-                  </div>
-                  {xunfeiLoading ? (
-                    <div className="h-8 flex items-center justify-center">
-                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary-600" />
-                    </div>
-                  ) : xunfei?.available && xunfei.data ? (
-                    <>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
-                        <span className="font-bold text-slate-800">{xunfei.data.plan_name}</span>
-                        <span className={"px-1 py-0 rounded-full text-[10px] font-medium " + (xunfei.data.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
-                          {xunfei.data.status === "active" ? "有效" : xunfei.data.status}
-                        </span>
-                        <span className="text-slate-400">¥{(xunfei.data.price / 100).toFixed(2)}/月</span>
+              <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {/* Xunfei accounts */}
+                {xunfei?.accounts?.map((account) => (
+                  <div key={account.label} className={"bg-white rounded-xl border " + (account.available && account.data?.status === "active" ? "border-emerald-200" : "border-slate-200") + " p-3 shadow-sm"}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className={"w-1.5 h-1.5 rounded-full " + (xunfeiLoading ? "bg-amber-400" : account.available && account.data?.status === "active" ? "bg-emerald-500" : "bg-slate-300")} />
+                        <span className="text-[11px] font-semibold text-slate-700">讯飞编程套餐{account.label === "ex" ? " (EX)" : ""}</span>
                       </div>
-                      <div className="space-y-1">
-                        <div>
-                          <div className="flex justify-between text-[10px] text-slate-500">
-                            <span>月度</span>
-                            <span>{formatNumber(xunfei.data.usage.package_used)}/{formatNumber(xunfei.data.usage.package_limit)} ({(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100).toFixed(0)}%)</span>
-                          </div>
-                          <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                            <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.package_used, xunfei.data.usage.package_limit)}
-                              style={{ width: (Math.min(xunfei.data.usage.package_used / Math.max(xunfei.data.usage.package_limit, 1) * 100, 100)) + "%" }}
-                            />
-                          </div>
+                      <span className="text-[10px] text-slate-400">xfyun.cn</span>
+                    </div>
+                    {xunfeiLoading ? (
+                      <div className="h-8 flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary-600" />
+                      </div>
+                    ) : account.available && account.data ? (
+                      <>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
+                          <span className="font-bold text-slate-800">{account.data.plan_name}</span>
+                          <span className={"px-1 py-0 rounded-full text-[10px] font-medium " + (account.data.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>
+                            {account.data.status === "active" ? "有效" : account.data.status}
+                          </span>
+                          <span className="text-slate-400">¥{(account.data.price / 100).toFixed(2)}/月</span>
                         </div>
-                        {xunfei.data.usage.rpw_limit > 0 && (
+                        <div className="space-y-1">
                           <div>
                             <div className="flex justify-between text-[10px] text-slate-500">
-                              <span>周限额</span>
-                              <span>{formatNumber(xunfei.data.usage.rpw_used)}/{formatNumber(xunfei.data.usage.rpw_limit)} ({(xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100).toFixed(0)}%)</span>
+                              <span>月度</span>
+                              <span>{formatNumber(account.data.usage.package_used)}/{formatNumber(account.data.usage.package_limit)} ({(account.data.usage.package_used / Math.max(account.data.usage.package_limit, 1) * 100).toFixed(0)}%)</span>
                             </div>
                             <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                              <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.rpw_used, xunfei.data.usage.rpw_limit)}
-                                style={{ width: (Math.min(xunfei.data.usage.rpw_used / Math.max(xunfei.data.usage.rpw_limit, 1) * 100, 100)) + "%" }}
+                              <div className={"h-full rounded-full transition-all " + barColor(account.data.usage.package_used, account.data.usage.package_limit)}
+                                style={{ width: (Math.min(account.data.usage.package_used / Math.max(account.data.usage.package_limit, 1) * 100, 100)) + "%" }}
                               />
                             </div>
                           </div>
-                        )}
-                        {xunfei.data.usage.rp5h_limit > 0 && (
-                          <div>
-                            <div className="flex justify-between text-[10px] text-slate-500">
-                              <span>5小时</span>
-                              <span>{formatNumber(xunfei.data.usage.rp5h_used)}/{formatNumber(xunfei.data.usage.rp5h_limit)} ({(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100).toFixed(0)}%)</span>
+                          {account.data.usage.rpw_limit > 0 && (
+                            <div>
+                              <div className="flex justify-between text-[10px] text-slate-500">
+                                <span>周限额</span>
+                                <span>{formatNumber(account.data.usage.rpw_used)}/{formatNumber(account.data.usage.rpw_limit)} ({(account.data.usage.rpw_used / Math.max(account.data.usage.rpw_limit, 1) * 100).toFixed(0)}%)</span>
+                              </div>
+                              <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                                <div className={"h-full rounded-full transition-all " + barColor(account.data.usage.rpw_used, account.data.usage.rpw_limit)}
+                                  style={{ width: (Math.min(account.data.usage.rpw_used / Math.max(account.data.usage.rpw_limit, 1) * 100, 100)) + "%" }}
+                                />
+                              </div>
                             </div>
-                            <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                              <div className={"h-full rounded-full transition-all " + barColor(xunfei.data.usage.rp5h_used, xunfei.data.usage.rp5h_limit)}
-                                style={{ width: (Math.min(xunfei.data.usage.rp5h_used / Math.max(xunfei.data.usage.rp5h_limit, 1) * 100, 100)) + "%" }}
-                              />
+                          )}
+                          {account.data.usage.rp5h_limit > 0 && (
+                            <div>
+                              <div className="flex justify-between text-[10px] text-slate-500">
+                                <span>5小时</span>
+                                <span>{formatNumber(account.data.usage.rp5h_used)}/{formatNumber(account.data.usage.rp5h_limit)} ({(account.data.usage.rp5h_used / Math.max(account.data.usage.rp5h_limit, 1) * 100).toFixed(0)}%)</span>
+                              </div>
+                              <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                                <div className={"h-full rounded-full transition-all " + barColor(account.data.usage.rp5h_used, account.data.usage.rp5h_limit)}
+                                  style={{ width: (Math.min(account.data.usage.rp5h_used / Math.max(account.data.usage.rp5h_limit, 1) * 100, 100)) + "%" }}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 pt-1 border-t border-slate-100 text-[10px] text-slate-500">
-                        <span>余额 ¥{(xunfei.data.balance.cash / 100).toFixed(2)}</span>
-                        {xunfei.data.balance.virtual_balance > 0 && <span>赠送 ¥{(xunfei.data.balance.virtual_balance / 100).toFixed(2)}</span>}
-                        <span>到期 {xunfei.data.expires_at.replace(" ", "T")}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-[11px] text-slate-400 italic">获取失败</p>
-                  )}
-                </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 pt-1 border-t border-slate-100 text-[10px] text-slate-500">
+                          <span>余额 ¥{(account.data.balance.cash / 100).toFixed(2)}</span>
+                          {account.data.balance.virtual_balance > 0 && <span>赠送 ¥{(account.data.balance.virtual_balance / 100).toFixed(2)}</span>}
+                          <span>到期 {account.data.expires_at.replace(" ", "T")}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-[11px] text-slate-400 italic">{account.error || "获取失败"}</p>
+                    )}
+                  </div>
+                ))}
 
                 {/* Kimi Code */}
                 <div className={"bg-white rounded-xl border " + (quota?.kimi?.available ? "border-emerald-200" : "border-slate-200") + " p-3 shadow-sm"}>
@@ -1311,6 +1323,46 @@ export default function App() {
                     <>
                       {quota?.opencode_go?.error ? (
                         <p className="text-[11px] text-slate-400 italic">{quota.opencode_go.error}</p>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic">获取失败</p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {/* OpenCode-go EX */}
+                <div className={"bg-white rounded-xl border " + (quota?.opencode_go_ex?.available ? "border-emerald-200" : "border-slate-200") + " p-3 shadow-sm"}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={"w-1.5 h-1.5 rounded-full " + (quotaLoading ? "bg-amber-400" : quota?.opencode_go_ex?.available ? "bg-emerald-500" : "bg-slate-300")} />
+                      <span className="text-[11px] font-semibold text-slate-700">OpenCode-go (EX)</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">opencode.ai</span>
+                  </div>
+                  {quotaLoading ? (
+                    <div className="h-8 flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary-600" />
+                    </div>
+                  ) : quota?.opencode_go_ex?.available && quota.opencode_go_ex.data && quota.opencode_go_ex.data.entries.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {quota.opencode_go_ex.data.entries.map((entry) => (
+                        <div key={entry.usage_type}>
+                          <div className="flex justify-between text-[10px] text-slate-500">
+                            <span>{entry.usage_type === "Rolling" ? "滚动" : entry.usage_type === "Weekly" ? "周" : entry.usage_type === "Monthly" ? "月" : entry.usage_type}</span>
+                            <span>{entry.percentage}% · {entry.resets_in}</span>
+                          </div>
+                          <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={"h-full rounded-full transition-all " + (entry.percentage > 80 ? "bg-rose-500" : entry.percentage > 50 ? "bg-amber-500" : "bg-emerald-500")}
+                              style={{ width: (Math.min(entry.percentage, 100)) + "%" }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <>
+                      {quota?.opencode_go_ex?.error ? (
+                        <p className="text-[11px] text-slate-400 italic">{quota.opencode_go_ex.error}</p>
                       ) : (
                         <p className="text-[11px] text-slate-400 italic">获取失败</p>
                       )}

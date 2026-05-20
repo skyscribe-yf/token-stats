@@ -22,9 +22,23 @@ pub fn get_workspace_id() -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
+/// Read `OPENCODE_GO_WORKSPACE_ID_EX` from environment.
+pub fn get_workspace_id_ex() -> Option<String> {
+    std::env::var("OPENCODE_GO_WORKSPACE_ID_EX")
+        .ok()
+        .filter(|id| !id.is_empty())
+}
+
 /// Read `OPENCODE_GO_AUTH_COOKIE` from environment.
 pub fn get_auth_cookie() -> Option<String> {
     std::env::var("OPENCODE_GO_AUTH_COOKIE")
+        .ok()
+        .filter(|c| !c.is_empty())
+}
+
+/// Read `OPENCODE_GO_AUTH_COOKIE_EX` from environment.
+pub fn get_auth_cookie_ex() -> Option<String> {
+    std::env::var("OPENCODE_GO_AUTH_COOKIE_EX")
         .ok()
         .filter(|c| !c.is_empty())
 }
@@ -41,10 +55,8 @@ fn build_usage_url(workspace_id: &str) -> String {
 
 // ─── OpenCode Quota Fetching ─────────────────────────────────────────────────
 
-/// Fetch OpenCode-go subscription usage by making an HTTP request directly
-/// to the workspace dashboard page and parsing the HTML.
+/// Fetch OpenCode-go subscription usage for the **primary** workspace.
 pub async fn fetch_opencode_quota(client: &Client) -> OpenCodeQuotaStatus {
-    // Step 1: Read environment variables
     let workspace_id = match get_workspace_id() {
         Some(id) => id,
         None => {
@@ -69,8 +81,47 @@ pub async fn fetch_opencode_quota(client: &Client) -> OpenCodeQuotaStatus {
         }
     };
 
-    // Step 2: Fetch the workspace page
-    let url = build_usage_url(&workspace_id);
+    fetch_opencode_quota_impl(client, &workspace_id, &auth_cookie, get_opencode_workspace_url()).await
+}
+
+/// Fetch OpenCode-go subscription usage for the **EX** workspace.
+pub async fn fetch_opencode_quota_ex(client: &Client) -> OpenCodeQuotaStatus {
+    let workspace_id = match get_workspace_id_ex() {
+        Some(id) => id,
+        None => {
+            warn!("OPENCODE_GO_WORKSPACE_ID_EX not set");
+            return OpenCodeQuotaStatus {
+                available: false,
+                data: None,
+                error: Some("OPENCODE_GO_WORKSPACE_ID_EX not set".to_string()),
+            };
+        }
+    };
+
+    let auth_cookie = match get_auth_cookie_ex() {
+        Some(c) => c,
+        None => {
+            warn!("OPENCODE_GO_AUTH_COOKIE_EX not set");
+            return OpenCodeQuotaStatus {
+                available: false,
+                data: None,
+                error: Some("OPENCODE_GO_AUTH_COOKIE_EX not set".to_string()),
+            };
+        }
+    };
+
+    let workspace_url = Some(format!("{}/workspace/{}/go", OPENCODE_BASE_URL, workspace_id));
+    fetch_opencode_quota_impl(client, &workspace_id, &auth_cookie, workspace_url).await
+}
+
+/// Core fetch+parse logic shared by both primary and EX workspace fetchers.
+async fn fetch_opencode_quota_impl(
+    client: &Client,
+    workspace_id: &str,
+    auth_cookie: &str,
+    workspace_url: Option<String>,
+) -> OpenCodeQuotaStatus {
+    let url = build_usage_url(workspace_id);
 
     let response = match client
         .get(&url)
@@ -141,7 +192,7 @@ pub async fn fetch_opencode_quota(client: &Client) -> OpenCodeQuotaStatus {
         data: Some(QuotaOpenCode {
             provider: "opencode-go".to_string(),
             entries,
-            workspace_url: get_opencode_workspace_url(),
+            workspace_url,
         }),
         error: None,
     }
@@ -300,6 +351,34 @@ mod tests {
     fn test_get_auth_cookie_unset() {
         temp_env::with_var("OPENCODE_GO_AUTH_COOKIE", None::<&str>, || {
             assert_eq!(get_auth_cookie(), None);
+        });
+    }
+
+    #[test]
+    fn test_get_workspace_id_ex_from_env() {
+        temp_env::with_var("OPENCODE_GO_WORKSPACE_ID_EX", Some("wrk_ex_123"), || {
+            assert_eq!(get_workspace_id_ex(), Some("wrk_ex_123".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_get_workspace_id_ex_unset() {
+        temp_env::with_var("OPENCODE_GO_WORKSPACE_ID_EX", None::<&str>, || {
+            assert_eq!(get_workspace_id_ex(), None);
+        });
+    }
+
+    #[test]
+    fn test_get_auth_cookie_ex_from_env() {
+        temp_env::with_var("OPENCODE_GO_AUTH_COOKIE_EX", Some("tok_ex_abc"), || {
+            assert_eq!(get_auth_cookie_ex(), Some("tok_ex_abc".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_get_auth_cookie_ex_unset() {
+        temp_env::with_var("OPENCODE_GO_AUTH_COOKIE_EX", None::<&str>, || {
+            assert_eq!(get_auth_cookie_ex(), None);
         });
     }
 

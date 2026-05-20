@@ -146,12 +146,17 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
 pub async fn get_quota() -> impl IntoResponse {
     let fetcher = QuotaFetcher::new();
 
-    let (kimi_result, opencode_result) =
-        tokio::join!(fetcher.fetch_kimi_quota(), fetcher.fetch_opencode_quota());
+    let (kimi_result, opencode_result, opencode_ex_result) =
+        tokio::join!(
+            fetcher.fetch_kimi_quota(),
+            fetcher.fetch_opencode_quota(),
+            fetcher.fetch_opencode_quota_ex(),
+        );
 
     let response = QuotaResponse {
         kimi: Some(kimi_result),
         opencode_go: Some(opencode_result),
+        opencode_go_ex: Some(opencode_ex_result),
     };
 
     Json(response)
@@ -191,7 +196,7 @@ pub async fn refresh_data(State(state): State<Arc<AppState>>) -> impl IntoRespon
 
 pub async fn get_xunfei() -> impl IntoResponse {
     let fetcher = XunfeiFetcher::new();
-    let status = fetcher.fetch_status().await;
+    let status = fetcher.fetch_all_statuses().await;
     Json(status)
 }
 

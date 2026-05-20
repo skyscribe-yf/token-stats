@@ -194,6 +194,7 @@ export interface OpenCodeQuotaStatus {
 export interface QuotaResponse {
   kimi: KimiQuotaStatus | null;
   opencode_go: OpenCodeQuotaStatus | null;
+  opencode_go_ex: OpenCodeQuotaStatus | null;
 }
 
 export async function fetchQuota(): Promise<QuotaResponse> {
@@ -246,13 +247,18 @@ export interface XunfeiStatusData {
   model_list: XunfeiModelInfo[];
 }
 
-export interface XunfeiStatus {
+export interface XunfeiAccountStatus {
+  label: string;
   available: boolean;
   data: XunfeiStatusData | null;
   error: string | null;
 }
 
-export async function fetchXunfei(): Promise<XunfeiStatus> {
+export interface XunfeiMultiStatus {
+  accounts: XunfeiAccountStatus[];
+}
+
+export async function fetchXunfei(): Promise<XunfeiMultiStatus> {
   const res = await fetch(`${API_BASE}/api/xunfei`);
   if (!res.ok) throw new Error("Failed to fetch xunfei status");
   return res.json();

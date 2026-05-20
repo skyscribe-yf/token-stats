@@ -14,8 +14,19 @@ pub use types::*;
 /// 1. `XUNFEI_SSO_SESSION_ID` environment variable
 /// 2. `~/.config/token-stats/xunfei.json` with `ssoSessionId` field
 pub fn resolve_xunfei_sso_session() -> Option<String> {
+    resolve_xunfei_sso_session_inner("XUNFEI_SSO_SESSION_ID", "xunfei.json")
+}
+
+/// Resolve the **second** Xunfei SSO session ID from:
+/// 1. `XUNFEI_SSO_SESSION_ID_EX` environment variable
+/// 2. `~/.config/token-stats/xunfei-ex.json` with `ssoSessionId` field
+pub fn resolve_xunfei_sso_session_ex() -> Option<String> {
+    resolve_xunfei_sso_session_inner("XUNFEI_SSO_SESSION_ID_EX", "xunfei-ex.json")
+}
+
+fn resolve_xunfei_sso_session_inner(env_key: &str, file_name: &str) -> Option<String> {
     // 1. Env var
-    if let Ok(session) = std::env::var("XUNFEI_SSO_SESSION_ID") {
+    if let Ok(session) = std::env::var(env_key) {
         let trimmed = session.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
@@ -27,7 +38,7 @@ pub fn resolve_xunfei_sso_session() -> Option<String> {
     let config_path = std::path::PathBuf::from(&home)
         .join(".config")
         .join("token-stats")
-        .join("xunfei.json");
+        .join(file_name);
 
     if let Ok(content) = std::fs::read_to_string(&config_path) {
         if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -59,23 +70,8 @@ impl XunfeiFetcher {
         }
     }
 
-    /// Fetch the full Xunfei status (plan + usage + balance).
-    pub async fn fetch_status(&self) -> XunfeiStatus {
-        let sso_session = match resolve_xunfei_sso_session() {
-            Some(s) => s,
-            None => {
-                return XunfeiStatus {
-                    available: false,
-                    data: None,
-                    error: Some(
-                        "Xunfei SSO session not found. Set XUNFEI_SSO_SESSION_ID \
-                         or create ~/.config/token-stats/xunfei.json with ssoSessionId"
-                            .to_string(),
-                    ),
-                };
-            }
-        };
-
+    /// Fetch the full Xunfei status for a **single** SSO session (plan + usage + balance).
+    async fn fetch_status_for_session(&self, sso_session: &str) -> XunfeiStatus {
         let plan_url = format!("{}/api/v1/gpt-finetune/coding-plan/list", self.base_url);
         let balance_url = format!("{}/api/v1/gpt-finetune/user/balance", self.base_url);
 
@@ -136,6 +132,59 @@ impl XunfeiFetcher {
         };
 
         parse_xunfei_status(&plan_payload, balance_data.as_ref())
+    }
+
+    /// Fetch the full Xunfei status (primary account).
+    pub async fn fetch_status(&self) -> XunfeiStatus {
+        match resolve_xunfei_sso_session() {
+            Some(session) => self.fetch_status_for_session(&session).await,
+            None => XunfeiStatus {
+                available: false,
+                data: None,
+                error: Some(
+                    "Xunfei SSO session not found. Set XUNFEI_SSO_SESSION_ID \
+                     or create ~/.config/token-stats/xunfei.json with ssoSessionId"
+                        .to_string(),
+                ),
+            },
+        }
+    }
+
+    /// Fetch the EX account Xunfei status.
+    pub async fn fetch_status_ex(&self) -> XunfeiStatus {
+        match resolve_xunfei_sso_session_ex() {
+            Some(session) => self.fetch_status_for_session(&session).await,
+            None => XunfeiStatus {
+                available: false,
+                data: None,
+                error: Some(
+                    "Xunfei SSO session EX not found. Set XUNFEI_SSO_SESSION_ID_EX \
+                     or create ~/.config/token-stats/xunfei-ex.json with ssoSessionId"
+                        .to_string(),
+                ),
+            },
+        }
+    }
+
+    /// Fetch statuses for **all** configured accounts (primary + optional EX).
+    pub async fn fetch_all_statuses(&self) -> XunfeiMultiStatus {
+        let (primary, ex) = tokio::join!(self.fetch_status(), self.fetch_status_ex());
+
+        let mut accounts = Vec::with_capacity(2);
+        accounts.push(XunfeiAccountStatus {
+            label: "primary".to_string(),
+            available: primary.available,
+            data: primary.data,
+            error: primary.error,
+        });
+        accounts.push(XunfeiAccountStatus {
+            label: "ex".to_string(),
+            available: ex.available,
+            data: ex.data,
+            error: ex.error,
+        });
+
+        XunfeiMultiStatus { accounts }
     }
 }
 
@@ -419,6 +468,23 @@ mod tests {
     fn test_resolve_xunfei_sso_session_empty_env() {
         temp_env::with_var("XUNFEI_SSO_SESSION_ID", Some(""), || {
             assert_eq!(resolve_xunfei_sso_session(), None);
+        });
+    }
+
+    #[test]
+    fn test_resolve_xunfei_sso_session_ex_from_env() {
+        temp_env::with_var("XUNFEI_SSO_SESSION_ID_EX", Some("test-session-ex-456"), || {
+            assert_eq!(
+                resolve_xunfei_sso_session_ex(),
+                Some("test-session-ex-456".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_xunfei_sso_session_ex_empty_env() {
+        temp_env::with_var("XUNFEI_SSO_SESSION_ID_EX", Some(""), || {
+            assert_eq!(resolve_xunfei_sso_session_ex(), None);
         });
     }
 }
