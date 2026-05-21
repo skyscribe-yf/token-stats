@@ -116,6 +116,19 @@ pub struct DateStats {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+pub struct SourceDetailStats {
+    pub source: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub cache_hit_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct ModelStats {
     pub model: String,
     pub provider: String,
@@ -128,6 +141,7 @@ pub struct ModelStats {
     pub total_tokens: i64,
     pub cost: f64,
     pub cache_hit_ratio: f64,
+    pub source_details: Vec<SourceDetailStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
