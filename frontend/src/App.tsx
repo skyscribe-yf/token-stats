@@ -125,6 +125,28 @@ const ZH = {
   cacheLabel: "缓存",
 } as const;
 
+// ─── Model merge configuration ────────────────────────────────────────────────
+// Models listed under `originals` are displayed as a single merged model.
+const MODEL_MERGE_GROUPS: { display: string; originals: string[] }[] = [
+  { display: "kimi-k2.6", originals: ["kimi-k2.6:high", "kimi-for-coding"] },
+];
+
+const originalToDisplayModel = new Map<string, string>();
+for (const group of MODEL_MERGE_GROUPS) {
+  for (const orig of group.originals) {
+    originalToDisplayModel.set(orig, group.display);
+  }
+}
+
+function getDisplayModel(original: string): string {
+  return originalToDisplayModel.get(original) || original;
+}
+
+function getOriginalModels(display: string): string[] | null {
+  const group = MODEL_MERGE_GROUPS.find((g) => g.display === display);
+  return group ? group.originals : null;
+}
+
 const CHART_METRIC_OPTIONS = [
   { key: "cache", label: "缓存", color: "#8b5cf6" },
   { key: "input", label: "输入", color: "#10b981" },
@@ -393,7 +415,7 @@ export default function App() {
       // Initialize pivot expand state on first data load
       if (s.by_model && !pivotInitRef.current) {
         const vendors = new Set(s.by_model.map((m) => m.provider));
-        const models = new Set(s.by_model.map((m) => `${m.provider}|${m.model}`));
+        const models = new Set(s.by_model.map((m) => `${m.provider}|${getDisplayModel(m.model)}`));
         setExpandedVendors(vendors);
         setExpandedModels(models);
         pivotInitRef.current = true;
@@ -413,10 +435,12 @@ export default function App() {
     resolution,
   ]);
 
-  // Filtered models derived from stats (respects source/vendor filters)
+  // Filtered models derived from stats (respects source/vendor filters, with merging)
   const filteredModels = useMemo(() => {
-    if (!stats?.by_model) return filters.models;
-    return [...new Set(stats.by_model.map((m) => m.model))].sort();
+    const rawModels = stats?.by_model
+      ? [...new Set(stats.by_model.map((m) => m.model))]
+      : filters.models;
+    return [...new Set(rawModels.map(getDisplayModel))].sort();
   }, [stats, filters.models]);
 
   // Effective model: if selectedModel is no longer in filtered set, treat as empty
@@ -435,11 +459,14 @@ export default function App() {
     }
 
     try {
+      const modelParam = effectiveModel
+        ? (getOriginalModels(effectiveModel)?.join(",") || effectiveModel)
+        : undefined;
       const r = await fetchRequests(
         effectiveRange.from,
         effectiveRange.to,
         vendorFilter,
-        effectiveModel || undefined,
+        modelParam,
         sourceFilter,
         page,
         50,
@@ -621,18 +648,57 @@ export default function App() {
     }));
   }, [stats]);
 
-  // Build vendor → models tree for pivot table
+  // Build vendor → models tree for pivot table (with model merging)
   const vendorModelTree = useMemo(() => {
     if (!stats?.by_model) return [];
-    const map = new Map<string, typeof stats.by_model>();
+    type SD = (typeof stats.by_model)[0]["source_details"][0];
+    type MS = (typeof stats.by_model)[0];
+    const map = new Map<string, Map<string, MS>>();
     for (const m of stats.by_model) {
-      const arr = map.get(m.provider) || [];
-      arr.push(m);
-      map.set(m.provider, arr);
+      const displayModel = getDisplayModel(m.model);
+      const providerMap = map.get(m.provider) || new Map<string, MS>();
+      const existing = providerMap.get(displayModel);
+      if (existing) {
+        existing.calls += m.calls;
+        existing.input_tokens += m.input_tokens;
+        existing.output_tokens += m.output_tokens;
+        existing.cache_read_tokens += m.cache_read_tokens;
+        existing.cache_write_tokens += m.cache_write_tokens;
+        existing.total_tokens += m.total_tokens;
+        existing.cost += m.cost;
+        // Merge source details
+        const sourceMap = new Map<string, SD>();
+        for (const sd of existing.source_details) {
+          sourceMap.set(sd.source, { ...sd });
+        }
+        for (const sd of m.source_details) {
+          const esd = sourceMap.get(sd.source);
+          if (esd) {
+            esd.calls += sd.calls;
+            esd.input_tokens += sd.input_tokens;
+            esd.output_tokens += sd.output_tokens;
+            esd.cache_read_tokens += sd.cache_read_tokens;
+            esd.cache_write_tokens += sd.cache_write_tokens;
+            esd.total_tokens += sd.total_tokens;
+            esd.cost += sd.cost;
+          } else {
+            sourceMap.set(sd.source, { ...sd });
+          }
+        }
+        existing.source_details = Array.from(sourceMap.values()).sort(
+          (a, b) => b.total_tokens - a.total_tokens
+        );
+        existing.sources = existing.source_details.map((sd) => sd.source).sort();
+        const denom = existing.input_tokens + existing.cache_read_tokens;
+        existing.cache_hit_ratio = denom > 0 ? (existing.cache_read_tokens / denom) * 100 : 0;
+      } else {
+        providerMap.set(displayModel, { ...m, model: displayModel });
+      }
+      map.set(m.provider, providerMap);
     }
-    return Array.from(map.entries()).map(([provider, models]) => ({
+    return Array.from(map.entries()).map(([provider, modelsMap]) => ({
       provider,
-      models: models.sort((a, b) => b.total_tokens - a.total_tokens),
+      models: Array.from(modelsMap.values()).sort((a, b) => b.total_tokens - a.total_tokens),
     }));
   }, [stats]);
 
@@ -1673,21 +1739,37 @@ export default function App() {
                             models.map((model) => {
                               const modelKey = `${provider}|${model.model}`;
                               const modelExpanded = expandedModels.has(modelKey);
+                              const singleSource = model.source_details.length <= 1;
                               return (
                                 <Fragment key={modelKey}>
                                   {/* Model row */}
                                   <tr
-                                    className="hover:bg-slate-50 transition-colors cursor-pointer"
-                                    onClick={() => toggleInSet(expandedModels, setExpandedModels, modelKey)}
+                                    className={`hover:bg-slate-50 transition-colors ${singleSource ? "" : "cursor-pointer"}`}
+                                    onClick={() => {
+                                      if (!singleSource) {
+                                        toggleInSet(expandedModels, setExpandedModels, modelKey);
+                                      }
+                                    }}
                                   >
                                     <td className="px-3 py-2 pl-8">
-                                      <div className="flex items-center gap-1.5">
-                                        {modelExpanded ? (
-                                          <ChevronDown className="w-3 h-3 text-slate-400" />
-                                        ) : (
-                                          <ChevronRightIcon className="w-3 h-3 text-slate-400" />
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        {!singleSource && (
+                                          modelExpanded ? (
+                                            <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+                                          ) : (
+                                            <ChevronRightIcon className="w-3 h-3 text-slate-400 shrink-0" />
+                                          )
                                         )}
                                         <span className="font-medium text-slate-700">{model.model}</span>
+                                        {model.source_details.map((sd) => (
+                                          <span
+                                            key={sd.source}
+                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium"
+                                            style={{ background: `${getSourceColor(sd.source)}15`, color: getSourceColor(sd.source) }}
+                                          >
+                                            {getSourceLabel(sd.source)}
+                                          </span>
+                                        ))}
                                       </div>
                                     </td>
                                     <td className="px-3 py-2 text-right text-slate-600">{formatCalls(model.calls)}</td>
@@ -1705,7 +1787,7 @@ export default function App() {
                                     <td className="px-3 py-2 text-right text-slate-600">{formatCost(model.cost)}</td>
                                   </tr>
 
-                                  {modelExpanded &&
+                                  {modelExpanded && !singleSource &&
                                     model.source_details.map((source) => (
                                       <tr key={`${modelKey}|${source.source}`} className="hover:bg-slate-50/60 transition-colors">
                                         <td className="px-3 py-2 pl-14">
@@ -1810,7 +1892,7 @@ export default function App() {
                         <td className="px-3 py-2">
                           <span className="text-xs font-medium" style={{ color: getSourceColor(r.provider) }}>{r.provider}</span>
                         </td>
-                        <td className="px-3 py-2 text-slate-600">{r.model}</td>
+                        <td className="px-3 py-2 text-slate-600">{getDisplayModel(r.model)}</td>
                         <td className="px-3 py-2">
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium"
                             style={{ background: `${getSourceColor(r.source)}15`, color: getSourceColor(r.source) }}>
