@@ -54,7 +54,7 @@ This will:
 
 Then start the services:
 ```bash
-sudo systemctl start token-stats
+sudo systemctl start token-stats@3000
 sudo nginx -s reload
 ```
 
@@ -125,7 +125,8 @@ token-stats/
 │   └── index.html
 ├── nginx/
 │   ├── token-stats.conf   # Nginx config
-│   └── token-stats.service # Systemd service
+│   ├── token-stats@.service   # Systemd template service (blue-green deploys)
+│   └── token-stats.service    # Legacy single-port service (deprecated)
 ├── setup.sh           # Automated setup script
 └── README.md
 ```
