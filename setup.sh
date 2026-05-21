@@ -94,24 +94,24 @@ fi
 echo ""
 echo "🔧 Setting up systemd service..."
 
-SERVICE_FILE="$NGINX_DIR/token-stats.service"
-TMP_SERVICE="/tmp/token-stats.service"
+SERVICE_FILE="$NGINX_DIR/token-stats@.service"
+TMP_SERVICE="/tmp/token-stats@.service"
 
 sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
     -e "s|User=skyscribe|User=$(whoami)|g" \
     "$SERVICE_FILE" > "$TMP_SERVICE"
 
 if [ -d /etc/systemd/system ]; then
-    sudo cp "$TMP_SERVICE" /etc/systemd/system/token-stats.service
+    sudo cp "$TMP_SERVICE" /etc/systemd/system/token-stats@.service
     sudo systemctl daemon-reload
-    echo "✅ Systemd service installed"
+    echo "✅ Systemd template service installed"
     echo ""
-    echo "   Start the service: sudo systemctl start token-stats"
-    echo "   Enable on boot:    sudo systemctl enable token-stats"
+    echo "   Start the service: sudo systemctl start token-stats@3000"
+    echo "   Enable on boot:    sudo systemctl enable token-stats@3000"
 else
     echo "⚠️ Could not install systemd service."
     echo "   You can run the backend manually:"
-    echo "   cd $BACKEND_DIR && ./target/release/token-stats-backend"
+    echo "   cd $BACKEND_DIR && PORT=3000 ./target/release/token-stats-backend"
 fi
 
 echo ""
