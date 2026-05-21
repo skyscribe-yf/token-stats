@@ -101,12 +101,13 @@ pub fn filter_records<'a>(
 ) -> Vec<&'a TokenRecord> {
     let sources = parse_csv_filter(source);
     let providers = parse_csv_filter(provider);
+    let models = parse_csv_filter(model);
     let mut filtered: Vec<&'a TokenRecord> = records
         .iter()
         .filter(|r| record_matches_bound(r, from, to, tz))
         .filter(|r| {
             let provider_ok = providers.is_empty() || providers.contains(&r.provider.as_str());
-            let model_ok = model.map(|m| r.model == m).unwrap_or(true);
+            let model_ok = models.is_empty() || models.contains(&r.model.as_str());
             let source_ok = sources.is_empty() || sources.contains(&r.source.as_str());
             provider_ok && model_ok && source_ok
         })
