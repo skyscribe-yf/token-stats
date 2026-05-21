@@ -392,6 +392,7 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
     struct Agg {
         accum: StatAccum,
         source_set: HashSet<String>,
+        source_aggs: HashMap<String, StatAccum>,
     }
 
     let mut map: HashMap<(String, String), Agg> = HashMap::new();
@@ -401,9 +402,14 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         let agg = map.entry(key).or_insert_with(|| Agg {
             accum: StatAccum::default(),
             source_set: HashSet::new(),
+            source_aggs: HashMap::new(),
         });
         agg.accum.accumulate(r);
         agg.source_set.insert(r.source.clone());
+        agg.source_aggs
+            .entry(r.source.clone())
+            .or_default()
+            .accumulate(r);
     }
 
     let mut result: Vec<ModelStats> = map
@@ -411,6 +417,22 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         .map(|((provider, model), agg)| {
             let mut sources: Vec<String> = agg.source_set.into_iter().collect();
             sources.sort();
+            let mut source_details: Vec<SourceDetailStats> = agg
+                .source_aggs
+                .into_iter()
+                .map(|(source, acc)| SourceDetailStats {
+                    source,
+                    calls: acc.calls,
+                    input_tokens: acc.input_tokens,
+                    output_tokens: acc.output_tokens,
+                    cache_read_tokens: acc.cache_read_tokens,
+                    cache_write_tokens: acc.cache_write_tokens,
+                    total_tokens: acc.total_tokens,
+                    cost: acc.cost,
+                    cache_hit_ratio: acc.cache_hit_ratio(),
+                })
+                .collect();
+            source_details.sort_by_key(|s| std::cmp::Reverse(s.total_tokens));
             ModelStats {
                 model,
                 provider,
@@ -423,6 +445,7 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
                 total_tokens: agg.accum.total_tokens,
                 cost: agg.accum.cost,
                 cache_hit_ratio: agg.accum.cache_hit_ratio(),
+                source_details,
             }
         })
         .collect();

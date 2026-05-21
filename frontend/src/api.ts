@@ -37,6 +37,18 @@ export interface DateStats {
   cache_hit_ratio_no_xunfei: number;
 }
 
+export interface SourceDetailStats {
+  source: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  cost: number;
+  cache_hit_ratio: number;
+}
+
 export interface ModelStats {
   model: string;
   provider: string;
@@ -49,6 +61,7 @@ export interface ModelStats {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
+  source_details: SourceDetailStats[];
 }
 
 export interface SourceStats {

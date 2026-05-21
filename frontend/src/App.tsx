@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from "react";
 import {
   BarChart,
   Bar,
@@ -17,6 +17,8 @@ import {
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronRight as ChevronRightIcon,
   Filter,
   Activity,
   X,
@@ -284,6 +286,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
+  // Pivot table expand/collapse state
+  const [expandedVendors, setExpandedVendors] = useState<Set<string>>(new Set());
+  const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
+  const pivotInitRef = useRef(false);
+
   // Chart metric filter
   const [chartMetrics, setChartMetrics] = useState<Set<ChartMetricKey>>(
     () => new Set(["cache", "input", "output", "cacheHitRatio"])
@@ -382,6 +389,14 @@ export default function App() {
         setSelectedSources(new Set(f.sources));
         setSelectedVendors(new Set(f.vendors));
         filtersInitializedRef.current = true;
+      }
+      // Initialize pivot expand state on first data load
+      if (s.by_model && !pivotInitRef.current) {
+        const vendors = new Set(s.by_model.map((m) => m.provider));
+        const models = new Set(s.by_model.map((m) => `${m.provider}|${m.model}`));
+        setExpandedVendors(vendors);
+        setExpandedModels(models);
+        pivotInitRef.current = true;
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载数据失败");
@@ -606,26 +621,48 @@ export default function App() {
     }));
   }, [stats]);
 
-  const mergedTableData = useMemo(() => {
-    if (!stats?.by_vendor || !stats?.by_model) return [];
-    const modelMap = new Map<string, typeof stats.by_model>();
+  // Build vendor → models tree for pivot table
+  const vendorModelTree = useMemo(() => {
+    if (!stats?.by_model) return [];
+    const map = new Map<string, typeof stats.by_model>();
     for (const m of stats.by_model) {
-      const arr = modelMap.get(m.provider) || [];
+      const arr = map.get(m.provider) || [];
       arr.push(m);
-      modelMap.set(m.provider, arr);
+      map.set(m.provider, arr);
     }
-    const rows: Array<
-      | { type: "vendor"; data: (typeof stats.by_vendor)[0] }
-      | { type: "model"; data: (typeof stats.by_model)[0] }
-    > = [];
-    for (const v of stats.by_vendor) {
-      rows.push({ type: "vendor", data: v });
-      const models = modelMap.get(v.provider) || [];
-      for (const m of models) {
-        rows.push({ type: "model", data: m });
+    return Array.from(map.entries()).map(([provider, models]) => ({
+      provider,
+      models: models.sort((a, b) => b.total_tokens - a.total_tokens),
+    }));
+  }, [stats]);
+
+  // Summary for visible rows in the pivot table
+  const pivotSummary = useMemo(() => {
+    if (!stats?.by_model) return null;
+    const s = stats.by_model.reduce(
+      (acc, m) => {
+        acc.calls += m.calls;
+        acc.input_tokens += m.input_tokens;
+        acc.output_tokens += m.output_tokens;
+        acc.cache_read_tokens += m.cache_read_tokens;
+        acc.cache_write_tokens += m.cache_write_tokens;
+        acc.total_tokens += m.total_tokens;
+        acc.cost += m.cost;
+        return acc;
+      },
+      {
+        calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 0,
+        cost: 0,
       }
-    }
-    return rows;
+    );
+    const cacheHitDenom = s.input_tokens + s.cache_read_tokens;
+    const cache_hit_ratio = cacheHitDenom > 0 ? (s.cache_read_tokens / cacheHitDenom) * 100 : 0;
+    return { ...s, cache_hit_ratio };
   }, [stats]);
 
   const showRatioAxis = useMemo(
@@ -1559,7 +1596,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Vendor & Model Performance - compact table, merged cache columns */}
+            {/* Vendor & Model Performance - pivot table with expand/collapse */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-3">
               <div className="px-4 py-2.5 border-b border-slate-100">
                 <h3 className="text-xs font-semibold text-slate-700">
@@ -1570,9 +1607,7 @@ export default function App() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wider">
-                      <th className="px-3 py-2 text-left font-medium">{ZH.provider}</th>
-                      <th className="px-3 py-2 text-left font-medium">{ZH.model}</th>
-                      <th className="px-3 py-2 text-left font-medium">{ZH.source}</th>
+                      <th className="px-3 py-2 text-left font-medium">{ZH.provider} / {ZH.model} / {ZH.source}</th>
                       <th className="px-3 py-2 text-right font-medium">{ZH.calls}</th>
                       <th className="px-3 py-2 text-right font-medium">{ZH.input}</th>
                       <th className="px-3 py-2 text-right font-medium">{ZH.output}</th>
@@ -1583,60 +1618,144 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {mergedTableData.map((row, idx) =>
-                      row.type === "vendor" ? (
-                        <tr key={`vendor-${row.data.provider}`} className="bg-slate-50/80 transition-colors">
-                          <td className="px-3 py-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full" style={{ background: getSourceColor(row.data.provider) }} />
-                              <span className="font-bold text-slate-800">{row.data.provider}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-[10px] text-slate-400 italic">汇总</td>
-                          <td className="px-3 py-2"></td>
-                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCalls(row.data.calls)}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.input_tokens)}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.output_tokens)}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.cache_read_tokens + row.data.cache_write_tokens)}</td>
-                          <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(row.data.total_tokens)}</td>
-                          <td className="px-3 py-2 text-right">
-                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                              row.data.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
-                              : row.data.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
-                              : "bg-slate-100 text-slate-600"
-                            }`}>{formatPercent(row.data.cache_hit_ratio)}</span>
-                          </td>
-                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCost(row.data.cost)}</td>
-                        </tr>
-                      ) : (
-                        <tr key={`model-${row.data.provider}-${row.data.model}-${idx}`} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-3 py-2"></td>
-                          <td className="px-3 py-2 font-medium text-slate-700">{row.data.model}</td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-wrap gap-0.5">
-                              {(row.data.sources || []).map((s) => (
-                                <span key={s} className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] font-medium"
-                                  style={{ background: `${getSourceColor(s)}15`, color: getSourceColor(s) }}>
-                                  {getSourceLabel(s)}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatCalls(row.data.calls)}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.input_tokens)}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.output_tokens)}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatNumber(row.data.cache_read_tokens + row.data.cache_write_tokens)}</td>
-                          <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(row.data.total_tokens)}</td>
-                          <td className="px-3 py-2 text-right">
-                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                              row.data.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
-                              : row.data.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
-                              : "bg-slate-100 text-slate-600"
-                            }`}>{formatPercent(row.data.cache_hit_ratio)}</span>
-                          </td>
-                          <td className="px-3 py-2 text-right text-slate-600">{formatCost(row.data.cost)}</td>
-                        </tr>
-                      )
+                    {vendorModelTree.map(({ provider, models }) => {
+                      const vendorExpanded = expandedVendors.has(provider);
+                      const vendorSummary = models.reduce(
+                        (acc, m) => {
+                          acc.calls += m.calls;
+                          acc.input_tokens += m.input_tokens;
+                          acc.output_tokens += m.output_tokens;
+                          acc.cache_read_tokens += m.cache_read_tokens;
+                          acc.cache_write_tokens += m.cache_write_tokens;
+                          acc.total_tokens += m.total_tokens;
+                          acc.cost += m.cost;
+                          return acc;
+                        },
+                        { calls: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, total_tokens: 0, cost: 0 }
+                      );
+                      const vendorCacheHitDenom = vendorSummary.input_tokens + vendorSummary.cache_read_tokens;
+                      const vendorCacheHit = vendorCacheHitDenom > 0 ? (vendorSummary.cache_read_tokens / vendorCacheHitDenom) * 100 : 0;
+
+                      return (
+                        <Fragment key={provider}>
+                          {/* Vendor row */}
+                          <tr
+                            className="bg-slate-50/80 transition-colors cursor-pointer"
+                            onClick={() => toggleInSet(expandedVendors, setExpandedVendors, provider)}
+                          >
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1.5">
+                                {vendorExpanded ? (
+                                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                                ) : (
+                                  <ChevronRightIcon className="w-3 h-3 text-slate-400" />
+                                )}
+                                <span className="w-2 h-2 rounded-full" style={{ background: getSourceColor(provider) }} />
+                                <span className="font-bold text-slate-800">{provider}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCalls(vendorSummary.calls)}</td>
+                            <td className="px-3 py-2 text-right text-slate-600">{formatNumber(vendorSummary.input_tokens)}</td>
+                            <td className="px-3 py-2 text-right text-slate-600">{formatNumber(vendorSummary.output_tokens)}</td>
+                            <td className="px-3 py-2 text-right text-slate-600">{formatNumber(vendorSummary.cache_read_tokens + vendorSummary.cache_write_tokens)}</td>
+                            <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(vendorSummary.total_tokens)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                vendorCacheHit > 50 ? "bg-emerald-100 text-emerald-700"
+                                : vendorCacheHit > 10 ? "bg-amber-100 text-amber-700"
+                                : "bg-slate-100 text-slate-600"
+                              }`}>{formatPercent(vendorCacheHit)}</span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCost(vendorSummary.cost)}</td>
+                          </tr>
+
+                          {vendorExpanded &&
+                            models.map((model) => {
+                              const modelKey = `${provider}|${model.model}`;
+                              const modelExpanded = expandedModels.has(modelKey);
+                              return (
+                                <Fragment key={modelKey}>
+                                  {/* Model row */}
+                                  <tr
+                                    className="hover:bg-slate-50 transition-colors cursor-pointer"
+                                    onClick={() => toggleInSet(expandedModels, setExpandedModels, modelKey)}
+                                  >
+                                    <td className="px-3 py-2 pl-8">
+                                      <div className="flex items-center gap-1.5">
+                                        {modelExpanded ? (
+                                          <ChevronDown className="w-3 h-3 text-slate-400" />
+                                        ) : (
+                                          <ChevronRightIcon className="w-3 h-3 text-slate-400" />
+                                        )}
+                                        <span className="font-medium text-slate-700">{model.model}</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatCalls(model.calls)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(model.input_tokens)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(model.output_tokens)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(model.cache_read_tokens + model.cache_write_tokens)}</td>
+                                    <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(model.total_tokens)}</td>
+                                    <td className="px-3 py-2 text-right">
+                                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                        model.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                                        : model.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                                        : "bg-slate-100 text-slate-600"
+                                      }`}>{formatPercent(model.cache_hit_ratio)}</span>
+                                    </td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatCost(model.cost)}</td>
+                                  </tr>
+
+                                  {modelExpanded &&
+                                    model.source_details.map((source) => (
+                                      <tr key={`${modelKey}|${source.source}`} className="hover:bg-slate-50/60 transition-colors">
+                                        <td className="px-3 py-2 pl-14">
+                                          <span
+                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium"
+                                            style={{ background: `${getSourceColor(source.source)}15`, color: getSourceColor(source.source) }}
+                                          >
+                                            {getSourceLabel(source.source)}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{formatCalls(source.calls)}</td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{formatNumber(source.input_tokens)}</td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{formatNumber(source.output_tokens)}</td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{formatNumber(source.cache_read_tokens + source.cache_write_tokens)}</td>
+                                        <td className="px-3 py-2 text-right font-medium text-slate-700">{formatNumber(source.total_tokens)}</td>
+                                        <td className="px-3 py-2 text-right">
+                                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                            source.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                                            : source.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                                            : "bg-slate-100 text-slate-600"
+                                          }`}>{formatPercent(source.cache_hit_ratio)}</span>
+                                        </td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{formatCost(source.cost)}</td>
+                                      </tr>
+                                    ))}
+                                </Fragment>
+                              );
+                            })}
+                        </Fragment>
+                      );
+                    })}
+
+                    {/* Summary row */}
+                    {pivotSummary && (
+                      <tr className="bg-slate-100/80 border-t-2 border-slate-200">
+                        <td className="px-3 py-2 font-bold text-slate-800">当前视图汇总</td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatCalls(pivotSummary.calls)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(pivotSummary.input_tokens)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(pivotSummary.output_tokens)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(pivotSummary.cache_read_tokens + pivotSummary.cache_write_tokens)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatNumber(pivotSummary.total_tokens)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            pivotSummary.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                            : pivotSummary.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                            : "bg-slate-100 text-slate-600"
+                          }`}>{formatPercent(pivotSummary.cache_hit_ratio)}</span>
+                        </td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatCost(pivotSummary.cost)}</td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
