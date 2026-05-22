@@ -150,18 +150,12 @@ fn parse_credit_data(
         .to_string();
 
     // Extract daily/monthly usage from live dashboard data
-    let daily_used = live["daily_usage"]["CreditUsed"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let daily_requests = live["daily_usage"]["Requests"]
-        .as_i64()
-        .unwrap_or(0);
+    let daily_used = live["daily_usage"]["CreditUsed"].as_f64().unwrap_or(0.0);
+    let daily_requests = live["daily_usage"]["Requests"].as_i64().unwrap_or(0);
     let monthly_used = live["monthly_usage"]["CreditUsed"]
         .as_f64()
         .unwrap_or(credit_used); // fallback to total if live data missing
-    let monthly_requests = live["monthly_usage"]["Requests"]
-        .as_i64()
-        .unwrap_or(0);
+    let monthly_requests = live["monthly_usage"]["Requests"].as_i64().unwrap_or(0);
 
     Ok(AinaibaCreditData {
         user_id,
