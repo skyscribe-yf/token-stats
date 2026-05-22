@@ -339,8 +339,17 @@ mod tests {
         let record = make_record("kimi-cli", "kimi", "kimi-k2.6", 1_000_000, 0.0);
         let cost = display_cost(&record);
         let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
-        assert!(cost > 0.0, "kimi-cli record should have non-zero cost, got {}", cost);
-        assert!((cost - expected).abs() < 1e-10, "expected {}, got {}", expected, cost);
+        assert!(
+            cost > 0.0,
+            "kimi-cli record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "expected {}, got {}",
+            expected,
+            cost
+        );
     }
 
     #[test]
@@ -349,8 +358,17 @@ mod tests {
         let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.0);
         let cost = display_cost(&record);
         let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
-        assert!(cost > 0.0, "pi kimi record should have non-zero cost, got {}", cost);
-        assert!((cost - expected).abs() < 1e-10, "expected {}, got {}", expected, cost);
+        assert!(
+            cost > 0.0,
+            "pi kimi record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "expected {}, got {}",
+            expected,
+            cost
+        );
     }
 
     #[test]
@@ -360,8 +378,12 @@ mod tests {
         let cost = display_cost(&record);
         // cost is in USD, so should be converted to CNY (0.05 * 6.82)
         let expected = 0.05 * PricingConfig::default().usd_to_cny;
-        assert!((cost - expected).abs() < 1e-10,
-            "kimi record with stored cost should use USD→CNY, expected {}, got {}", expected, cost);
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "kimi record with stored cost should use USD→CNY, expected {}, got {}",
+            expected,
+            cost
+        );
     }
 
     #[test]
@@ -370,8 +392,12 @@ mod tests {
         let record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
         let cost = display_cost(&record);
         let expected = PricingConfig::default().special.xunfei_per_call;
-        assert!((cost - expected).abs() < 1e-10,
-            "xunfei should use per-call rate, expected {}, got {}", expected, cost);
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "xunfei should use per-call rate, expected {}, got {}",
+            expected,
+            cost
+        );
     }
 
     #[test]
