@@ -26,12 +26,24 @@ pub struct AinaibaCreditData {
     pub credit_total: f64,
     pub credit_used: f64,
     pub expires_at: String,
+    pub total_requests: i64,
     pub daily_used: f64,
     pub daily_requests: i64,
+    pub daily_input_tokens: i64,
+    pub daily_output_tokens: i64,
+    pub daily_reasoning_tokens: i64,
+    pub daily_cached_tokens: i64,
     pub monthly_used: f64,
     pub monthly_requests: i64,
+    pub monthly_input_tokens: i64,
+    pub monthly_output_tokens: i64,
+    pub monthly_reasoning_tokens: i64,
+    pub monthly_cached_tokens: i64,
     pub hard_limit: f64,
     pub daily_limit: f64,
+    pub rpm: i64,
+    pub rph: i64,
+    pub rpd: i64,
 }
 
 /// Fetch Ainaiba credit info from the remote dashboard API.
@@ -136,6 +148,10 @@ fn parse_credit_data(
     let credit_used = info["credit_used"].as_f64().unwrap_or(0.0);
     let hard_limit = info["hard_limit"].as_f64().unwrap_or(0.0);
     let daily_limit = info["daily_limit"].as_f64().unwrap_or(0.0);
+    let rpm = info["rpm"].as_i64().unwrap_or(0);
+    let rph = info["rph"].as_i64().unwrap_or(0);
+    let rpd = info["rpd"].as_i64().unwrap_or(0);
+    let total_requests = info["requests"].as_i64().unwrap_or(0);
 
     // Extract from credit_balance array
     let credit_balance = &info["credit_balance"];
@@ -152,10 +168,23 @@ fn parse_credit_data(
     // Extract daily/monthly usage from live dashboard data
     let daily_used = live["daily_usage"]["CreditUsed"].as_f64().unwrap_or(0.0);
     let daily_requests = live["daily_usage"]["Requests"].as_i64().unwrap_or(0);
+    let daily_input_tokens = live["daily_usage"]["Prompt"].as_i64().unwrap_or(0);
+    let daily_output_tokens = live["daily_usage"]["Completion"].as_i64().unwrap_or(0);
+    let daily_reasoning_tokens = live["daily_usage"]["Reasoning"].as_i64().unwrap_or(0);
+    let daily_cached_tokens = live["daily_usage"]["PromptDetails"]["cached_tokens"]
+        .as_i64()
+        .unwrap_or(0);
+
     let monthly_used = live["monthly_usage"]["CreditUsed"]
         .as_f64()
         .unwrap_or(credit_used); // fallback to total if live data missing
     let monthly_requests = live["monthly_usage"]["Requests"].as_i64().unwrap_or(0);
+    let monthly_input_tokens = live["monthly_usage"]["Prompt"].as_i64().unwrap_or(0);
+    let monthly_output_tokens = live["monthly_usage"]["Completion"].as_i64().unwrap_or(0);
+    let monthly_reasoning_tokens = live["monthly_usage"]["Reasoning"].as_i64().unwrap_or(0);
+    let monthly_cached_tokens = live["monthly_usage"]["PromptDetails"]["cached_tokens"]
+        .as_i64()
+        .unwrap_or(0);
 
     Ok(AinaibaCreditData {
         user_id,
@@ -166,11 +195,23 @@ fn parse_credit_data(
         credit_total,
         credit_used,
         expires_at,
+        total_requests,
         daily_used,
         daily_requests,
+        daily_input_tokens,
+        daily_output_tokens,
+        daily_reasoning_tokens,
+        daily_cached_tokens,
         monthly_used,
         monthly_requests,
+        monthly_input_tokens,
+        monthly_output_tokens,
+        monthly_reasoning_tokens,
+        monthly_cached_tokens,
         hard_limit,
         daily_limit,
+        rpm,
+        rph,
+        rpd,
     })
 }
