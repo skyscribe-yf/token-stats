@@ -4,6 +4,7 @@ use crate::app::AppState;
 use crate::models::*;
 use crate::pricing;
 use crate::quota::{QuotaFetcher, QuotaResponse};
+use crate::settings;
 use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
 use axum::{
@@ -204,6 +205,20 @@ pub async fn get_xunfei() -> impl IntoResponse {
 
 pub async fn get_ainaiba_credit() -> impl IntoResponse {
     Json(fetch_ainaiba_credit().await)
+}
+
+pub async fn get_advanced_models() -> impl IntoResponse {
+    Json(settings::load_advanced_models())
+}
+
+pub async fn update_advanced_models(Json(body): Json<Vec<String>>) -> impl IntoResponse {
+    match settings::save_advanced_models(&body) {
+        Ok(()) => Json(serde_json::json!({ "success": true })),
+        Err(e) => {
+            tracing::warn!("Failed to save advanced models: {}", e);
+            Json(serde_json::json!({ "success": false, "error": e }))
+        }
+    }
 }
 
 pub async fn get_pricing() -> impl IntoResponse {

@@ -10,9 +10,6 @@ import {
   ResponsiveContainer,
   ComposedChart,
   Line,
-  PieChart,
-  Pie,
-  Cell,
 } from "recharts";
 import {
   ChevronLeft,
@@ -28,6 +25,7 @@ import {
   Download,
   Upload,
   Receipt,
+  Settings,
 } from "lucide-react";
 import {
   fetchStats,
@@ -38,6 +36,8 @@ import {
   fetchAinaibaCredit,
   fetchRefresh,
   fetchPricing,
+  fetchAdvancedModels,
+  saveAdvancedModels,
   type PricingConfig,
   exportBackup,
   restoreBackup,
@@ -65,6 +65,14 @@ import {
   formatAvgCost,
 } from "./lib/utils";
 import {
+  buildPivotTree,
+  computePivotSummary,
+  getDisplayModel,
+  getOriginalModels,
+  type SortColumn,
+  type SortDirection,
+} from "./lib/pivotTable";
+import {
   buildCsvFilterParam,
   isEmptyAppliedSelection,
   type AppliedRange,
@@ -81,9 +89,11 @@ const ZH = {
   weighted: "加权",
   totalCost: "总费用",
   dailyTokenUsage: "每日 Token 用量",
+  hourlyRequests: "每小时请求数",
   vendorBreakdown: "供应商分布",
   tokenDistribution: "Token 分布",
   vendorAndModel: "供应商 & 模型表现",
+  hideFreeModels: "过滤免费",
   detailedRequests: "详细请求",
   allModels: "全部模型",
   last7Days: "最近7天",
@@ -135,28 +145,6 @@ const ZH = {
   cacheLabel: "缓存",
 } as const;
 
-// ─── Model merge configuration ────────────────────────────────────────────────
-// Models listed under `originals` are displayed as a single merged model.
-const MODEL_MERGE_GROUPS: { display: string; originals: string[] }[] = [
-  { display: "kimi-k2.6", originals: ["kimi-k2.6", "kimi-k2.6:high", "kimi-for-coding"] },
-];
-
-const originalToDisplayModel = new Map<string, string>();
-for (const group of MODEL_MERGE_GROUPS) {
-  for (const orig of group.originals) {
-    originalToDisplayModel.set(orig, group.display);
-  }
-}
-
-function getDisplayModel(original: string): string {
-  return originalToDisplayModel.get(original) || original;
-}
-
-function getOriginalModels(display: string): string[] | null {
-  const group = MODEL_MERGE_GROUPS.find((g) => g.display === display);
-  return group ? group.originals : null;
-}
-
 const CHART_METRIC_OPTIONS = [
   { key: "cache", label: "缓存", color: "#8b5cf6" },
   { key: "input", label: "输入", color: "#10b981" },
@@ -201,18 +189,6 @@ interface ChartTooltipPayload {
   value?: number | string;
   color?: string;
   percent?: number;
-}
-
-function PieTooltip({ active, payload }: { active?: boolean; payload?: ChartTooltipPayload[] }) {
-  if (!active || !payload?.length) return null;
-  const p = payload[0];
-  return (
-    <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-sm">
-      <p className="font-semibold text-slate-700">{p.name}</p>
-      <p className="text-slate-600">{formatNumber(Number(p.value ?? 0))} {ZH.tokens}</p>
-      <p className="text-slate-500">{p.percent?.toFixed(1)}%</p>
-    </div>
-  );
 }
 
 function toggleInSet<T>(set: Set<T>, setter: (s: Set<T>) => void, value: T) {
@@ -346,6 +322,21 @@ export default function App() {
   // Pricing logic modal
   const [showPricing, setShowPricing] = useState(false);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
+
+  // Hourly stats (always 1h resolution)
+  const [hourlyStats, setHourlyStats] = useState<StatsResponse | null>(null);
+
+  // Pivot table sorting
+  const [sortColumn, setSortColumn] = useState<SortColumn>("total_tokens");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
+  // Free model filter
+  const [hideFreeModels, setHideFreeModels] = useState(false);
+
+  // Advanced models settings
+  const [advancedModels, setAdvancedModels] = useState<string[]>([]);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [advancedModelsDraft, setAdvancedModelsDraft] = useState("");
 
   const tzOffset = useMemo(() => -new Date().getTimezoneOffset(), []);
 
@@ -617,6 +608,45 @@ export default function App() {
     loadPricing();
   }, []);
 
+  // Load advanced models config once on mount
+  useEffect(() => {
+    fetchAdvancedModels().then(setAdvancedModels).catch(() => {});
+  }, []);
+
+  // Fetch hourly stats whenever main filters change
+  useEffect(() => {
+    const loadHourly = async () => {
+      if (!effectiveRange.from || !effectiveRange.to) return;
+      if (hasEmptyRequiredSelection) {
+        setHourlyStats(null);
+        return;
+      }
+      try {
+        const s = await fetchStats(
+          effectiveRange.from,
+          effectiveRange.to,
+          sourceFilter,
+          vendorFilter,
+          tzOffset,
+          "1h",
+          modelFilter
+        );
+        setHourlyStats(s);
+      } catch {
+        /* ignore */
+      }
+    };
+    loadHourly();
+  }, [
+    effectiveRange.from,
+    effectiveRange.to,
+    sourceFilter,
+    vendorFilter,
+    tzOffset,
+    hasEmptyRequiredSelection,
+    modelFilter,
+  ]);
+
   // Close custom panel on outside click
   useEffect(() => {
     if (!showCustomPanel) return;
@@ -699,96 +729,16 @@ export default function App() {
     }));
   }, [stats]);
 
-  const pieData = useMemo(() => {
-    if (!stats?.by_vendor) return [];
-    return stats.by_vendor.map((v) => ({
-      name: v.provider,
-      value: v.total_tokens,
-    }));
-  }, [stats]);
-
-  // Build vendor → models tree for pivot table (with model merging)
+  // Build vendor → models tree for pivot table (with model merging, sorting, and free-model filtering)
   const vendorModelTree = useMemo(() => {
     if (!stats?.by_model) return [];
-    type SD = (typeof stats.by_model)[0]["source_details"][0];
-    type MS = (typeof stats.by_model)[0];
-    const map = new Map<string, Map<string, MS>>();
-    for (const m of stats.by_model) {
-      const displayModel = getDisplayModel(m.model);
-      const providerMap = map.get(m.provider) || new Map<string, MS>();
-      const existing = providerMap.get(displayModel);
-      if (existing) {
-        existing.calls += m.calls;
-        existing.input_tokens += m.input_tokens;
-        existing.output_tokens += m.output_tokens;
-        existing.cache_read_tokens += m.cache_read_tokens;
-        existing.cache_write_tokens += m.cache_write_tokens;
-        existing.total_tokens += m.total_tokens;
-        existing.cost += m.cost;
-        // Merge source details
-        const sourceMap = new Map<string, SD>();
-        for (const sd of existing.source_details) {
-          sourceMap.set(sd.source, { ...sd });
-        }
-        for (const sd of m.source_details) {
-          const esd = sourceMap.get(sd.source);
-          if (esd) {
-            esd.calls += sd.calls;
-            esd.input_tokens += sd.input_tokens;
-            esd.output_tokens += sd.output_tokens;
-            esd.cache_read_tokens += sd.cache_read_tokens;
-            esd.cache_write_tokens += sd.cache_write_tokens;
-            esd.total_tokens += sd.total_tokens;
-            esd.cost += sd.cost;
-          } else {
-            sourceMap.set(sd.source, { ...sd });
-          }
-        }
-        existing.source_details = Array.from(sourceMap.values()).sort(
-          (a, b) => b.total_tokens - a.total_tokens
-        );
-        existing.sources = existing.source_details.map((sd) => sd.source).sort();
-        const denom = existing.input_tokens + existing.cache_read_tokens;
-        existing.cache_hit_ratio = denom > 0 ? (existing.cache_read_tokens / denom) * 100 : 0;
-      } else {
-        providerMap.set(displayModel, { ...m, model: displayModel });
-      }
-      map.set(m.provider, providerMap);
-    }
-    return Array.from(map.entries()).map(([provider, modelsMap]) => ({
-      provider,
-      models: Array.from(modelsMap.values()).sort((a, b) => b.total_tokens - a.total_tokens),
-    }));
-  }, [stats]);
+    return buildPivotTree(stats.by_model, sortColumn, sortDirection, hideFreeModels);
+  }, [stats, sortColumn, sortDirection, hideFreeModels]);
 
   // Summary for visible rows in the pivot table
   const pivotSummary = useMemo(() => {
-    if (!stats?.by_model) return null;
-    const s = stats.by_model.reduce(
-      (acc, m) => {
-        acc.calls += m.calls;
-        acc.input_tokens += m.input_tokens;
-        acc.output_tokens += m.output_tokens;
-        acc.cache_read_tokens += m.cache_read_tokens;
-        acc.cache_write_tokens += m.cache_write_tokens;
-        acc.total_tokens += m.total_tokens;
-        acc.cost += m.cost;
-        return acc;
-      },
-      {
-        calls: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_read_tokens: 0,
-        cache_write_tokens: 0,
-        total_tokens: 0,
-        cost: 0,
-      }
-    );
-    const cacheHitDenom = s.input_tokens + s.cache_read_tokens;
-    const cache_hit_ratio = cacheHitDenom > 0 ? (s.cache_read_tokens / cacheHitDenom) * 100 : 0;
-    return { ...s, cache_hit_ratio };
-  }, [stats]);
+    return computePivotSummary(vendorModelTree);
+  }, [vendorModelTree]);
 
   const showRatioAxis = useMemo(
     () => chartMetrics.has("cacheHitRatio") || chartMetrics.has("cacheHitRatioNoXunfei"),
@@ -828,6 +778,20 @@ export default function App() {
         ? "bg-primary-100 text-primary-700"
         : "bg-slate-50 text-slate-500 hover:bg-slate-100"
     }`;
+
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDirection("desc");
+    }
+  };
+
+  const sortIndicator = (column: SortColumn) => {
+    if (sortColumn !== column) return null;
+    return sortDirection === "desc" ? " ▼" : " ▲";
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1648,8 +1612,7 @@ export default function App() {
               </div>
             </details>
 
-            {/* Charts Row - reduced height, pie merged into vendor card */}
-
+            {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
               {/* Daily Token Usage - Stacked Bar + Cache Hit Ratio Line */}
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
@@ -1777,61 +1740,78 @@ export default function App() {
                 <p className="text-[10px] text-slate-400 mt-1">* {ZH.xunfeiNoCacheNote}</p>
               </div>
 
-              {/* Vendor Breakdown + Distribution (pie merged in) */}
+              {/* Hourly Requests */}
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <h3 className="text-xs font-semibold text-slate-700 mb-2">
-                  {ZH.vendorBreakdown} & {ZH.tokenDistribution}
+                  {ZH.hourlyRequests}
                 </h3>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1">
-                    <ResponsiveContainer width="100%" height={220}>
-                      <BarChart data={vendorChartData} layout="vertical">
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis
-                          type="number"
-                          tick={{ fontSize: 10, fill: "#64748b" }}
-                          tickFormatter={(v: number) => formatNumber(v)}
-                        />
-                        <YAxis
-                          type="category"
-                          dataKey="name"
-                          tick={{ fontSize: 10, fill: "#64748b" }}
-                          width={80}
-                        />
-                        <Tooltip content={<CustomTooltip />} />
-                        <Bar
-                          dataKey="tokens"
-                          name={ZH.totalTokensLabel}
-                          radius={[0, 4, 4, 0]}
-                        >
-                          {vendorChartData.map((_, i) => (
-                            <Cell key={i} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="w-[140px] shrink-0">
-                    <ResponsiveContainer width="100%" height={220}>
-                      <PieChart>
-                        <Pie
-                          data={pieData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={40}
-                          outerRadius={65}
-                          paddingAngle={3}
-                          dataKey="value"
-                        >
-                          {pieData.map((_entry, i) => (
-                            <Cell key={i} />
-                          ))}
-                        </Pie>
-                        <Tooltip content={<PieTooltip />} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart
+                    data={hourlyStats?.by_date?.map((d) => {
+                      let label: string;
+                      if (d.date.includes(" ")) {
+                        const parts = d.date.split(" ");
+                        const datePart = parts[0].substring(5);
+                        const timePart = parts[1].substring(0, 5);
+                        label = `${datePart} ${timePart}`;
+                      } else {
+                        label = formatDate(d.date);
+                      }
+                      return { date: label, calls: d.calls };
+                    }) ?? []}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10, fill: "#64748b" }}
+                      angle={-30}
+                      textAnchor="end"
+                      height={50}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: "#64748b" }}
+                      tickFormatter={(v: number) => formatNumber(v)}
+                      width={40}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Bar
+                      dataKey="calls"
+                      name={ZH.calls}
+                      fill="#3b82f6"
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Vendor Breakdown */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
+                <h3 className="text-xs font-semibold text-slate-700 mb-2">
+                  {ZH.vendorBreakdown}
+                </h3>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={vendorChartData} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis
+                      type="number"
+                      tick={{ fontSize: 10, fill: "#64748b" }}
+                      tickFormatter={(v: number) => formatNumber(v)}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      tick={{ fontSize: 10, fill: "#64748b" }}
+                      width={80}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Bar
+                      dataKey="tokens"
+                      name={ZH.totalTokensLabel}
+                      radius={[0, 4, 4, 0]}
+                      fill="#6366f1"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </div>
 
@@ -1841,120 +1821,197 @@ export default function App() {
                 <h3 className="text-xs font-semibold text-slate-700">
                   {ZH.vendorAndModel}
                 </h3>
-                {/* Model Filter Dropdown */}
-                <div className="relative model-filter-dropdown">
+                <div className="flex items-center gap-2">
+                  {/* Free model filter toggle */}
                   <button
-                    onClick={() => {
-                      setPendingPivotModels(new Set(selectedPivotModels));
-                      setShowModelFilter(!showModelFilter);
-                    }}
+                    onClick={() => setHideFreeModels((v) => !v)}
                     className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md border transition-colors ${
-                      selectedPivotModels.size > 0
-                        ? "bg-blue-50 border-blue-300 text-blue-700"
+                      hideFreeModels
+                        ? "bg-emerald-50 border-emerald-300 text-emerald-700"
                         : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
                     }`}
+                    title={ZH.hideFreeModels}
                   >
-                    <Filter className="w-3 h-3" />
-                    {ZH.modelFilter}
-                    {selectedPivotModels.size > 0 && (
-                      <span className="ml-0.5 px-1 py-0.5 text-[9px] bg-blue-100 text-blue-700 rounded-full">
-                        {selectedPivotModels.size}
-                      </span>
-                    )}
-                    <ChevronDown className="w-3 h-3" />
+                    <Receipt className="w-3 h-3" />
+                    {ZH.hideFreeModels}
                   </button>
-                  {showModelFilter && (
-                    <div className="absolute right-0 top-full mt-1 w-56 max-h-80 bg-white border border-slate-200 rounded-lg shadow-lg z-50 flex flex-col">
-                      <div className="shrink-0 bg-white border-b border-slate-100 px-2 py-1.5 flex gap-2">
-                        <button
-                          onClick={() => setPendingPivotModels(new Set(pivotModelOptions))}
-                          className="text-[10px] text-blue-600 hover:text-blue-800"
-                        >
-                          {ZH.selectAll}
-                        </button>
-                        <span className="text-slate-300">|</span>
-                        <button
-                          onClick={() => setPendingPivotModels(new Set())}
-                          className="text-[10px] text-slate-500 hover:text-slate-700"
-                        >
-                          {ZH.clearAll}
-                        </button>
+                  {/* Model Filter Dropdown */}
+                  <div className="relative model-filter-dropdown">
+                    <button
+                      onClick={() => {
+                        setPendingPivotModels(new Set(selectedPivotModels));
+                        setShowModelFilter(!showModelFilter);
+                      }}
+                      className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md border transition-colors ${
+                        selectedPivotModels.size > 0
+                          ? "bg-blue-50 border-blue-300 text-blue-700"
+                          : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      <Filter className="w-3 h-3" />
+                      {ZH.modelFilter}
+                      {selectedPivotModels.size > 0 && (
+                        <span className="ml-0.5 px-1 py-0.5 text-[9px] bg-blue-100 text-blue-700 rounded-full">
+                          {selectedPivotModels.size}
+                        </span>
+                      )}
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+                    {showModelFilter && (
+                      <div className="absolute right-0 top-full mt-1 w-56 max-h-80 bg-white border border-slate-200 rounded-lg shadow-lg z-50 flex flex-col">
+                        {showAdvancedSettings ? (
+                          <>
+                            <div className="shrink-0 bg-white border-b border-slate-100 px-2 py-1.5 flex items-center justify-between">
+                              <span className="text-xs font-semibold text-slate-700">高级模型设置</span>
+                              <button
+                                onClick={() => setShowAdvancedSettings(false)}
+                                className="p-0.5 rounded hover:bg-slate-100 text-slate-400"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                            <div className="flex-1 p-2">
+                              <textarea
+                                value={advancedModelsDraft}
+                                onChange={(e) => setAdvancedModelsDraft(e.target.value)}
+                                className="w-full h-40 text-xs border border-slate-200 rounded p-2 focus:ring-1 focus:ring-primary-500 outline-none resize-none"
+                                placeholder="每行一个模型名称"
+                              />
+                            </div>
+                            <div className="shrink-0 bg-white border-t border-slate-100 px-2 py-1.5 flex justify-end gap-2">
+                              <button
+                                onClick={() => setShowAdvancedSettings(false)}
+                                className="px-2 py-1 text-[10px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                              >
+                                {ZH.cancel}
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  const models = advancedModelsDraft
+                                    .split("\n")
+                                    .map((s) => s.trim())
+                                    .filter((s) => s.length > 0);
+                                  try {
+                                    await saveAdvancedModels(models);
+                                    setAdvancedModels(models);
+                                  } catch {
+                                    /* ignore */
+                                  }
+                                  setShowAdvancedSettings(false);
+                                }}
+                                className="px-2 py-1 text-[10px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+                              >
+                                {ZH.apply}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="shrink-0 bg-white border-b border-slate-100 px-2 py-1.5 flex items-center justify-between">
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => setPendingPivotModels(new Set(pivotModelOptions))}
+                                  className="text-[10px] text-blue-600 hover:text-blue-800"
+                                >
+                                  {ZH.selectAll}
+                                </button>
+                                <span className="text-slate-300">|</span>
+                                <button
+                                  onClick={() => setPendingPivotModels(new Set())}
+                                  className="text-[10px] text-slate-500 hover:text-slate-700"
+                                >
+                                  {ZH.clearAll}
+                                </button>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  setAdvancedModelsDraft(advancedModels.join("\n"));
+                                  setShowAdvancedSettings(true);
+                                }}
+                                className="p-0.5 rounded hover:bg-slate-100 text-slate-400"
+                                title="高级模型设置"
+                              >
+                                <Settings className="w-3 h-3" />
+                              </button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-1">
+                              {pivotModelOptions.map((model) => (
+                                <label
+                                  key={model}
+                                  className="flex items-center gap-2 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 rounded cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={pendingPivotModels.has(model)}
+                                    onChange={() => {
+                                      const next = new Set(pendingPivotModels);
+                                      if (next.has(model)) next.delete(model);
+                                      else next.add(model);
+                                      setPendingPivotModels(next);
+                                    }}
+                                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                  />
+                                  <span className="truncate" title={model}>{model}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="shrink-0 bg-white border-t border-slate-100 px-2 py-1.5 flex justify-between items-center">
+                              <button
+                                onClick={() => {
+                                  const available = new Set(pivotModelOptions);
+                                  const next = new Set(
+                                    advancedModels.filter((m) => available.has(m))
+                                  );
+                                  setPendingPivotModels(next);
+                                }}
+                                className="text-[10px] text-blue-600 hover:text-blue-800"
+                              >
+                                选择高级模型
+                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => setShowModelFilter(false)}
+                                  className="px-2 py-1 text-[10px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                                >
+                                  {ZH.cancel}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSelectedPivotModels(pendingPivotModels);
+                                    setShowModelFilter(false);
+                                  }}
+                                  className="px-2 py-1 text-[10px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+                                >
+                                  {ZH.apply}
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
-                      <div className="flex-1 overflow-y-auto p-1">
-                        {pivotModelOptions.map((model) => (
-                          <label
-                            key={model}
-                            className="flex items-center gap-2 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 rounded cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={pendingPivotModels.has(model)}
-                              onChange={() => {
-                                const next = new Set(pendingPivotModels);
-                                if (next.has(model)) next.delete(model);
-                                else next.add(model);
-                                setPendingPivotModels(next);
-                              }}
-                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="truncate" title={model}>{model}</span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="shrink-0 bg-white border-t border-slate-100 px-2 py-1.5 flex justify-end gap-2">
-                        <button
-                          onClick={() => setShowModelFilter(false)}
-                          className="px-2 py-1 text-[10px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
-                        >
-                          {ZH.cancel}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedPivotModels(pendingPivotModels);
-                            setShowModelFilter(false);
-                          }}
-                          className="px-2 py-1 text-[10px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
-                        >
-                          {ZH.apply}
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wider">
-                      <th className="px-3 py-2 text-left font-medium">{ZH.provider} / {ZH.model} / {ZH.source}</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.calls}</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.input}</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.output}</th>
-                      <th className="px-3 py-2 text-right font-medium">缓存</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.total}</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.cacheHit}</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.cost}</th>
-                      <th className="px-3 py-2 text-right font-medium">{ZH.avgCost}</th>
+                      <th className="px-3 py-2 text-left font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("name")}>{ZH.provider} / {ZH.model} / {ZH.source}{sortIndicator("name")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("calls")}>{ZH.calls}{sortIndicator("calls")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("input_tokens")}>{ZH.input}{sortIndicator("input_tokens")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("output_tokens")}>{ZH.output}{sortIndicator("output_tokens")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("cache")}>缓存{sortIndicator("cache")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("total_tokens")}>{ZH.total}{sortIndicator("total_tokens")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("cache_hit_ratio")}>{ZH.cacheHit}{sortIndicator("cache_hit_ratio")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("cost")}>{ZH.cost}{sortIndicator("cost")}</th>
+                      <th className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none" onClick={() => handleSort("avg_cost")}>{ZH.avgCost}{sortIndicator("avg_cost")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {vendorModelTree.map(({ provider, models }) => {
+                    {vendorModelTree.map(({ provider, models, summary: vendorSummary }) => {
                       const vendorExpanded = expandedVendors.has(provider);
-                      const vendorSummary = models.reduce(
-                        (acc, m) => {
-                          acc.calls += m.calls;
-                          acc.input_tokens += m.input_tokens;
-                          acc.output_tokens += m.output_tokens;
-                          acc.cache_read_tokens += m.cache_read_tokens;
-                          acc.cache_write_tokens += m.cache_write_tokens;
-                          acc.total_tokens += m.total_tokens;
-                          acc.cost += m.cost;
-                          return acc;
-                        },
-                        { calls: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, total_tokens: 0, cost: 0 }
-                      );
-                      const vendorCacheHitDenom = vendorSummary.input_tokens + vendorSummary.cache_read_tokens;
-                      const vendorCacheHit = vendorCacheHitDenom > 0 ? (vendorSummary.cache_read_tokens / vendorCacheHitDenom) * 100 : 0;
+                      const vendorCacheHit = vendorSummary.cache_hit_ratio;
 
                       return (
                         <Fragment key={provider}>
@@ -1995,6 +2052,7 @@ export default function App() {
                               const modelKey = `${provider}|${model.model}`;
                               const modelExpanded = expandedModels.has(modelKey);
                               const singleSource = model.source_details.length <= 1;
+                              const ms = model.summary;
                               return (
                                 <Fragment key={modelKey}>
                                   {/* Model row */}
@@ -2027,20 +2085,20 @@ export default function App() {
                                         ))}
                                       </div>
                                     </td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatCalls(model.calls)}</td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(model.input_tokens)}</td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(model.output_tokens)}</td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(model.cache_read_tokens + model.cache_write_tokens)}</td>
-                                    <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(model.total_tokens)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatCalls(ms.calls)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(ms.input_tokens)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(ms.output_tokens)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatNumber(ms.cache_read_tokens + ms.cache_write_tokens)}</td>
+                                    <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatNumber(ms.total_tokens)}</td>
                                     <td className="px-3 py-2 text-right">
                                       <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                                        model.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
-                                        : model.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
+                                        ms.cache_hit_ratio > 50 ? "bg-emerald-100 text-emerald-700"
+                                        : ms.cache_hit_ratio > 10 ? "bg-amber-100 text-amber-700"
                                         : "bg-slate-100 text-slate-600"
-                                      }`}>{formatPercent(model.cache_hit_ratio)}</span>
+                                      }`}>{formatPercent(ms.cache_hit_ratio)}</span>
                                     </td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatCost(model.cost)}</td>
-                                    <td className="px-3 py-2 text-right text-slate-600">{formatAvgCost(model.cost, model.total_tokens)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatCost(ms.cost)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatAvgCost(ms.cost, ms.total_tokens)}</td>
                                   </tr>
 
                                   {modelExpanded && !singleSource &&

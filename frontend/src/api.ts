@@ -389,3 +389,21 @@ export async function restoreBackup(backupDir: string): Promise<RestoreResponse>
   if (!res.ok) throw new Error("Failed to restore backup");
   return res.json();
 }
+
+// ─── Advanced Models Settings ─────────────────────────────────────────────────
+
+export async function fetchAdvancedModels(): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/settings/advanced-models`);
+  if (!res.ok) throw new Error("Failed to fetch advanced models");
+  return res.json();
+}
+
+export async function saveAdvancedModels(models: string[]): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/settings/advanced-models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(models),
+  });
+  if (!res.ok) throw new Error("Failed to save advanced models");
+  return res.json();
+}
