@@ -35,6 +35,8 @@ pub struct AinaibaCreditData {
 }
 
 /// Fetch Ainaiba credit info from the remote dashboard API.
+/// Calls both `/dashboard/info` (account + credit balance) and
+/// `/dashboard/live` (daily/monthly usage) concurrently.
 pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
     let api_key = match std::env::var("XAI_API_KEY") {
         Ok(key) if !key.is_empty() => key,
@@ -48,100 +50,109 @@ pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
     };
 
     let client = reqwest::Client::new();
-    let url = format!("{}/dashboard/info", AINAIBA_API_BASE);
 
-    let response = match client
+    let info_fut = fetch_dashboard_info(&client, &api_key);
+    let live_fut = fetch_dashboard_live(&client, &api_key);
+
+    let (info_json, live_json) = tokio::join!(info_fut, live_fut);
+
+    let info_json = match info_json {
+        Ok(v) => v,
+        Err(e) => {
+            return AinaibaCreditResponse {
+                available: false,
+                data: None,
+                error: Some(format!("Info API failed: {}", e)),
+            };
+        }
+    };
+
+    let live_json = match live_json {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Ainaiba live API failed: {}", e);
+            serde_json::Value::Null
+        }
+    };
+
+    match parse_credit_data(&info_json, &live_json) {
+        Ok(data) => AinaibaCreditResponse {
+            available: true,
+            data: Some(data),
+            error: None,
+        },
+        Err(e) => {
+            tracing::warn!("Failed to extract Ainaiba credit data: {}", e);
+            AinaibaCreditResponse {
+                available: false,
+                data: None,
+                error: Some(format!("Data extraction error: {}", e)),
+            }
+        }
+    }
+}
+
+async fn fetch_dashboard_info(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/dashboard/info", AINAIBA_API_BASE);
+    let response = client
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .send()
         .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::warn!("Ainaiba API request failed: {}", e);
-            return AinaibaCreditResponse {
-                available: false,
-                data: None,
-                error: Some(format!("Request failed: {}", e)),
-            };
-        }
-    };
+        .map_err(|e| format!("Request failed: {}", e))?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        tracing::warn!("Ainaiba API returned status {}", status);
-        return AinaibaCreditResponse {
-            available: false,
-            data: None,
-            error: Some(format!("HTTP {}", status)),
-        };
+        return Err(format!("HTTP {}", response.status()));
     }
 
-    let json: serde_json::Value = match response.json().await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("Failed to parse Ainaiba API response: {}", e);
-            return AinaibaCreditResponse {
-                available: false,
-                data: None,
-                error: Some(format!("Parse error: {}", e)),
-            };
-        }
-    };
-
-    let data = match parse_credit_data(&json) {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("Failed to extract credit data: {}", e);
-            return AinaibaCreditResponse {
-                available: false,
-                data: None,
-                error: Some(format!("Data extraction error: {}", e)),
-            };
-        }
-    };
-
-    AinaibaCreditResponse {
-        available: true,
-        data: Some(data),
-        error: None,
-    }
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))
 }
 
-fn parse_credit_data(json: &serde_json::Value) -> Result<AinaibaCreditData, String> {
-    let user_id = json["id"]
+async fn fetch_dashboard_live(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/dashboard/live", AINAIBA_API_BASE);
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))
+}
+
+fn parse_credit_data(
+    info: &serde_json::Value,
+    live: &serde_json::Value,
+) -> Result<AinaibaCreditData, String> {
+    let user_id = info["id"]
         .as_i64()
         .ok_or_else(|| "missing 'id'".to_string())?;
-    let name = json["name"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let email = json["email"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let alias = json["alias"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let balance = json["balance"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let credit_used = json["credit_used"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let hard_limit = json["hard_limit"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let daily_limit = json["daily_limit"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let monthly_requests = json["requests"]
-        .as_i64()
-        .unwrap_or(0);
+    let name = info["name"].as_str().unwrap_or("").to_string();
+    let email = info["email"].as_str().unwrap_or("").to_string();
+    let alias = info["alias"].as_str().unwrap_or("").to_string();
+    let balance = info["balance"].as_f64().unwrap_or(0.0);
+    let credit_used = info["credit_used"].as_f64().unwrap_or(0.0);
+    let hard_limit = info["hard_limit"].as_f64().unwrap_or(0.0);
+    let daily_limit = info["daily_limit"].as_f64().unwrap_or(0.0);
 
     // Extract from credit_balance array
-    let credit_balance = &json["credit_balance"];
+    let credit_balance = &info["credit_balance"];
     let credit_total = credit_balance
         .get(0)
         .and_then(|c| c["amount"].as_f64())
@@ -152,11 +163,19 @@ fn parse_credit_data(json: &serde_json::Value) -> Result<AinaibaCreditData, Stri
         .unwrap_or("")
         .to_string();
 
-    // Future: could also call /dashboard/live for daily breakdown.
-    // For now, use credit_used as monthly proxy and leave daily as 0.
-    let daily_used = 0.0;
-    let daily_requests = 0;
-    let monthly_used = credit_used;
+    // Extract daily/monthly usage from live dashboard data
+    let daily_used = live["daily_usage"]["CreditUsed"]
+        .as_f64()
+        .unwrap_or(0.0);
+    let daily_requests = live["daily_usage"]["Requests"]
+        .as_i64()
+        .unwrap_or(0);
+    let monthly_used = live["monthly_usage"]["CreditUsed"]
+        .as_f64()
+        .unwrap_or(credit_used); // fallback to total if live data missing
+    let monthly_requests = live["monthly_usage"]["Requests"]
+        .as_i64()
+        .unwrap_or(0);
 
     Ok(AinaibaCreditData {
         user_id,
