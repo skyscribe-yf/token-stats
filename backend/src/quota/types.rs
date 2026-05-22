@@ -152,6 +152,9 @@ pub struct QuotaOpenCodeUsageEntry {
     pub usage_type: String,
     pub percentage: i32,
     pub resets_in: String,
+    /// Computed absolute timestamp when the quota resets (ISO 8601 / RFC 3339).
+    /// `None` if `resets_in` could not be parsed.
+    pub reset_at: Option<String>,
 }
 
 /// Simplified OpenCode-go quota info for the dashboard.

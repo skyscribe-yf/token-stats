@@ -135,6 +135,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/settings/advanced-models",
             get(routes::get_advanced_models).post(routes::update_advanced_models),
+        )
+        .route(
+            "/api/settings/subscriptions",
+            get(routes::get_subscription_settings).post(routes::update_subscription_settings),
         );
 
     Router::new()
