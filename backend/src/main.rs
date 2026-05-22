@@ -4,6 +4,7 @@
 //! (Pi, Codex, Claude Code, Kimi CLI, OpenCode) with charts, tables,
 //! and filtering.
 
+mod ainaiba;
 mod aggregator;
 mod app;
 mod config;

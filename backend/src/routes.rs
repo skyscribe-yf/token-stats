@@ -5,6 +5,7 @@ use crate::pricing;
 use crate::quota::{QuotaFetcher, QuotaResponse};
 use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
+use crate::ainaiba::fetch_ainaiba_credit;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -199,6 +200,10 @@ pub async fn get_xunfei() -> impl IntoResponse {
     let fetcher = XunfeiFetcher::new();
     let status = fetcher.fetch_all_statuses().await;
     Json(status)
+}
+
+pub async fn get_ainaiba_credit() -> impl IntoResponse {
+    Json(fetch_ainaiba_credit().await)
 }
 
 pub async fn get_pricing() -> impl IntoResponse {
