@@ -669,8 +669,7 @@ export default function App() {
     // Kimi expiration
     if (subscriptionSettings?.kimi_monthly_start_day) {
       const nextBilling = computeNextBillingDate(subscriptionSettings.kimi_monthly_start_day);
-      const diffMs = nextBilling.getTime() - Date.now();
-      if (diffMs > 0 && diffMs <= 24 * 60 * 60 * 1000) {
+      if (isWithin24Hours(nextBilling.toISOString())) {
         alerts.push({
           id: "kimi_expiring",
           provider: "Kimi",
@@ -681,78 +680,67 @@ export default function App() {
       }
     }
 
-    // OpenCode-go quota low
+    // OpenCode-go (merged quota_low + expiring checks)
     const checkOpenCode = (status: OpenCodeQuotaStatus | null | undefined, label: string) => {
-      if (status?.available && status.data) {
-        for (const entry of status.data.entries) {
-          if (entry.percentage >= 80) {
-            const typeLabel = entry.usage_type === "Rolling" ? "滚动" : entry.usage_type === "Weekly" ? "周" : entry.usage_type === "Monthly" ? "月" : entry.usage_type;
-            alerts.push({
-              id: `opencode_${label}_${entry.usage_type}_low`,
-              provider: `OpenCode-go${label === "ex" ? " (EX)" : ""}`,
-              type: "quota_low",
-              message: `OpenCode-go${label === "ex" ? " (EX)" : ""} ${typeLabel}限额已用 ${entry.percentage}%`,
-              detail: `重置于 ${entry.resets_in}`,
-            });
-          }
+      if (!status?.available || !status.data) return;
+      const suffix = label === "ex" ? " (EX)" : "";
+      for (const entry of status.data.entries) {
+        // Quota low check
+        if (entry.percentage >= 80) {
+          const typeLabel = entry.usage_type === "Rolling" ? "滚动" : entry.usage_type === "Weekly" ? "周" : entry.usage_type === "Monthly" ? "月" : entry.usage_type;
+          alerts.push({
+            id: `opencode_${label}_${entry.usage_type}_low`,
+            provider: `OpenCode-go${suffix}`,
+            type: "quota_low",
+            message: `OpenCode-go${suffix} ${typeLabel}限额已用 ${entry.percentage}%`,
+            detail: `重置于 ${entry.resets_in}`,
+          });
+        }
+        // Expiration check (only for Monthly entries)
+        if (entry.usage_type === "Monthly" && entry.reset_at && isWithin24Hours(entry.reset_at)) {
+          alerts.push({
+            id: `opencode_${label}_expiring`,
+            provider: `OpenCode-go${suffix}`,
+            type: "expiring_soon",
+            message: `OpenCode-go${suffix} 月度配额即将重置`,
+            detail: `重置于 ${new Date(entry.reset_at).toLocaleString()}`,
+          });
         }
       }
     };
     checkOpenCode(quota?.opencode_go, "primary");
     checkOpenCode(quota?.opencode_go_ex, "ex");
 
-    // OpenCode-go expiration (24h before monthly reset)
-    const checkOpenCodeExpiry = (status: OpenCodeQuotaStatus | null | undefined, label: string) => {
-      if (status?.available && status.data) {
-        for (const entry of status.data.entries) {
-          if (entry.usage_type === "Monthly" && entry.reset_at && isWithin24Hours(entry.reset_at)) {
-            alerts.push({
-              id: `opencode_${label}_expiring`,
-              provider: `OpenCode-go${label === "ex" ? " (EX)" : ""}`,
-              type: "expiring_soon",
-              message: `OpenCode-go${label === "ex" ? " (EX)" : ""} 月度配额即将重置`,
-              detail: `重置于 ${new Date(entry.reset_at).toLocaleString()}`,
-            });
-          }
-        }
-      }
-    };
-    checkOpenCodeExpiry(quota?.opencode_go, "primary");
-    checkOpenCodeExpiry(quota?.opencode_go_ex, "ex");
-
-    // Xunfei quota low
+    // Xunfei (merged quota_low + expiring checks)
     if (xunfei?.accounts) {
       for (const acc of xunfei.accounts) {
+        const suffix = acc.label === "ex" ? " (EX)" : "";
         if (acc.available && acc.data) {
-          const xfratio = acc.data.usage.package_left / Math.max(acc.data.usage.package_limit, 1);
-          if (xfratio <= 0.2) {
+          // Quota low check
+          const ratio = acc.data.usage.package_left / Math.max(acc.data.usage.package_limit, 1);
+          if (ratio <= 0.2) {
             alerts.push({
               id: `xunfei_${acc.label}_quota_low`,
-              provider: `讯飞${acc.label === "ex" ? " (EX)" : ""}`,
+              provider: `讯飞${suffix}`,
               type: "quota_low",
-              message: `讯飞编程套餐${acc.label === "ex" ? " (EX)" : ""} 月度余量不足`,
-              detail: `月度已用 ${((1 - xfratio) * 100).toFixed(0)}%，建议切换至其他模型`,
+              message: `讯飞编程套餐${suffix} 月度余量不足`,
+              detail: `月度已用 ${((1 - ratio) * 100).toFixed(0)}%，建议切换至其他模型`,
             });
           }
-        }
-      }
-    }
-
-    // Xunfei expiration
-    if (xunfei?.accounts) {
-      for (const acc of xunfei.accounts) {
-        if (acc.available && acc.data && acc.data.expires_at) {
-          const dateStr = acc.data.expires_at.includes("T")
-            ? acc.data.expires_at
-            : acc.data.expires_at.replace(" ", "T");
-          if (isWithin24Hours(dateStr)) {
-            alerts.push({
-              id: `xunfei_${acc.label}_expiring`,
-              provider: `讯飞${acc.label === "ex" ? " (EX)" : ""}`,
-              type: "expiring_soon",
-              message: `讯飞编程套餐${acc.label === "ex" ? " (EX)" : ""} 即将到期`,
-              detail: `到期日: ${acc.data.expires_at}`,
-            });
+          // Expiration check
+          if (acc.data.expires_at) {
+            const dateStr = acc.data.expires_at.includes("T")
+              ? acc.data.expires_at
+              : acc.data.expires_at.replace(" ", "T");
+            if (isWithin24Hours(dateStr)) {
+              alerts.push({
+                id: `xunfei_${acc.label}_expiring`,
+                provider: `讯飞${suffix}`,
+                type: "expiring_soon",
+                message: `讯飞编程套餐${suffix} 即将到期`,
+                detail: `到期日: ${acc.data.expires_at}`,
+              });
+            }
           }
         }
       }
@@ -791,7 +779,7 @@ export default function App() {
     if (newAlerts.length > 0) {
       setShowAlertModal(true);
     }
-  }, [quota, xunfei, ainaibaCredit, subscriptionSettings]);
+  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
 
   // Fetch hourly stats whenever main filters change
   useEffect(() => {

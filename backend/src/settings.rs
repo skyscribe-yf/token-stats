@@ -184,6 +184,19 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
         }
     };
 
+    // Validate kimi_monthly_start_day is in 1..=28 if set
+    if let Some(day) = settings.kimi_monthly_start_day {
+        if !(1..=28).contains(&day) {
+            tracing::warn!(
+                "Invalid kimi_monthly_start_day {} in settings file, ignoring",
+                day
+            );
+            return SubscriptionSettings {
+                kimi_monthly_start_day: None,
+            };
+        }
+    }
+
     tracing::info!("Loaded subscription settings from {:?}", path);
     settings
 }
@@ -304,5 +317,14 @@ mod tests {
                 assert_eq!(path, expected);
             },
         );
+    }
+
+    #[test]
+    fn subscription_settings_invalid_day_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subscription_settings.json");
+        std::fs::write(&path, r#"{\"kimi_monthly_start_day\": 31}"#).unwrap();
+        let settings = load_subscription_settings_from_path(&path);
+        assert_eq!(settings.kimi_monthly_start_day, None);
     }
 }

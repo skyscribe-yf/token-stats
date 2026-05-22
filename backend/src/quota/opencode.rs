@@ -658,4 +658,10 @@ mod tests {
         reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
         reset_env_var("OPENCODE_GO_AUTH_COOKIE", old_cookie);
     }
+
+    #[test]
+    fn test_parse_resets_in_includes_seconds() {
+        let dur = parse_resets_in("5 minutes 30 seconds").unwrap();
+        assert_eq!(dur.num_seconds(), 5 * 60 + 30);
+    }
 }

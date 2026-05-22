@@ -161,10 +161,9 @@ export function formatResetTime(resetTime: string | null | undefined): string | 
  *  Returns the Date of the next occurrence (could be this month or next). */
 export function computeNextBillingDate(startDay: number): Date {
   const now = new Date();
-  const thisMonth = new Date(now.getFullYear(), now.getMonth(), startDay);
-  // If this month's billing date hasn't passed yet, use it
-  if (thisMonth > now) return thisMonth;
-  // Otherwise, next month
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const billingThisMonth = new Date(now.getFullYear(), now.getMonth(), startDay);
+  if (billingThisMonth >= today) return billingThisMonth;
   return new Date(now.getFullYear(), now.getMonth() + 1, startDay);
 }
 

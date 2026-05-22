@@ -428,4 +428,6 @@ export async function saveSubscriptionSettings(settings: SubscriptionSettings): 
     body: JSON.stringify(settings),
   });
   if (!res.ok) throw new Error("Failed to save subscription settings");
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || "Failed to save subscription settings");
 }

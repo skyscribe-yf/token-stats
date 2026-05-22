@@ -216,7 +216,7 @@ pub async fn update_advanced_models(Json(body): Json<Vec<String>>) -> impl IntoR
         Ok(()) => Json(serde_json::json!({ "success": true })),
         Err(e) => {
             tracing::warn!("Failed to save advanced models: {}", e);
-            Json(serde_json::json!({ "success": false, "error": e }))
+            Json(serde_json::json!({ "success": false, "error": "Failed to save settings" }))
         }
     }
 }
@@ -241,7 +241,7 @@ pub async fn update_subscription_settings(
         Ok(()) => Json(serde_json::json!({ "success": true })),
         Err(e) => {
             tracing::warn!("Failed to save subscription settings: {}", e);
-            Json(serde_json::json!({ "success": false, "error": e }))
+            Json(serde_json::json!({ "success": false, "error": "Failed to save settings" }))
         }
     }
 }
