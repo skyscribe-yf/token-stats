@@ -224,6 +224,37 @@ export async function fetchFilters(): Promise<FilterOptions> {
   return res.json();
 }
 
+// ─── Ainaiba (XAI) Credit ───────────────────────────────────────────────────
+
+export interface AinaibaCreditData {
+  user_id: number;
+  name: string;
+  email: string;
+  alias: string;
+  balance: number;
+  credit_total: number;
+  credit_used: number;
+  expires_at: string;
+  daily_used: number;
+  daily_requests: number;
+  monthly_used: number;
+  monthly_requests: number;
+  hard_limit: number;
+  daily_limit: number;
+}
+
+export interface AinaibaCreditResponse {
+  available: boolean;
+  data: AinaibaCreditData | null;
+  error: string | null;
+}
+
+export async function fetchAinaibaCredit(): Promise<AinaibaCreditResponse> {
+  const res = await fetch(`${API_BASE}/api/ainaiba-credit`);
+  if (!res.ok) throw new Error("Failed to fetch Ainaiba credit");
+  return res.json();
+}
+
 // ─── Xunfei (iFlytek) Coding Plan ─────────────────────────────────────────────
 
 export interface XunfeiUsage {

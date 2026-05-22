@@ -35,6 +35,7 @@ import {
   fetchFilters,
   fetchQuota,
   fetchXunfei,
+  fetchAinaibaCredit,
   fetchRefresh,
   fetchPricing,
   type PricingConfig,
@@ -45,6 +46,7 @@ import {
   type FilterOptions,
   type QuotaResponse,
   type XunfeiMultiStatus,
+  type AinaibaCreditResponse,
   type RestoreResponse,
 } from "./api";
 import {
@@ -303,6 +305,8 @@ export default function App() {
   const [quotaLoading, setQuotaLoading] = useState(true);
   const [xunfei, setXunfei] = useState<XunfeiMultiStatus | null>(null);
   const [xunfeiLoading, setXunfeiLoading] = useState(true);
+  const [ainaibaCredit, setAinaibaCredit] = useState<AinaibaCreditResponse | null>(null);
+  const [ainaibaCreditLoading, setAinaibaCreditLoading] = useState(true);
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
     models: [],
@@ -567,6 +571,22 @@ export default function App() {
     };
     loadXunfei();
     const interval = setInterval(loadXunfei, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const loadAinaiba = async () => {
+      try {
+        const x = await fetchAinaibaCredit();
+        setAinaibaCredit(x);
+      } catch {
+        /* ainaiba credit is optional */
+      } finally {
+        setAinaibaCreditLoading(false);
+      }
+    };
+    loadAinaiba();
+    const interval = setInterval(loadAinaiba, 30_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1264,7 +1284,7 @@ export default function App() {
                 <svg className="w-3.5 h-3.5 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                 供应商订阅
                 <span className="text-[11px] text-slate-400 font-normal ml-1">
-                  {quotaLoading || xunfeiLoading
+                  {quotaLoading || xunfeiLoading || ainaibaCreditLoading
                     ? "加载中..."
                     : [
                           ...(xunfei?.accounts?.map((acc) =>
@@ -1288,6 +1308,11 @@ export default function App() {
                           : quota?.opencode_go_ex?.error
                             ? "OpenCode EX: " + quota.opencode_go_ex.error
                             : quota?.opencode_go_ex && !quotaLoading ? "OpenCode EX: 获取失败" : null,
+                        ainaibaCredit?.available && ainaibaCredit.data
+                          ? `Ainaiba: 剩余 ${(ainaibaCredit.data.balance / Math.max(ainaibaCredit.data.credit_total, 1) * 100).toFixed(0)}%`
+                          : ainaibaCredit?.error
+                            ? "Ainaiba: " + ainaibaCredit.error
+                            : ainaibaCredit && !ainaibaCreditLoading ? "Ainaiba: 获取失败" : null,
                       ]
                         .filter(Boolean)
                         .join(" · ") || "无可用订阅"}
@@ -1367,6 +1392,53 @@ export default function App() {
                     )}
                   </div>
                 ))}
+
+                {/* Ainaiba */}
+                <div className={"bg-white rounded-xl border " + (ainaibaCredit?.available ? "border-emerald-200" : "border-slate-200") + " p-3 shadow-sm"}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={"w-1.5 h-1.5 rounded-full " + (ainaibaCreditLoading ? "bg-amber-400" : ainaibaCredit?.available ? "bg-emerald-500" : "bg-slate-300")} />
+                      <span className="text-[11px] font-semibold text-slate-700">Ainaiba</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">xai.ainaibahub</span>
+                  </div>
+                  {ainaibaCreditLoading ? (
+                    <div className="h-8 flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary-600" />
+                    </div>
+                  ) : ainaibaCredit?.available && ainaibaCredit.data ? (
+                    <>
+                      <div className="flex items-center justify-between text-[11px] mb-1">
+                        <span className="font-medium text-slate-600">{ainaibaCredit.data.alias || ainaibaCredit.data.name}</span>
+                        <span className="text-slate-400">#{ainaibaCredit.data.user_id}</span>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] text-slate-500">
+                          <span>已用 {((ainaibaCredit.data.credit_used / Math.max(ainaibaCredit.data.credit_total, 1)) * 100).toFixed(1)}%</span>
+                          <span>剩余 {ainaibaCredit.data.balance.toFixed(2)} / {ainaibaCredit.data.credit_total.toFixed(2)}</span>
+                        </div>
+                        <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                          <div className={"h-full rounded-full transition-all " + barColor(ainaibaCredit.data.credit_used, ainaibaCredit.data.credit_total)}
+                            style={{ width: (Math.min((ainaibaCredit.data.credit_used / Math.max(ainaibaCredit.data.credit_total, 1)) * 100, 100)) + "%" }}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-1 pt-1 border-t border-slate-100 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+                        <span>到期 {ainaibaCredit.data.expires_at ? ainaibaCredit.data.expires_at.slice(0, 10) : "-"}</span>
+                        <span>日限 {ainaibaCredit.data.daily_limit.toLocaleString()}</span>
+                        <span>硬限 {ainaibaCredit.data.hard_limit.toLocaleString()}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {ainaibaCredit?.error ? (
+                        <p className="text-[11px] text-slate-400 italic">{ainaibaCredit.error}</p>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic">获取失败</p>
+                      )}
+                    </>
+                  )}
+                </div>
 
                 {/* Kimi Code */}
                 <div className={"bg-white rounded-xl border " + (quota?.kimi?.available ? "border-emerald-200" : "border-slate-200") + " p-3 shadow-sm"}>
