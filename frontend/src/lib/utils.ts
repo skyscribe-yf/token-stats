@@ -155,3 +155,24 @@ export function formatResetTime(resetTime: string | null | undefined): string | 
     return null;
   }
 }
+
+/** Compute the next billing/reset date for a monthly subscription
+ *  that starts on the given day of month (1-28).
+ *  Returns the Date of the next occurrence (could be this month or next). */
+export function computeNextBillingDate(startDay: number): Date {
+  const now = new Date();
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), startDay);
+  // If this month's billing date hasn't passed yet, use it
+  if (thisMonth > now) return thisMonth;
+  // Otherwise, next month
+  return new Date(now.getFullYear(), now.getMonth() + 1, startDay);
+}
+
+/** Check if a date string (ISO 8601 or similar) is within 24 hours from now */
+export function isWithin24Hours(dateStr: string): boolean {
+  const target = new Date(dateStr);
+  if (isNaN(target.getTime())) return false;
+  const now = new Date();
+  const diffMs = target.getTime() - now.getTime();
+  return diffMs > 0 && diffMs <= 24 * 60 * 60 * 1000;
+}
