@@ -238,8 +238,10 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         return cfg.special.xunfei_per_call;
     }
 
-    // 2. Kimi CLI: per-token estimate in CNY
-    if record.source == "kimi-cli" {
+    // 2. Kimi provider with zero stored cost: per-token estimate in CNY
+    //    Covers pi-sourced and kimi-cli records where vendor merge mapped
+    //    provider to "kimi" and no cost was recorded by the upstream tool.
+    if record.provider == "kimi" && record.cost == 0.0 {
         return record.total_tokens as f64 * cfg.special.kimi_per_token;
     }
 
@@ -301,4 +303,108 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
 
     // Fallback: keep as-is (likely 0)
     record.cost
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_record(
+        source: &str,
+        provider: &str,
+        model: &str,
+        total_tokens: i64,
+        cost: f64,
+    ) -> TokenRecord {
+        TokenRecord {
+            date: "2026-05-22".to_string(),
+            time: "2026-05-22T00:00:00Z".to_string(),
+            api_key_prefix: "test".to_string(),
+            provider: provider.to_string(),
+            original_provider: None,
+            model: model.to_string(),
+            source: source.to_string(),
+            input_tokens: total_tokens / 2,
+            output_tokens: total_tokens / 2,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens,
+            cost,
+        }
+    }
+
+    #[test]
+    fn kimi_cli_zero_cost_uses_per_token_estimate() {
+        // kimi-cli records have cost=0 and provider="kimi"
+        let record = make_record("kimi-cli", "kimi", "kimi-k2.6", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        assert!(
+            cost > 0.0,
+            "kimi-cli record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn pi_kimi_zero_cost_uses_per_token_estimate() {
+        // Pi-sourced kimi records with cost=0 should use the same formula
+        let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        assert!(
+            cost > 0.0,
+            "pi kimi record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn kimi_with_stored_cost_uses_stored_cost() {
+        // Records with provider="kimi" but cost>0 should use the stored cost path
+        let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.05);
+        let cost = display_cost(&record);
+        // cost is in USD, so should be converted to CNY (0.05 * 6.82)
+        let expected = 0.05 * PricingConfig::default().usd_to_cny;
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "kimi record with stored cost should use USD→CNY, expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn xunfei_takes_precedence_over_kimi() {
+        // xunfei provider should use flat per-call rate, not kimi per-token
+        let record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call;
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "xunfei should use per-call rate, expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn non_kimi_provider_zero_cost_returns_zero() {
+        // Non-kimi records with cost=0 should still return 0 (fallback)
+        let record = make_record("pi", "openai", "gpt-5.5", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        assert_eq!(cost, 0.0, "non-kimi zero-cost record should return 0");
+    }
 }
