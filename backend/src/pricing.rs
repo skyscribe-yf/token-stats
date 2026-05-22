@@ -51,7 +51,7 @@ impl Default for PricingConfig {
             rate_date: "2026-05-20".to_string(),
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
-                kimi_per_token: 199.0 / 1_500_000_000.0,
+                kimi_per_token: 199.0 / 2_800_000_000.0,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
             },

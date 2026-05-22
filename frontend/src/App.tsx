@@ -1148,7 +1148,7 @@ export default function App() {
                       <p className="font-semibold text-slate-700 mb-1">特殊计费规则</p>
                       <ul className="list-disc list-inside space-y-0.5">
                         <li>讯飞 (xunfei): 按调用次数计费，每次 ¥{pricingConfig.special.xunfei_per_call.toFixed(6)}（199元 / 90000次）</li>
-                        <li>Kimi CLI: 按 Token 估算，每 Token ¥{pricingConfig.special.kimi_per_token.toExponential(3)}（199元 / 15亿 Token）</li>
+                        <li>Kimi CLI: 按 Token 估算，每 Token ¥{pricingConfig.special.kimi_per_token.toExponential(3)}（199元 / 28亿 Token）</li>
                         <li>OpenCode: 原始 cost ÷ {pricingConfig.special.opencode_divisor} 后再按汇率换算（10美金可用60美金额度）</li>
                         <li>pi / ccswitch: 原始 USD cost 直接按汇率换算为 CNY</li>
                         <li>codex / claude-code: 无原始 cost，按下方模型价格表计算后换算</li>
