@@ -119,7 +119,8 @@ export async function fetchStats(
   source?: string,
   provider?: string,
   tzOffset?: number,
-  resolution?: string
+  resolution?: string,
+  model?: string
 ): Promise<StatsResponse> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
@@ -128,6 +129,7 @@ export async function fetchStats(
   if (provider) params.set("provider", provider);
   if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
   if (resolution) params.set("resolution", resolution);
+  if (model) params.set("model", model);
   const res = await fetch(`${API_BASE}/api/stats?${params}`);
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();

@@ -21,6 +21,16 @@ export function formatCost(cost: number, source?: string): string {
   return "¥" + cost.toFixed(2);
 }
 
+/** Format average cost per million tokens (元/百万Token).
+ *  Formula: costCny / (totalTokens / 1_000_000) */
+export function formatAvgCost(costCny: number, totalTokens: number): string {
+  if (costCny == null || Number.isNaN(costCny)) return "-";
+  if (totalTokens == null || totalTokens <= 0) return "N/A";
+  const avgCost = costCny / (totalTokens / 1_000_000);
+  if (avgCost < 0.01) return "<¥0.01/百万";
+  return "¥" + avgCost.toFixed(2) + "/百万";
+}
+
 export function formatPercent(pct: number): string {
   if (pct == null || Number.isNaN(pct)) return "-";
   return pct.toFixed(1) + "%";
