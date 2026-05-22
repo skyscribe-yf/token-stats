@@ -1,4 +1,5 @@
 use crate::aggregator;
+use crate::ainaiba::fetch_ainaiba_credit;
 use crate::app::AppState;
 use crate::models::*;
 use crate::pricing;
@@ -199,6 +200,10 @@ pub async fn get_xunfei() -> impl IntoResponse {
     let fetcher = XunfeiFetcher::new();
     let status = fetcher.fetch_all_statuses().await;
     Json(status)
+}
+
+pub async fn get_ainaiba_credit() -> impl IntoResponse {
+    Json(fetch_ainaiba_credit().await)
 }
 
 pub async fn get_pricing() -> impl IntoResponse {

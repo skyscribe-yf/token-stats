@@ -130,7 +130,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/pricing/reload", post(routes::reload_pricing))
         .route("/api/export", get(routes::export_data))
         .route("/api/refresh", post(routes::refresh_data))
-        .route("/api/restore", post(routes::restore_backup));
+        .route("/api/restore", post(routes::restore_backup))
+        .route("/api/ainaiba-credit", get(routes::get_ainaiba_credit));
 
     Router::new()
         .merge(api_routes)

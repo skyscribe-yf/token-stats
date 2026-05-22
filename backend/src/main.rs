@@ -5,6 +5,7 @@
 //! and filtering.
 
 mod aggregator;
+mod ainaiba;
 mod app;
 mod config;
 mod models;
