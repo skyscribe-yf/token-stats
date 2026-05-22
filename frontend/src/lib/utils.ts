@@ -88,12 +88,31 @@ export function getLocalDatetimeOffsetHours(hours: number): string {
 }
 
 export const SOURCE_COLORS: Record<string, string> = {
-  pi: "#3b82f6",          // blue
-  "claude-code": "#f59e0b", // amber
-  codex: "#10b981",       // emerald
-  "kimi-cli": "#8b5cf6",  // violet
-  opencode: "#f97316",    // orange
+  pi: "#2563eb",          // blue-600
+  "claude-code": "#fbbf24", // amber-400
+  codex: "#34d399",       // emerald-400
+  "kimi-cli": "#a78bfa",  // violet-400
+  opencode: "#fb923c",    // orange-400
 };
+
+/** Modern, diverse vendor color palette for charts and UI tags */
+export const VENDOR_COLORS: Record<string, string> = {
+  deepseek: "#0ea5e9",     // sky-500
+  kimi: "#8b5cf6",         // violet-500
+  "kimi-coding": "#a78bfa", // violet-400
+  ainaba: "#10b981",       // emerald-500
+  xunfei: "#f59e0b",       // amber-500
+  guancha: "#ec4899",      // pink-500
+  "opencode-go": "#f97316", // orange-500
+  opencode: "#fb923c",     // orange-400
+  "xiaomi-mimo": "#ef4444", // red-500
+  anthropic: "#6366f1",    // indigo-500
+  openai: "#06b6d4",       // cyan-500
+};
+
+export function getVendorColor(vendor: string): string {
+  return VENDOR_COLORS[vendor] || "#94a3b8";
+}
 
 export const SOURCE_LABELS: Record<string, string> = {
   pi: "Pi",

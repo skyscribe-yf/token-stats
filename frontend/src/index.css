@@ -68,3 +68,17 @@
     -moz-osx-font-smoothing: grayscale;
   }
 }
+
+/* Recharts: remove ugly focus outline on click */
+.recharts-surface {
+  outline: none;
+}
+.recharts-bar-rectangle:focus,
+.recharts-line-dot:focus,
+.recharts-active-shape:focus,
+.recharts-sector:focus {
+  outline: none;
+}
+.recharts-wrapper {
+  user-select: none;
+}
