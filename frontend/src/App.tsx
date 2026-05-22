@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
   ComposedChart,
   Line,
+  Cell,
 } from "recharts";
 import {
   ChevronLeft,
@@ -61,6 +62,7 @@ import {
   getLocalDatetimeOffsetHours,
   getSourceColor,
   getSourceLabel,
+  getVendorColor,
   formatResetTime,
   formatAvgCost,
 } from "./lib/utils";
@@ -146,11 +148,11 @@ const ZH = {
 } as const;
 
 const CHART_METRIC_OPTIONS = [
-  { key: "cache", label: "缓存", color: "#8b5cf6" },
-  { key: "input", label: "输入", color: "#10b981" },
-  { key: "output", label: "输出", color: "#f59e0b" },
-  { key: "cacheHitRatio", label: "缓存命中率", color: "#f43f5e" },
-  { key: "cacheHitRatioNoXunfei", label: "缓存命中率(无讯飞)", color: "#06b6d4" },
+  { key: "cache", label: "缓存", color: "#c084fc" },
+  { key: "input", label: "输入", color: "#38bdf8" },
+  { key: "output", label: "输出", color: "#fb923c" },
+  { key: "cacheHitRatio", label: "缓存命中率", color: "#f472b6" },
+  { key: "cacheHitRatioNoXunfei", label: "缓存命中率(无讯飞)", color: "#22d3ee" },
 ] as const;
 
 type ChartMetricKey = (typeof CHART_METRIC_OPTIONS)[number]["key"];
@@ -766,10 +768,10 @@ export default function App() {
   };
 
   const presetBtnClass = (key: string) =>
-    `px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+    `px-3 py-1 text-xs font-medium rounded-md transition-colors ${
       activePreset === key
-        ? "bg-primary-600 text-white"
-        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+        ? "bg-white text-primary-700 shadow-sm"
+        : "text-slate-500 hover:text-slate-700"
     }`;
 
   const customQuickClass = (key: string) =>
@@ -798,128 +800,186 @@ export default function App() {
       {/* Header - compact, sticky */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            {/* Logo + Title */}
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="bg-primary-600 p-1.5 rounded-lg">
-                <Activity className="w-4 h-4 text-white" />
+          {/* Top bar: branding + time + actions */}
+          <div className="flex flex-wrap items-center justify-between gap-y-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {/* Logo + Title */}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="bg-primary-600 p-1.5 rounded-lg">
+                  <Activity className="w-4 h-4 text-white" />
+                </div>
+                <h1 className="text-sm font-bold text-slate-800 leading-tight">
+                  {ZH.title}
+                </h1>
               </div>
-              <h1 className="text-sm font-bold text-slate-800 leading-tight">
-                {ZH.title}
-              </h1>
+
+              {/* Time presets - segmented control */}
+              <div className="flex items-center bg-slate-100/80 rounded-lg p-0.5 gap-0.5">
+                <button
+                  onClick={() => applyPreset("today")}
+                  className={presetBtnClass("today")}
+                >
+                  {ZH.today}
+                </button>
+                <button
+                  onClick={() => applyPreset("7d")}
+                  className={presetBtnClass("7d")}
+                >
+                  {ZH.last7Days}
+                </button>
+                <button
+                  onClick={() => applyPreset("all")}
+                  className={presetBtnClass("all")}
+                >
+                  {ZH.allTime}
+                </button>
+                <div className="relative">
+                  <button
+                    ref={customBtnRef}
+                    onClick={() => setShowCustomPanel((v) => !v)}
+                    className={`custom-time-btn inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                      ["6h", "12h", "1d", "3d", "14d", "30d", "all", "custom"].includes(activePreset)
+                        ? "bg-white text-primary-700 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    {ZH.customTime}
+                  </button>
+
+                  {/* Custom time panel */}
+                  {showCustomPanel && (
+                    <div className="custom-time-panel absolute left-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-xl p-3 min-w-[320px] z-30">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-slate-700">{ZH.quickSelect}</span>
+                        <button
+                          onClick={() => setShowCustomPanel(false)}
+                          className="p-0.5 rounded hover:bg-slate-100 text-slate-400"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-1 mb-3">
+                        {[
+                          { k: "6h", l: ZH.last6h },
+                          { k: "12h", l: ZH.last12h },
+                          { k: "1d", l: ZH.last1d },
+                          { k: "3d", l: ZH.last3d },
+                          { k: "14d", l: ZH.last14d },
+                          { k: "30d", l: ZH.last30d },
+                          { k: "all", l: ZH.allTime },
+                        ].map((q) => (
+                          <button
+                            key={q.k}
+                            onClick={() => quickSetCustom(q.k as Exclude<TimePreset, "custom">)}
+                            className={customQuickClass(q.k)}
+                          >
+                            {q.l}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="flex-1">
+                          <label className="block text-[10px] text-slate-400 mb-0.5">{ZH.from}</label>
+                          <input
+                            type="datetime-local"
+                            value={customFrom}
+                            onChange={(e) => setCustomFrom(e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                          />
+                        </div>
+                        <span className="text-slate-300 mt-4">-</span>
+                        <div className="flex-1">
+                          <label className="block text-[10px] text-slate-400 mb-0.5">{ZH.to}</label>
+                          <input
+                            type="datetime-local"
+                            value={customTo}
+                            onChange={(e) => setCustomTo(e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end gap-1.5">
+                        <button
+                          onClick={() => setShowCustomPanel(false)}
+                          className="px-2.5 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                        >
+                          {ZH.cancel}
+                        </button>
+                        <button
+                          onClick={applyCustom}
+                          disabled={!customFrom || !customTo}
+                          className="px-2.5 py-1 text-[11px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {ZH.apply}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Divider */}
-            <div className="hidden sm:block w-px h-5 bg-slate-200" />
-
-            {/* Time presets */}
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => applyPreset("today")}
-                className={presetBtnClass("today")}
+                onClick={() => setShowPricing(true)}
+                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                title="查看计价逻辑"
               >
-                {ZH.today}
+                <Receipt className="w-3 h-3" />
+                计价
               </button>
-              <button
-                onClick={() => applyPreset("7d")}
-                className={presetBtnClass("7d")}
-              >
-                {ZH.last7Days}
-              </button>
-              <button
-                onClick={() => applyPreset("all")}
-                className={presetBtnClass("all")}
-              >
-                {ZH.allTime}
-              </button>
-              <div className="relative">
-                <button
-                  ref={customBtnRef}
-                  onClick={() => setShowCustomPanel((v) => !v)}
-                  className={`custom-time-btn inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                    ["6h", "12h", "1d", "3d", "14d", "30d", "all", "custom"].includes(activePreset)
-                      ? "bg-primary-600 text-white"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
-                >
-                  <SlidersHorizontal className="w-3 h-3" />
-                  {ZH.customTime}
-                </button>
 
-                {/* Custom time panel */}
-                {showCustomPanel && (
-                  <div className="custom-time-panel absolute left-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-xl p-3 min-w-[320px] z-30">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold text-slate-700">{ZH.quickSelect}</span>
-                      <button
-                        onClick={() => setShowCustomPanel(false)}
-                        className="p-0.5 rounded hover:bg-slate-100 text-slate-400"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <div className="flex flex-wrap gap-1 mb-3">
-                      {[
-                        { k: "6h", l: ZH.last6h },
-                        { k: "12h", l: ZH.last12h },
-                        { k: "1d", l: ZH.last1d },
-                        { k: "3d", l: ZH.last3d },
-                        { k: "14d", l: ZH.last14d },
-                        { k: "30d", l: ZH.last30d },
-                        { k: "all", l: ZH.allTime },
-                      ].map((q) => (
-                        <button
-                          key={q.k}
-                          onClick={() => quickSetCustom(q.k as Exclude<TimePreset, "custom">)}
-                          className={customQuickClass(q.k)}
-                        >
-                          {q.l}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="flex-1">
-                        <label className="block text-[10px] text-slate-400 mb-0.5">{ZH.from}</label>
-                        <input
-                          type="datetime-local"
-                          value={customFrom}
-                          onChange={(e) => setCustomFrom(e.target.value)}
-                          className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                        />
-                      </div>
-                      <span className="text-slate-300 mt-4">-</span>
-                      <div className="flex-1">
-                        <label className="block text-[10px] text-slate-400 mb-0.5">{ZH.to}</label>
-                        <input
-                          type="datetime-local"
-                          value={customTo}
-                          onChange={(e) => setCustomTo(e.target.value)}
-                          className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:ring-1 focus:ring-primary-500 focus:border-primary-500 outline-none"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex justify-end gap-1.5">
-                      <button
-                        onClick={() => setShowCustomPanel(false)}
-                        className="px-2.5 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
-                      >
-                        {ZH.cancel}
-                      </button>
-                      <button
-                        onClick={applyCustom}
-                        disabled={!customFrom || !customTo}
-                        className="px-2.5 py-1 text-[11px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {ZH.apply}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await exportBackup();
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `token-stats-export-${new Date().toISOString().slice(0, 10)}.jsonl`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  } catch {
+                    /* silent */
+                  }
+                }}
+                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                title="导出备份"
+              >
+                <Download className="w-3 h-3" />
+                备份
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowRestore((v) => !v);
+                  setRestoreResult(null);
+                  setRestoreError(null);
+                }}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded transition-colors ${
+                  showRestore ? "bg-amber-100 text-amber-700" : "text-slate-500 hover:bg-slate-100"
+                }`}
+                title="导入备份"
+              >
+                <Upload className="w-3 h-3" />
+                恢复
+              </button>
+
+              <span className="text-[11px] text-slate-400 shrink-0">
+                {loading
+                  ? ZH.updating
+                  : `${ZH.updatedAt}: ${lastUpdatedAt ? formatTime(lastUpdatedAt.toISOString()) : "-"}`}
+              </span>
             </div>
+          </div>
 
+          {/* Filter bar: sources + vendors */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5">
             {/* Source filter tags */}
-            <div className="flex items-center gap-1 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">工具</span>
               {filters.sources.map((s) => (
                 <button
                   key={s}
@@ -949,8 +1009,11 @@ export default function App() {
               ))}
             </div>
 
+            <div className="hidden sm:block w-px h-4 bg-slate-200" />
+
             {/* Vendor filter tags */}
-            <div className="flex items-center gap-1 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">供应商</span>
               {filters.vendors.map((v) => (
                 <button
                   key={v}
@@ -958,12 +1021,23 @@ export default function App() {
                     toggleInSet(selectedVendors, setSelectedVendors, v);
                     setPage(1);
                   }}
-                  className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full transition-all border ${
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full transition-all border ${
                     selectedVendors.has(v)
-                      ? "bg-primary-600 text-white border-transparent shadow-sm"
+                      ? "text-white border-transparent shadow-sm"
                       : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
                   }`}
+                  style={
+                    selectedVendors.has(v)
+                      ? { background: getVendorColor(v) }
+                      : undefined
+                  }
                 >
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{
+                      background: selectedVendors.has(v) ? "white" : getVendorColor(v),
+                    }}
+                  />
                   {v}
                 </button>
               ))}
@@ -997,61 +1071,6 @@ export default function App() {
                 );
               })()}
             </div>
-
-            {/* Spacer + Backup/Restore */}
-            <div className="flex-1" />
-
-            <button
-              onClick={() => setShowPricing(true)}
-              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
-              title="查看计价逻辑"
-            >
-              <Receipt className="w-3 h-3" />
-              计价
-            </button>
-
-            <button
-              onClick={async () => {
-                try {
-                  const res = await exportBackup();
-                  const blob = await res.blob();
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `token-stats-export-${new Date().toISOString().slice(0, 10)}.jsonl`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                } catch {
-                  /* silent */
-                }
-              }}
-              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
-              title="导出备份"
-            >
-              <Download className="w-3 h-3" />
-              备份
-            </button>
-
-            <button
-              onClick={() => {
-                setShowRestore((v) => !v);
-                setRestoreResult(null);
-                setRestoreError(null);
-              }}
-              className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded transition-colors ${
-                showRestore ? "bg-amber-100 text-amber-700" : "text-slate-500 hover:bg-slate-100"
-              }`}
-              title="导入备份"
-            >
-              <Upload className="w-3 h-3" />
-              恢复
-            </button>
-
-            <span className="text-[11px] text-slate-400 shrink-0">
-              {loading
-                ? ZH.updating
-                : `${ZH.updatedAt}: ${lastUpdatedAt ? formatTime(lastUpdatedAt.toISOString()) : "-"}`}
-            </span>
           </div>
 
           {/* Restore panel */}
@@ -1613,7 +1632,7 @@ export default function App() {
             </details>
 
             {/* Charts Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+            <div className="flex flex-col gap-3 mb-3">
               {/* Daily Token Usage - Stacked Bar + Cache Hit Ratio Line */}
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <div className="flex items-center justify-between mb-2">
@@ -1656,9 +1675,9 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                <ResponsiveContainer width="100%" height={240}>
+                <ResponsiveContainer width="100%" height={260}>
                   <ComposedChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <CartesianGrid strokeDasharray="2 2" stroke="#f1f5f9" />
                     <XAxis
                       dataKey="date"
                       tick={{ fontSize: 10, fill: "#64748b" }}
@@ -1676,7 +1695,7 @@ export default function App() {
                       <YAxis
                         yAxisId="ratio"
                         orientation="right"
-                        tick={{ fontSize: 10, fill: "#f43f5e" }}
+                        tick={{ fontSize: 10, fill: "#f472b6" }}
                         domain={[0, 100]}
                         unit="%"
                         width={40}
@@ -1690,7 +1709,7 @@ export default function App() {
                         dataKey="cache"
                         name={ZH.cacheLabel}
                         stackId="tokens"
-                        fill="#8b5cf6"
+                        fill="#c084fc"
                       />
                     )}
                     {chartMetrics.has("input") && (
@@ -1699,7 +1718,7 @@ export default function App() {
                         dataKey="input"
                         name={ZH.inputLabel}
                         stackId="tokens"
-                        fill="#10b981"
+                        fill="#38bdf8"
                       />
                     )}
                     {chartMetrics.has("output") && (
@@ -1708,7 +1727,7 @@ export default function App() {
                         dataKey="output"
                         name={ZH.outputLabel}
                         stackId="tokens"
-                        fill="#f59e0b"
+                        fill="#fb923c"
                       />
                     )}
                     {chartMetrics.has("cacheHitRatio") && showRatioAxis && (
@@ -1717,7 +1736,7 @@ export default function App() {
                         type="monotone"
                         dataKey="cacheHitRatio"
                         name={ZH.cacheHitLabel}
-                        stroke="#f43f5e"
+                        stroke="#f472b6"
                         strokeWidth={2}
                         strokeDasharray="6 3"
                         dot={{ r: 2 }}
@@ -1729,7 +1748,7 @@ export default function App() {
                         type="monotone"
                         dataKey="cacheHitRatioNoXunfei"
                         name={ZH.cacheHitNoXunfei}
-                        stroke="#06b6d4"
+                        stroke="#22d3ee"
                         strokeWidth={1.5}
                         strokeDasharray="4 2"
                         dot={{ r: 1.5 }}
@@ -1740,78 +1759,83 @@ export default function App() {
                 <p className="text-[10px] text-slate-400 mt-1">* {ZH.xunfeiNoCacheNote}</p>
               </div>
 
-              {/* Hourly Requests */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                <h3 className="text-xs font-semibold text-slate-700 mb-2">
-                  {ZH.hourlyRequests}
-                </h3>
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart
-                    data={hourlyStats?.by_date?.map((d) => {
-                      let label: string;
-                      if (d.date.includes(" ")) {
-                        const parts = d.date.split(" ");
-                        const datePart = parts[0].substring(5);
-                        const timePart = parts[1].substring(0, 5);
-                        label = `${datePart} ${timePart}`;
-                      } else {
-                        label = formatDate(d.date);
-                      }
-                      return { date: label, calls: d.calls };
-                    }) ?? []}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 10, fill: "#64748b" }}
-                      angle={-30}
-                      textAnchor="end"
-                      height={50}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 10, fill: "#64748b" }}
-                      tickFormatter={(v: number) => formatNumber(v)}
-                      width={40}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar
-                      dataKey="calls"
-                      name={ZH.calls}
-                      fill="#3b82f6"
-                      radius={[4, 4, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {/* Hourly Requests */}
+                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                  <h3 className="text-xs font-semibold text-slate-700 mb-2">
+                    {ZH.hourlyRequests}
+                  </h3>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart
+                      data={hourlyStats?.by_date?.map((d) => {
+                        let label: string;
+                        if (d.date.includes(" ")) {
+                          const parts = d.date.split(" ");
+                          const datePart = parts[0].substring(5);
+                          const timePart = parts[1].substring(0, 5);
+                          label = `${datePart} ${timePart}`;
+                        } else {
+                          label = formatDate(d.date);
+                        }
+                        return { date: label, calls: d.calls };
+                      }) ?? []}
+                    >
+                      <CartesianGrid strokeDasharray="2 2" stroke="#f1f5f9" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 10, fill: "#64748b" }}
+                        angle={-30}
+                        textAnchor="end"
+                        height={50}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 10, fill: "#64748b" }}
+                        tickFormatter={(v: number) => formatNumber(v)}
+                        width={40}
+                      />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Bar
+                        dataKey="calls"
+                        name={ZH.calls}
+                        fill="#2dd4bf"
+                        radius={[4, 4, 0, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
 
-              {/* Vendor Breakdown */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm lg:col-span-2">
-                <h3 className="text-xs font-semibold text-slate-700 mb-2">
-                  {ZH.vendorBreakdown}
-                </h3>
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={vendorChartData} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      type="number"
-                      tick={{ fontSize: 10, fill: "#64748b" }}
-                      tickFormatter={(v: number) => formatNumber(v)}
-                    />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      tick={{ fontSize: 10, fill: "#64748b" }}
-                      width={80}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar
-                      dataKey="tokens"
-                      name={ZH.totalTokensLabel}
-                      radius={[0, 4, 4, 0]}
-                      fill="#6366f1"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                {/* Vendor Breakdown */}
+                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+                  <h3 className="text-xs font-semibold text-slate-700 mb-2">
+                    {ZH.vendorBreakdown}
+                  </h3>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={vendorChartData} layout="vertical">
+                      <CartesianGrid strokeDasharray="2 2" stroke="#f1f5f9" />
+                      <XAxis
+                        type="number"
+                        tick={{ fontSize: 10, fill: "#64748b" }}
+                        tickFormatter={(v: number) => formatNumber(v)}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        tick={{ fontSize: 10, fill: "#64748b" }}
+                        width={80}
+                      />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Bar
+                        dataKey="tokens"
+                        name={ZH.totalTokensLabel}
+                        radius={[0, 4, 4, 0]}
+                      >
+                        {vendorChartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={getVendorColor(entry.name)} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </div>
 
