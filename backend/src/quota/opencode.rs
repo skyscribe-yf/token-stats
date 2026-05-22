@@ -4,9 +4,52 @@
 //! using native Rust HTTP + HTML parsing. No Python subprocess dependency.
 
 use super::types::*;
+use chrono::{Duration, Utc};
 use reqwest::Client;
 use scraper::{Html, Selector};
 use tracing::{info, warn};
+
+/// Parse a human-readable duration string like "4 days 16 hours", "1 day",
+/// "4 hours 4 minutes", "30 minutes" into a `chrono::Duration`.
+///
+/// Returns `None` if the string cannot be parsed.
+fn parse_resets_in(resets_in: &str) -> Option<Duration> {
+    let mut total = Duration::zero();
+    let mut found = false;
+
+    // Split on whitespace and process pairs of (number, unit)
+    let tokens: Vec<&str> = resets_in.split_whitespace().collect();
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        if let Ok(value) = tokens[i].parse::<i64>() {
+            let unit = tokens[i + 1].to_lowercase();
+            if unit.starts_with("day") {
+                total = total + Duration::days(value);
+                found = true;
+                i += 2;
+            } else if unit.starts_with("hour") {
+                total = total + Duration::hours(value);
+                found = true;
+                i += 2;
+            } else if unit.starts_with("minute") {
+                total = total + Duration::minutes(value);
+                found = true;
+                i += 2;
+            } else if unit.starts_with("second") {
+                total = total + Duration::seconds(value);
+                found = true;
+                i += 2;
+            } else {
+                // Unknown unit — skip this token and continue
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    if found { Some(total) } else { None }
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -263,11 +306,14 @@ fn extract_usage_entries(text: &str) -> Vec<QuotaOpenCodeUsageEntry> {
 
                     // Read until the next usage keyword or end of string
                     let resets_in = read_until_next_keyword(reset_text);
+                    let reset_at = parse_resets_in(&resets_in)
+                        .map(|dur| (Utc::now() + dur).to_rfc3339());
 
                     entries.push(QuotaOpenCodeUsageEntry {
                         usage_type: keyword.to_string(),
                         percentage,
                         resets_in,
+                        reset_at,
                     });
                 }
             }
@@ -503,6 +549,66 @@ mod tests {
         );
     }
 
+    // ── parse_resets_in tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_resets_in_days_and_hours() {
+        let dur = parse_resets_in("4 days 16 hours").unwrap();
+        assert_eq!(dur.num_days(), 4);
+        assert_eq!(dur.num_hours(), 4 * 24 + 16);
+    }
+
+    #[test]
+    fn test_parse_resets_in_hours_and_minutes() {
+        let dur = parse_resets_in("4 hours 4 minutes").unwrap();
+        assert_eq!(dur.num_minutes(), 4 * 60 + 4);
+    }
+
+    #[test]
+    fn test_parse_resets_in_single_day() {
+        let dur = parse_resets_in("1 day").unwrap();
+        assert_eq!(dur.num_days(), 1);
+    }
+
+    #[test]
+    fn test_parse_resets_in_single_hour() {
+        let dur = parse_resets_in("1 hour").unwrap();
+        assert_eq!(dur.num_hours(), 1);
+    }
+
+    #[test]
+    fn test_parse_resets_in_minutes() {
+        let dur = parse_resets_in("30 minutes").unwrap();
+        assert_eq!(dur.num_minutes(), 30);
+    }
+
+    #[test]
+    fn test_parse_resets_in_days_and_hours_singular() {
+        let dur = parse_resets_in("21 days 1 hour").unwrap();
+        assert_eq!(dur.num_hours(), 21 * 24 + 1);
+    }
+
+    #[test]
+    fn test_parse_resets_in_empty() {
+        assert!(parse_resets_in("").is_none());
+    }
+
+    #[test]
+    fn test_parse_resets_in_garbage() {
+        assert!(parse_resets_in("some random text").is_none());
+    }
+
+    #[test]
+    fn test_extract_usage_entries_has_reset_at() {
+        let text = "Monthly Usage95%Resets in5 days 3 hours";
+        let entries = extract_usage_entries(text);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].reset_at.is_some());
+        // reset_at should be a valid RFC3339 timestamp
+        let parsed = chrono::DateTime::parse_from_rfc3339(entries[0].reset_at.as_ref().unwrap());
+        assert!(parsed.is_ok());
+    }
+
     // ── Async integration tests ──────────────────────────────────────────────
 
     /// Mutex to prevent concurrent env var manipulation across async tests.
@@ -551,5 +657,11 @@ mod tests {
 
         reset_env_var("OPENCODE_GO_WORKSPACE_ID", old_ws);
         reset_env_var("OPENCODE_GO_AUTH_COOKIE", old_cookie);
+    }
+
+    #[test]
+    fn test_parse_resets_in_includes_seconds() {
+        let dur = parse_resets_in("5 minutes 30 seconds").unwrap();
+        assert_eq!(dur.num_seconds(), 5 * 60 + 30);
     }
 }

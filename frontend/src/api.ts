@@ -190,6 +190,7 @@ export interface QuotaOpenCodeUsageEntry {
   usage_type: string;
   percentage: number;
   resets_in: string;
+  reset_at: string | null;
 }
 
 export interface QuotaOpenCode {
@@ -406,4 +407,27 @@ export async function saveAdvancedModels(models: string[]): Promise<{ success: b
   });
   if (!res.ok) throw new Error("Failed to save advanced models");
   return res.json();
+}
+
+// ─── Subscription Settings ─────────────────────────────────────────────────
+
+export interface SubscriptionSettings {
+  kimi_monthly_start_day: number | null;
+}
+
+export async function fetchSubscriptionSettings(): Promise<SubscriptionSettings> {
+  const res = await fetch(`${API_BASE}/api/settings/subscriptions`);
+  if (!res.ok) throw new Error("Failed to fetch subscription settings");
+  return res.json();
+}
+
+export async function saveSubscriptionSettings(settings: SubscriptionSettings): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/settings/subscriptions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error("Failed to save subscription settings");
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || "Failed to save subscription settings");
 }

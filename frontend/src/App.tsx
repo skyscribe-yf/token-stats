@@ -27,6 +27,7 @@ import {
   Upload,
   Receipt,
   Settings,
+  Calendar,
 } from "lucide-react";
 import {
   fetchStats,
@@ -39,6 +40,8 @@ import {
   fetchPricing,
   fetchAdvancedModels,
   saveAdvancedModels,
+  fetchSubscriptionSettings,
+  saveSubscriptionSettings,
   type PricingConfig,
   exportBackup,
   restoreBackup,
@@ -49,6 +52,8 @@ import {
   type XunfeiMultiStatus,
   type AinaibaCreditResponse,
   type RestoreResponse,
+  type SubscriptionSettings,
+  type OpenCodeQuotaStatus,
 } from "./api";
 import {
   formatNumber,
@@ -65,6 +70,8 @@ import {
   getVendorColor,
   formatResetTime,
   formatAvgCost,
+  computeNextBillingDate,
+  isWithin24Hours,
 } from "./lib/utils";
 import {
   buildPivotTree,
@@ -277,6 +284,15 @@ export default function App() {
   const customBtnRef = useRef<HTMLButtonElement>(null);
   const filtersInitializedRef = useRef(false);
 
+  // ─── Alert Item Type ──────────────────────────────────────────────────────
+  interface AlertItem {
+    id: string;
+    provider: string;
+    type: "quota_low" | "expiring_soon";
+    message: string;
+    detail: string;
+  }
+
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
   const [quota, setQuota] = useState<QuotaResponse | null>(null);
@@ -285,6 +301,13 @@ export default function App() {
   const [xunfeiLoading, setXunfeiLoading] = useState(true);
   const [ainaibaCredit, setAinaibaCredit] = useState<AinaibaCreditResponse | null>(null);
   const [ainaibaCreditLoading, setAinaibaCreditLoading] = useState(true);
+
+  // Subscription settings & alerts
+  const [subscriptionSettings, setSubscriptionSettings] = useState<SubscriptionSettings | null>(null);
+  const [showSubscriptionSettings, setShowSubscriptionSettings] = useState(false);
+  const [alertItems, setAlertItems] = useState<AlertItem[]>([]);
+  const [showAlertModal, setShowAlertModal] = useState(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
     models: [],
@@ -615,6 +638,149 @@ export default function App() {
     fetchAdvancedModels().then(setAdvancedModels).catch(() => {});
   }, []);
 
+  // Load subscription settings once on mount
+  useEffect(() => {
+    fetchSubscriptionSettings()
+      .then(setSubscriptionSettings)
+      .catch(() => {});
+  }, []);
+
+  // ─── Subscription Alert Checking ──────────────────────────────────────────
+  useEffect(() => {
+    if (!quota && !xunfei && !ainaibaCredit) return;
+
+    const alerts: AlertItem[] = [];
+
+    // Kimi quota low
+    if (quota?.kimi?.available && quota.kimi.data) {
+      const kd = quota.kimi.data;
+      const ratio = kd.weekly_remaining / Math.max(kd.weekly_limit, 1);
+      if (ratio <= 0.2) {
+        alerts.push({
+          id: "kimi_quota_low",
+          provider: "Kimi",
+          type: "quota_low",
+          message: "Kimi 周限额余量不足",
+          detail: `周限额已用 ${((1 - ratio) * 100).toFixed(0)}%，建议切换至其他模型以节省额度`,
+        });
+      }
+    }
+
+    // Kimi expiration
+    if (subscriptionSettings?.kimi_monthly_start_day) {
+      const nextBilling = computeNextBillingDate(subscriptionSettings.kimi_monthly_start_day);
+      if (isWithin24Hours(nextBilling.toISOString())) {
+        alerts.push({
+          id: "kimi_expiring",
+          provider: "Kimi",
+          type: "expiring_soon",
+          message: "Kimi 订阅即将到期",
+          detail: `下次计费日: ${nextBilling.toLocaleDateString()}，请注意续费`,
+        });
+      }
+    }
+
+    // OpenCode-go (merged quota_low + expiring checks)
+    const checkOpenCode = (status: OpenCodeQuotaStatus | null | undefined, label: string) => {
+      if (!status?.available || !status.data) return;
+      const suffix = label === "ex" ? " (EX)" : "";
+      for (const entry of status.data.entries) {
+        // Quota low check
+        if (entry.percentage >= 80) {
+          const typeLabel = entry.usage_type === "Rolling" ? "滚动" : entry.usage_type === "Weekly" ? "周" : entry.usage_type === "Monthly" ? "月" : entry.usage_type;
+          alerts.push({
+            id: `opencode_${label}_${entry.usage_type}_low`,
+            provider: `OpenCode-go${suffix}`,
+            type: "quota_low",
+            message: `OpenCode-go${suffix} ${typeLabel}限额已用 ${entry.percentage}%`,
+            detail: `重置于 ${entry.resets_in}`,
+          });
+        }
+        // Expiration check (only for Monthly entries)
+        if (entry.usage_type === "Monthly" && entry.reset_at && isWithin24Hours(entry.reset_at)) {
+          alerts.push({
+            id: `opencode_${label}_expiring`,
+            provider: `OpenCode-go${suffix}`,
+            type: "expiring_soon",
+            message: `OpenCode-go${suffix} 月度配额即将重置`,
+            detail: `重置于 ${new Date(entry.reset_at).toLocaleString()}`,
+          });
+        }
+      }
+    };
+    checkOpenCode(quota?.opencode_go, "primary");
+    checkOpenCode(quota?.opencode_go_ex, "ex");
+
+    // Xunfei (merged quota_low + expiring checks)
+    if (xunfei?.accounts) {
+      for (const acc of xunfei.accounts) {
+        const suffix = acc.label === "ex" ? " (EX)" : "";
+        if (acc.available && acc.data) {
+          // Quota low check
+          const ratio = acc.data.usage.package_left / Math.max(acc.data.usage.package_limit, 1);
+          if (ratio <= 0.2) {
+            alerts.push({
+              id: `xunfei_${acc.label}_quota_low`,
+              provider: `讯飞${suffix}`,
+              type: "quota_low",
+              message: `讯飞编程套餐${suffix} 月度余量不足`,
+              detail: `月度已用 ${((1 - ratio) * 100).toFixed(0)}%，建议切换至其他模型`,
+            });
+          }
+          // Expiration check
+          if (acc.data.expires_at) {
+            const dateStr = acc.data.expires_at.includes("T")
+              ? acc.data.expires_at
+              : acc.data.expires_at.replace(" ", "T");
+            if (isWithin24Hours(dateStr)) {
+              alerts.push({
+                id: `xunfei_${acc.label}_expiring`,
+                provider: `讯飞${suffix}`,
+                type: "expiring_soon",
+                message: `讯飞编程套餐${suffix} 即将到期`,
+                detail: `到期日: ${acc.data.expires_at}`,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Ainaiba quota low
+    if (ainaibaCredit?.available && ainaibaCredit.data) {
+      const abRatio = ainaibaCredit.data.balance / Math.max(ainaibaCredit.data.credit_total, 1);
+      if (abRatio <= 0.2) {
+        alerts.push({
+          id: "ainaiba_quota_low",
+          provider: "Ainaiba",
+          type: "quota_low",
+          message: "Ainaiba 额度余量不足",
+          detail: `剩余 ${(abRatio * 100).toFixed(0)}%，建议切换至其他模型`,
+        });
+      }
+    }
+
+    // Ainaiba expiration
+    if (ainaibaCredit?.available && ainaibaCredit.data?.expires_at) {
+      if (isWithin24Hours(ainaibaCredit.data.expires_at)) {
+        alerts.push({
+          id: "ainaiba_expiring",
+          provider: "Ainaiba",
+          type: "expiring_soon",
+          message: "Ainaiba 额度即将到期",
+          detail: `到期日: ${ainaibaCredit.data.expires_at.slice(0, 10)}`,
+        });
+      }
+    }
+
+    // Filter out dismissed alerts
+    const newAlerts = alerts.filter((a) => !dismissedAlerts.has(a.id));
+    setAlertItems(newAlerts);
+    if (newAlerts.length > 0) {
+      setShowAlertModal(true);
+    }
+  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
+
   // Fetch hourly stats whenever main filters change
   useEffect(() => {
     const loadHourly = async () => {
@@ -931,6 +1097,15 @@ export default function App() {
               </button>
 
               <button
+                onClick={() => setShowSubscriptionSettings(!showSubscriptionSettings)}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded transition-colors ${showSubscriptionSettings ? "bg-blue-100 text-blue-700" : "text-slate-500 hover:bg-slate-100"}`}
+                title="订阅设置"
+              >
+                <Calendar className="w-3 h-3" />
+                订阅
+              </button>
+
+              <button
                 onClick={async () => {
                   try {
                     const res = await exportBackup();
@@ -974,6 +1149,44 @@ export default function App() {
               </span>
             </div>
           </div>
+
+          {/* Subscription Settings Panel */}
+          {showSubscriptionSettings && (
+            <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-700">订阅设置</span>
+                <button onClick={() => setShowSubscriptionSettings(false)} className="p-0.5 rounded hover:bg-blue-100 text-slate-400">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <label className="text-slate-600">Kimi 月起始日:</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={28}
+                  value={subscriptionSettings?.kimi_monthly_start_day ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value ? parseInt(e.target.value) : null;
+                    setSubscriptionSettings(prev => ({ ...prev!, kimi_monthly_start_day: v }));
+                  }}
+                  className="w-16 px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-primary-500 outline-none"
+                  placeholder="1-28"
+                />
+                <span className="text-[10px] text-slate-400">每月几号开始计费（1-28）</span>
+                <button
+                  onClick={async () => {
+                    try {
+                      await saveSubscriptionSettings(subscriptionSettings!);
+                    } catch { /* ignore */ }
+                  }}
+                  className="px-2 py-1 text-[10px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Filter bar: sources + vendors */}
           <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5">
@@ -1148,7 +1361,7 @@ export default function App() {
                       <p className="font-semibold text-slate-700 mb-1">特殊计费规则</p>
                       <ul className="list-disc list-inside space-y-0.5">
                         <li>讯飞 (xunfei): 按调用次数计费，每次 ¥{pricingConfig.special.xunfei_per_call.toFixed(6)}（199元 / 90000次）</li>
-                        <li>Kimi CLI: 按 Token 估算，每 Token ¥{pricingConfig.special.kimi_per_token.toExponential(3)}（199元 / 15亿 Token）</li>
+                        <li>Kimi CLI: 按 Token 估算，每 Token ¥{pricingConfig.special.kimi_per_token.toExponential(3)}（199元 / 28亿 Token）</li>
                         <li>OpenCode: 原始 cost ÷ {pricingConfig.special.opencode_divisor} 后再按汇率换算（10美金可用60美金额度）</li>
                         <li>pi / ccswitch: 原始 USD cost 直接按汇率换算为 CNY</li>
                         <li>codex / claude-code: 无原始 cost，按下方模型价格表计算后换算</li>
@@ -1191,6 +1404,55 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {/* Subscription Alert Modal */}
+      {showAlertModal && alertItems.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-bold text-slate-800">⚠️ 订阅提醒</h2>
+              <button onClick={() => {
+                setShowAlertModal(false);
+                setDismissedAlerts(prev => {
+                  const next = new Set(prev);
+                  alertItems.forEach(a => next.add(a.id));
+                  return next;
+                });
+              }} className="p-0.5 rounded hover:bg-slate-100 text-slate-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              {alertItems.map(item => (
+                <div key={item.id} className={"rounded-lg border p-3 " + (item.type === "quota_low" ? "border-amber-200 bg-amber-50" : "border-rose-200 bg-rose-50")}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className={"text-[11px] font-semibold " + (item.type === "quota_low" ? "text-amber-700" : "text-rose-700")}>
+                      {item.provider}
+                    </span>
+                    <span className={"px-1.5 py-0 rounded-full text-[9px] font-medium " + (item.type === "quota_low" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700")}>
+                      {item.type === "quota_low" ? "余量不足" : "即将到期"}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-700">{item.message}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">{item.detail}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => {
+                setShowAlertModal(false);
+                setDismissedAlerts(prev => {
+                  const next = new Set(prev);
+                  alertItems.forEach(a => next.add(a.id));
+                  return next;
+                });
+              }} className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors">
+                知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         {error && (

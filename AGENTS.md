@@ -268,7 +268,7 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 2. **Base path** — Frontend runs at `/token-stats/`, not root. API calls use `/token-stats/api/*`. Vite `base: "/token-stats/"` handles this.
 3. **nginx strips prefix** — `location /token-stats/` proxies to backend at `/` (trailing slash matters).
 4. **SQLite read-only** — ccswitch DB opened with `SQLITE_OPEN_READ_ONLY`. Never write to it.
-5. **Kimi CLI cost is estimated** — Kimi CLI doesn't report cost natively. Backend estimates it as `total_tokens * (199元 / 1.5B tokens)` based on the subscription price.
+5. **Kimi CLI cost is estimated** — Kimi CLI doesn't report cost natively. Backend estimates it as `total_tokens * (199元 / 2.8B tokens)` based on the subscription price.
 
 6. **Pricing configuration** — `backend/pricing.toml` controls model prices, USD→CNY exchange rate, and special billing rules. Run `./scripts/reload-pricing.sh` to apply changes without restart.
 7. **Zero-downtime deployment** — `deploy.sh` uses a blue-green pattern: it builds while the old instance is still running, starts a new instance on the alternate port (3000 ↔ 3001), health-checks it, switches nginx upstream, then gracefully drains and stops the old instance. Legacy `token-stats.service` is automatically migrated to `token-stats@.service` on first deploy.

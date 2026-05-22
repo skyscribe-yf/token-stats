@@ -216,7 +216,32 @@ pub async fn update_advanced_models(Json(body): Json<Vec<String>>) -> impl IntoR
         Ok(()) => Json(serde_json::json!({ "success": true })),
         Err(e) => {
             tracing::warn!("Failed to save advanced models: {}", e);
-            Json(serde_json::json!({ "success": false, "error": e }))
+            Json(serde_json::json!({ "success": false, "error": "Failed to save settings" }))
+        }
+    }
+}
+
+pub async fn get_subscription_settings() -> impl IntoResponse {
+    Json(settings::load_subscription_settings())
+}
+
+pub async fn update_subscription_settings(
+    Json(body): Json<settings::SubscriptionSettings>,
+) -> impl IntoResponse {
+    // Validate kimi_monthly_start_day: must be None or 1..=28
+    if let Some(day) = body.kimi_monthly_start_day {
+        if !(1..=28).contains(&day) {
+            return Json(serde_json::json!({
+                "success": false,
+                "error": "kimi_monthly_start_day must be between 1 and 28"
+            }));
+        }
+    }
+    match settings::save_subscription_settings(&body) {
+        Ok(()) => Json(serde_json::json!({ "success": true })),
+        Err(e) => {
+            tracing::warn!("Failed to save subscription settings: {}", e);
+            Json(serde_json::json!({ "success": false, "error": "Failed to save settings" }))
         }
     }
 }

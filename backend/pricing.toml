@@ -8,8 +8,8 @@ rate_date = "2026-05-20"
 # 讯飞订阅：199 元 / 90000 次调用
 xunfei_per_call = 0.002211111111
 
-# Kimi CLI：199 元 / 15 亿 Token（1_500_000_000）
-kimi_per_token = 0.000000132666667
+# Kimi CLI：199 元 / 28 亿 Token（2_800_000_000）
+kimi_per_token = 0.000000071071429
 
 # OpenCode 折扣：官方 10 美金可用 60 美金额度，实际成本 = 原始 cost / 6
 opencode_divisor = 6.0
