@@ -26,6 +26,7 @@ export function formatCost(cost: number, source?: string): string {
 export function formatAvgCost(costCny: number, totalTokens: number): string {
   if (costCny == null || Number.isNaN(costCny)) return "-";
   if (totalTokens == null || totalTokens <= 0) return "N/A";
+  if (costCny === 0) return "¥0.00/百万";
   const avgCost = costCny / (totalTokens / 1_000_000);
   if (avgCost < 0.01) return "<¥0.01/百万";
   return "¥" + avgCost.toFixed(2) + "/百万";

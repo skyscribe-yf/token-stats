@@ -362,11 +362,11 @@ export default function App() {
     return buildCsvFilterParam(selectedVendors, filters.vendors);
   }, [selectedVendors, filters.vendors]);
 
-  // Pivot table model filter — raw model names from by_model
+  // Pivot table model filter — uses unfiltered model list from /api/filters
+  // so dropdown always shows all models regardless of current filter state
   const pivotModelOptions = useMemo(() => {
-    if (!stats?.by_model) return [];
-    return [...new Set(stats.by_model.map((m) => m.model))].sort();
-  }, [stats]);
+    return [...filters.models].sort();
+  }, [filters.models]);
 
   const modelFilter = useMemo(() => {
     if (selectedPivotModels.size === 0) return undefined;
