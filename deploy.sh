@@ -159,6 +159,13 @@ else
     echo "⚠️  OpenCode-go EX credentials not set"
 fi
 
+if [ -n "${XAI_API_KEY:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "XAI_API_KEY" "$XAI_API_KEY"
+    echo "✅ Injected XAI_API_KEY"
+else
+    echo "⚠️  XAI_API_KEY not set"
+fi
+
 sudo systemctl daemon-reload
 
 # ── 6. Start new instance ─────────────────────────────────────────────
