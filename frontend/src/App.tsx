@@ -17,6 +17,8 @@ import {
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   ChevronDown,
   ChevronRight as ChevronRightIcon,
   Filter,
@@ -128,7 +130,7 @@ const ZH = {
 // ─── Model merge configuration ────────────────────────────────────────────────
 // Models listed under `originals` are displayed as a single merged model.
 const MODEL_MERGE_GROUPS: { display: string; originals: string[] }[] = [
-  { display: "kimi-k2.6", originals: ["kimi-k2.6:high", "kimi-for-coding"] },
+  { display: "kimi-k2.6", originals: ["kimi-k2.6", "kimi-k2.6:high", "kimi-for-coding"] },
 ];
 
 const originalToDisplayModel = new Map<string, string>();
@@ -1925,9 +1927,27 @@ export default function App() {
                     </p>
                     <div className="flex items-center gap-1">
                       <button
+                        onClick={() => setPage(1)}
+                        disabled={requests.page <= 1}
+                        className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="第一页"
+                      >
+                        <ChevronsLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setPage((p) => Math.max(1, p - 10))}
+                        disabled={requests.page <= 1}
+                        className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="前10页"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span className="text-[9px] -ml-0.5">10</span>
+                      </button>
+                      <button
                         onClick={() => setPage((p) => Math.max(1, p - 1))}
                         disabled={requests.page <= 1}
                         className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="上一页"
                       >
                         <ChevronLeft className="w-3.5 h-3.5" />
                       </button>
@@ -1950,8 +1970,26 @@ export default function App() {
                         onClick={() => setPage((p) => Math.min(requests.total_pages, p + 1))}
                         disabled={requests.page >= requests.total_pages}
                         className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="下一页"
                       >
                         <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setPage((p) => Math.min(requests.total_pages, p + 10))}
+                        disabled={requests.page >= requests.total_pages}
+                        className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="后10页"
+                      >
+                        <span className="text-[9px] -mr-0.5">10</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setPage(requests.total_pages)}
+                        disabled={requests.page >= requests.total_pages}
+                        className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="最后一页"
+                      >
+                        <ChevronsRight className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
