@@ -323,6 +323,7 @@ export default function App() {
 
   // Pivot table model filter (multi-select dropdown)
   const [selectedPivotModels, setSelectedPivotModels] = useState<Set<string>>(new Set());
+  const [pendingPivotModels, setPendingPivotModels] = useState<Set<string>>(new Set());
   const [showModelFilter, setShowModelFilter] = useState(false);
 
   // Chart metric filter
@@ -457,6 +458,7 @@ export default function App() {
     tzOffset,
     hasEmptyRequiredSelection,
     resolution,
+    modelFilter,
   ]);
 
   // Filtered models derived from stats (respects source/vendor filters, with merging)
@@ -1708,7 +1710,10 @@ export default function App() {
                 {/* Model Filter Dropdown */}
                 <div className="relative model-filter-dropdown">
                   <button
-                    onClick={() => setShowModelFilter(!showModelFilter)}
+                    onClick={() => {
+                      setPendingPivotModels(new Set(selectedPivotModels));
+                      setShowModelFilter(!showModelFilter);
+                    }}
                     className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md border transition-colors ${
                       selectedPivotModels.size > 0
                         ? "bg-blue-50 border-blue-300 text-blue-700"
@@ -1725,23 +1730,23 @@ export default function App() {
                     <ChevronDown className="w-3 h-3" />
                   </button>
                   {showModelFilter && (
-                    <div className="absolute right-0 top-full mt-1 w-56 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg z-50">
-                      <div className="sticky top-0 bg-white border-b border-slate-100 px-2 py-1.5 flex gap-2">
+                    <div className="absolute right-0 top-full mt-1 w-56 max-h-80 bg-white border border-slate-200 rounded-lg shadow-lg z-50 flex flex-col">
+                      <div className="shrink-0 bg-white border-b border-slate-100 px-2 py-1.5 flex gap-2">
                         <button
-                          onClick={() => setSelectedPivotModels(new Set(pivotModelOptions))}
+                          onClick={() => setPendingPivotModels(new Set(pivotModelOptions))}
                           className="text-[10px] text-blue-600 hover:text-blue-800"
                         >
                           {ZH.selectAll}
                         </button>
                         <span className="text-slate-300">|</span>
                         <button
-                          onClick={() => setSelectedPivotModels(new Set())}
+                          onClick={() => setPendingPivotModels(new Set())}
                           className="text-[10px] text-slate-500 hover:text-slate-700"
                         >
                           {ZH.clearAll}
                         </button>
                       </div>
-                      <div className="p-1">
+                      <div className="flex-1 overflow-y-auto p-1">
                         {pivotModelOptions.map((model) => (
                           <label
                             key={model}
@@ -1749,18 +1754,35 @@ export default function App() {
                           >
                             <input
                               type="checkbox"
-                              checked={selectedPivotModels.has(model)}
+                              checked={pendingPivotModels.has(model)}
                               onChange={() => {
-                                const next = new Set(selectedPivotModels);
+                                const next = new Set(pendingPivotModels);
                                 if (next.has(model)) next.delete(model);
                                 else next.add(model);
-                                setSelectedPivotModels(next);
+                                setPendingPivotModels(next);
                               }}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                             />
                             <span className="truncate" title={model}>{model}</span>
                           </label>
                         ))}
+                      </div>
+                      <div className="shrink-0 bg-white border-t border-slate-100 px-2 py-1.5 flex justify-end gap-2">
+                        <button
+                          onClick={() => setShowModelFilter(false)}
+                          className="px-2 py-1 text-[10px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                        >
+                          {ZH.cancel}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPivotModels(pendingPivotModels);
+                            setShowModelFilter(false);
+                          }}
+                          className="px-2 py-1 text-[10px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+                        >
+                          {ZH.apply}
+                        </button>
                       </div>
                     </div>
                   )}

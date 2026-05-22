@@ -84,16 +84,15 @@ pub async fn get_stats(
         .and_then(Resolution::from_str)
         .unwrap_or_default();
 
-    let response = aggregator::aggregate_records(
-        &records,
-        from.as_ref(),
-        to.as_ref(),
+    let filters = aggregator::FilterCriteria {
+        from: from.as_ref(),
+        to: to.as_ref(),
         source,
         provider,
         model,
-        tz.as_ref(),
-        resolution,
-    );
+        tz: tz.as_ref(),
+    };
+    let response = aggregator::aggregate_records(&records, &filters, resolution);
     Json(response)
 }
 
@@ -109,15 +108,15 @@ pub async fn get_requests(
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
 
-    let filtered = aggregator::filter_records(
-        &records,
-        from.as_ref(),
-        to.as_ref(),
+    let filters = aggregator::FilterCriteria {
+        from: from.as_ref(),
+        to: to.as_ref(),
+        source,
         provider,
         model,
-        source,
-        tz.as_ref(),
-    );
+        tz: tz.as_ref(),
+    };
+    let filtered = aggregator::filter_records(&records, &filters);
     let (page, limit) = validate_pagination(query.page, query.limit);
     let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref());
 
