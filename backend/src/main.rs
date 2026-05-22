@@ -12,6 +12,7 @@ mod models;
 mod pricing;
 mod quota;
 mod routes;
+mod settings;
 mod sources;
 mod time;
 mod xunfei;
