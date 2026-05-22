@@ -235,12 +235,24 @@ export interface AinaibaCreditData {
   credit_total: number;
   credit_used: number;
   expires_at: string;
+  total_requests: number;
   daily_used: number;
   daily_requests: number;
+  daily_input_tokens: number;
+  daily_output_tokens: number;
+  daily_reasoning_tokens: number;
+  daily_cached_tokens: number;
   monthly_used: number;
   monthly_requests: number;
+  monthly_input_tokens: number;
+  monthly_output_tokens: number;
+  monthly_reasoning_tokens: number;
+  monthly_cached_tokens: number;
   hard_limit: number;
   daily_limit: number;
+  rpm: number;
+  rph: number;
+  rpd: number;
 }
 
 export interface AinaibaCreditResponse {

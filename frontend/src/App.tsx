@@ -1412,10 +1412,22 @@ export default function App() {
                         <span className="font-medium text-slate-600">{ainaibaCredit.data.alias || ainaibaCredit.data.name}</span>
                         <span className="text-slate-400">#{ainaibaCredit.data.user_id}</span>
                       </div>
-                      <div className="space-y-1">
+
+                      {/* Total requests */}
+                      <div className="flex items-center gap-3 mb-1.5">
+                        <div className="text-[10px] text-slate-500">
+                          <span className="text-slate-700 font-medium">{formatCalls(ainaibaCredit.data.total_requests)}</span> 总请求
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          <span className="text-slate-700 font-medium">{ainaibaCredit.data.credit_used.toFixed(2)}</span> / {ainaibaCredit.data.credit_total.toFixed(2)} 额度
+                        </div>
+                      </div>
+
+                      {/* Total credit bar */}
+                      <div className="space-y-1 mb-1.5">
                         <div className="flex justify-between text-[10px] text-slate-500">
-                          <span>已用 {((ainaibaCredit.data.credit_used / Math.max(ainaibaCredit.data.credit_total, 1)) * 100).toFixed(1)}%</span>
-                          <span>剩余 {ainaibaCredit.data.balance.toFixed(2)} / {ainaibaCredit.data.credit_total.toFixed(2)}</span>
+                          <span>总额度已用 {((ainaibaCredit.data.credit_used / Math.max(ainaibaCredit.data.credit_total, 1)) * 100).toFixed(1)}%</span>
+                          <span>剩余 {ainaibaCredit.data.balance.toFixed(2)}</span>
                         </div>
                         <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                           <div className={"h-full rounded-full transition-all " + barColor(ainaibaCredit.data.credit_used, ainaibaCredit.data.credit_total)}
@@ -1423,10 +1435,60 @@ export default function App() {
                           />
                         </div>
                       </div>
-                      <div className="mt-1 pt-1 border-t border-slate-100 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+
+                      {/* Daily limit bar */}
+                      <div className="space-y-1 mb-1.5">
+                        <div className="flex justify-between text-[10px] text-slate-500">
+                          <span>日限已用 {((ainaibaCredit.data.daily_used / Math.max(ainaibaCredit.data.daily_limit, 1)) * 100).toFixed(1)}%</span>
+                          <span>{ainaibaCredit.data.daily_used.toFixed(2)} / {ainaibaCredit.data.daily_limit.toLocaleString()}</span>
+                        </div>
+                        <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                          <div className={"h-full rounded-full transition-all " + barColor(ainaibaCredit.data.daily_used, ainaibaCredit.data.daily_limit)}
+                            style={{ width: (Math.min((ainaibaCredit.data.daily_used / Math.max(ainaibaCredit.data.daily_limit, 1)) * 100, 100)) + "%" }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Expandable details */}
+                      <details className="group">
+                        <summary className="cursor-pointer select-none text-[10px] text-slate-500 hover:text-slate-700 transition-colors flex items-center gap-1 mb-1 list-none">
+                          <svg className="w-3 h-3 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                          详细用量
+                        </summary>
+                        {/* Today stats */}
+                        <div className="mb-2 mt-1">
+                          <div className="text-[10px] font-semibold text-slate-600 mb-0.5">今日</div>
+                          <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+                            <div className="text-slate-500">请求 <span className="text-slate-700">{formatCalls(ainaibaCredit.data.daily_requests)}</span></div>
+                            <div className="text-slate-500">输入 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.daily_input_tokens)}</span></div>
+                            <div className="text-slate-500">输出 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.daily_output_tokens)}</span></div>
+                            <div className="text-slate-500">推理 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.daily_reasoning_tokens)}</span></div>
+                            <div className="text-slate-500">缓存 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.daily_cached_tokens)}</span></div>
+                            <div className="text-slate-500">消耗 <span className="text-slate-700">{ainaibaCredit.data.daily_used.toFixed(2)}</span></div>
+                          </div>
+                        </div>
+
+                        {/* Monthly stats */}
+                        <div className="mb-1">
+                          <div className="text-[10px] font-semibold text-slate-600 mb-0.5">本月</div>
+                          <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+                            <div className="text-slate-500">请求 <span className="text-slate-700">{formatCalls(ainaibaCredit.data.monthly_requests)}</span></div>
+                            <div className="text-slate-500">输入 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.monthly_input_tokens)}</span></div>
+                            <div className="text-slate-500">输出 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.monthly_output_tokens)}</span></div>
+                            <div className="text-slate-500">推理 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.monthly_reasoning_tokens)}</span></div>
+                            <div className="text-slate-500">缓存 <span className="text-slate-700">{formatNumber(ainaibaCredit.data.monthly_cached_tokens)}</span></div>
+                            <div className="text-slate-500">消耗 <span className="text-slate-700">{ainaibaCredit.data.monthly_used.toFixed(2)}</span></div>
+                          </div>
+                        </div>
+                      </details>
+
+                      {/* Limits & expiry */}
+                      <div className="pt-1.5 border-t border-slate-100 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
                         <span>到期 {ainaibaCredit.data.expires_at ? ainaibaCredit.data.expires_at.slice(0, 10) : "-"}</span>
-                        <span>日限 {ainaibaCredit.data.daily_limit.toLocaleString()}</span>
                         <span>硬限 {ainaibaCredit.data.hard_limit.toLocaleString()}</span>
+                        {ainaibaCredit.data.rpm > 0 && (
+                          <span>限流 {ainaibaCredit.data.rpm}/{ainaibaCredit.data.rph}/{ainaibaCredit.data.rpd}</span>
+                        )}
                       </div>
                     </>
                   ) : (
