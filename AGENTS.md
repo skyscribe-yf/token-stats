@@ -230,6 +230,7 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `VENDOR_MERGE_CONFIG` | auto-detect | Override vendor merge config path (see below) |
 | `OPENCODE_GO_WORKSPACE_ID` | unset | OpenCode-go workspace ID (required for quota display) |
 | `OPENCODE_GO_AUTH_COOKIE` | unset | OpenCode-go `auth` cookie value (required for quota display) |
+| `XAI_API_KEY` | unset | Ainaiba/XAI API key for credit balance display (Bearer token passed to `api-xai.ainaibahub.com`) |
 
 ---
 

@@ -49,10 +49,13 @@ pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
         }
     };
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default();
 
-    let info_fut = fetch_dashboard_info(&client, &api_key);
-    let live_fut = fetch_dashboard_live(&client, &api_key);
+    let info_fut = fetch_dashboard(&client, &api_key, "/dashboard/info");
+    let live_fut = fetch_dashboard(&client, &api_key, "/dashboard/live");
 
     let (info_json, live_json) = tokio::join!(info_fut, live_fut);
 
@@ -67,10 +70,13 @@ pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
         }
     };
 
+    // Live dashboard data is supplemental — daily/monthly usage enriches the card.
+    // If it fails we still return credit balance from /dashboard/info,
+    // just with daily_used=0 and monthly_used=credit_used as fallback.
     let live_json = match live_json {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Ainaiba live API failed: {}", e);
+            tracing::warn!("Ainaiba live API failed (optional, continuing): {}", e);
             serde_json::Value::Null
         }
     };
@@ -92,33 +98,13 @@ pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
     }
 }
 
-async fn fetch_dashboard_info(
+async fn fetch_dashboard(
     client: &reqwest::Client,
     api_key: &str,
+    path: &str,
 ) -> Result<serde_json::Value, String> {
-    let url = format!("{}/dashboard/info", AINAIBA_API_BASE);
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
-    }
-
-    response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("Parse error: {}", e))
-}
-
-async fn fetch_dashboard_live(
-    client: &reqwest::Client,
-    api_key: &str,
-) -> Result<serde_json::Value, String> {
-    let url = format!("{}/dashboard/live", AINAIBA_API_BASE);
+    let url = format!("{}{}", AINAIBA_API_BASE, path);
+    // Produces e.g. "https://api-xai.ainaibahub.com/dashboard/live".
     let response = client
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
