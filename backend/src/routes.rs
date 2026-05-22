@@ -26,6 +26,7 @@ pub struct StatsQuery {
     pub to: Option<String>,
     pub source: Option<String>,
     pub provider: Option<String>,
+    pub model: Option<String>,
     /// Timezone offset in minutes from UTC (e.g. 480 for UTC+8, -300 for UTC-5)
     pub tz_offset: Option<i32>,
     /// Aggregation resolution: "day" (default), "4h", "1h"
@@ -75,6 +76,7 @@ pub async fn get_stats(
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let provider = query.provider.as_deref().filter(|s| !s.is_empty());
+    let model = query.model.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
     let resolution = query
         .resolution
@@ -82,15 +84,15 @@ pub async fn get_stats(
         .and_then(Resolution::from_str)
         .unwrap_or_default();
 
-    let response = aggregator::aggregate_records(
-        &records,
-        from.as_ref(),
-        to.as_ref(),
+    let filters = aggregator::FilterCriteria {
+        from: from.as_ref(),
+        to: to.as_ref(),
         source,
         provider,
-        tz.as_ref(),
-        resolution,
-    );
+        model,
+        tz: tz.as_ref(),
+    };
+    let response = aggregator::aggregate_records(&records, &filters, resolution);
     Json(response)
 }
 
@@ -106,15 +108,15 @@ pub async fn get_requests(
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
 
-    let filtered = aggregator::filter_records(
-        &records,
-        from.as_ref(),
-        to.as_ref(),
+    let filters = aggregator::FilterCriteria {
+        from: from.as_ref(),
+        to: to.as_ref(),
+        source,
         provider,
         model,
-        source,
-        tz.as_ref(),
-    );
+        tz: tz.as_ref(),
+    };
+    let filtered = aggregator::filter_records(&records, &filters);
     let (page, limit) = validate_pagination(query.page, query.limit);
     let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref());
 

@@ -57,27 +57,35 @@ fn parse_csv_filter(s: Option<&str>) -> Vec<&str> {
         .unwrap_or_default()
 }
 
+/// Shared filtering criteria for aggregation and record listing.
+pub struct FilterCriteria<'a> {
+    pub from: Option<&'a TimeBound>,
+    pub to: Option<&'a TimeBound>,
+    pub source: Option<&'a str>,
+    pub provider: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub tz: Option<&'a FixedOffset>,
+}
+
 pub fn aggregate_records(
     records: &[TokenRecord],
-    from: Option<&TimeBound>,
-    to: Option<&TimeBound>,
-    source: Option<&str>,
-    provider: Option<&str>,
-    tz: Option<&FixedOffset>,
+    filters: &FilterCriteria,
     resolution: Resolution,
 ) -> StatsResponse {
-    let sources = parse_csv_filter(source);
-    let providers = parse_csv_filter(provider);
+    let sources = parse_csv_filter(filters.source);
+    let providers = parse_csv_filter(filters.provider);
+    let models = parse_csv_filter(filters.model);
     let filtered: Vec<&TokenRecord> = records
         .iter()
-        .filter(|r| record_matches_bound(r, from, to, tz))
+        .filter(|r| record_matches_bound(r, filters.from, filters.to, filters.tz))
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
+        .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
         .collect();
 
     let overall = compute_overall_stats(&filtered);
     let by_vendor = compute_vendor_stats(&filtered);
-    let by_date = compute_date_stats(&filtered, tz, resolution);
+    let by_date = compute_date_stats(&filtered, filters.tz, resolution);
     let by_model = compute_model_stats(&filtered);
     let by_source = compute_source_stats(&filtered);
 
@@ -92,19 +100,14 @@ pub fn aggregate_records(
 
 pub fn filter_records<'a>(
     records: &'a [TokenRecord],
-    from: Option<&TimeBound>,
-    to: Option<&TimeBound>,
-    provider: Option<&str>,
-    model: Option<&str>,
-    source: Option<&str>,
-    tz: Option<&FixedOffset>,
+    filters: &FilterCriteria,
 ) -> Vec<&'a TokenRecord> {
-    let sources = parse_csv_filter(source);
-    let providers = parse_csv_filter(provider);
-    let models = parse_csv_filter(model);
+    let sources = parse_csv_filter(filters.source);
+    let providers = parse_csv_filter(filters.provider);
+    let models = parse_csv_filter(filters.model);
     let mut filtered: Vec<&'a TokenRecord> = records
         .iter()
-        .filter(|r| record_matches_bound(r, from, to, tz))
+        .filter(|r| record_matches_bound(r, filters.from, filters.to, filters.tz))
         .filter(|r| {
             let provider_ok = providers.is_empty() || providers.contains(&r.provider.as_str());
             let model_ok = models.is_empty() || models.contains(&r.model.as_str());
@@ -527,11 +530,14 @@ mod tests {
 
         let stats = aggregate_records(
             &records,
-            None,
-            None,
-            Some("pi,codex"),
-            Some("openai"),
-            None,
+            &FilterCriteria {
+                from: None,
+                to: None,
+                source: Some("pi,codex"),
+                provider: Some("openai"),
+                model: None,
+                tz: None,
+            },
             Resolution::Day,
         );
 
@@ -540,6 +546,103 @@ mod tests {
         assert_eq!(stats.by_source.len(), 2);
         assert!(stats.by_source.iter().any(|s| s.source == "pi"));
         assert!(stats.by_source.iter().any(|s| s.source == "codex"));
+    }
+
+    #[test]
+    fn model_filter_filters_by_single_model() {
+        let records = vec![
+            record("pi", "openai", "gpt-4", "2026-05-17T10:00:00Z", 100),
+            record("pi", "openai", "claude-3", "2026-05-17T11:00:00Z", 200),
+            record(
+                "codex",
+                "openai",
+                "gpt-4-turbo",
+                "2026-05-17T12:00:00Z",
+                300,
+            ),
+        ];
+
+        let stats = aggregate_records(
+            &records,
+            &FilterCriteria {
+                from: None,
+                to: None,
+                source: None,
+                provider: None,
+                model: Some("gpt-4"),
+                tz: None,
+            },
+            Resolution::Day,
+        );
+
+        assert_eq!(stats.overall.total_calls, 1);
+        assert_eq!(stats.overall.total_tokens, 100);
+        assert_eq!(stats.by_model.len(), 1);
+        assert_eq!(stats.by_model[0].model, "gpt-4");
+    }
+
+    #[test]
+    fn model_filter_filters_by_comma_separated_models() {
+        let records = vec![
+            record("pi", "openai", "gpt-4", "2026-05-17T10:00:00Z", 100),
+            record("pi", "openai", "claude-3", "2026-05-17T11:00:00Z", 200),
+            record(
+                "codex",
+                "openai",
+                "gpt-4-turbo",
+                "2026-05-17T12:00:00Z",
+                300,
+            ),
+        ];
+
+        let stats = aggregate_records(
+            &records,
+            &FilterCriteria {
+                from: None,
+                to: None,
+                source: None,
+                provider: None,
+                model: Some("gpt-4,claude-3"),
+                tz: None,
+            },
+            Resolution::Day,
+        );
+
+        assert_eq!(stats.overall.total_calls, 2);
+        assert_eq!(stats.overall.total_tokens, 300);
+        assert!(stats.by_model.iter().any(|m| m.model == "gpt-4"));
+        assert!(stats.by_model.iter().any(|m| m.model == "claude-3"));
+    }
+
+    #[test]
+    fn model_filter_none_passes_all_records() {
+        let records = vec![
+            record("pi", "openai", "gpt-4", "2026-05-17T10:00:00Z", 100),
+            record("pi", "openai", "claude-3", "2026-05-17T11:00:00Z", 200),
+            record(
+                "codex",
+                "openai",
+                "gpt-4-turbo",
+                "2026-05-17T12:00:00Z",
+                300,
+            ),
+        ];
+
+        let stats = aggregate_records(
+            &records,
+            &FilterCriteria {
+                from: None,
+                to: None,
+                source: None,
+                provider: None,
+                model: None,
+                tz: None,
+            },
+            Resolution::Day,
+        );
+
+        assert_eq!(stats.overall.total_calls, 3);
+        assert_eq!(stats.overall.total_tokens, 600);
     }
 
     #[test]
@@ -555,12 +658,14 @@ mod tests {
 
         let filtered = filter_records(
             &records,
-            Some(&from),
-            Some(&to),
-            None,
-            None,
-            Some("pi"),
-            Some(&tz),
+            &FilterCriteria {
+                from: Some(&from),
+                to: Some(&to),
+                source: Some("pi"),
+                provider: None,
+                model: None,
+                tz: Some(&tz),
+            },
         );
 
         assert_eq!(filtered.len(), 1);

@@ -60,6 +60,7 @@ import {
   getSourceColor,
   getSourceLabel,
   formatResetTime,
+  formatAvgCost,
 } from "./lib/utils";
 import {
   buildCsvFilterParam,
@@ -101,6 +102,11 @@ const ZH = {
   total: "合计",
   cacheHit: "缓存命中",
   cost: "费用",
+  avgCost: "平均成本",
+  avgCostUnit: "元/百万Token",
+  modelFilter: "模型筛选",
+  selectAll: "全选",
+  clearAll: "清除",
   date: "日期",
   showing: "显示",
   of: "/",
@@ -315,6 +321,11 @@ export default function App() {
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   const pivotInitRef = useRef(false);
 
+  // Pivot table model filter (multi-select dropdown)
+  const [selectedPivotModels, setSelectedPivotModels] = useState<Set<string>>(new Set());
+  const [pendingPivotModels, setPendingPivotModels] = useState<Set<string>>(new Set());
+  const [showModelFilter, setShowModelFilter] = useState(false);
+
   // Chart metric filter
   const [chartMetrics, setChartMetrics] = useState<Set<ChartMetricKey>>(
     () => new Set(["cache", "input", "output", "cacheHitRatio"])
@@ -351,6 +362,17 @@ export default function App() {
   const vendorFilter = useMemo(() => {
     return buildCsvFilterParam(selectedVendors, filters.vendors);
   }, [selectedVendors, filters.vendors]);
+
+  // Pivot table model filter — uses unfiltered model list from /api/filters
+  // so dropdown always shows all models regardless of current filter state
+  const pivotModelOptions = useMemo(() => {
+    return [...filters.models].sort();
+  }, [filters.models]);
+
+  const modelFilter = useMemo(() => {
+    if (selectedPivotModels.size === 0) return undefined;
+    return [...selectedPivotModels].join(",");
+  }, [selectedPivotModels]);
 
   const hasEmptySourceSelection = useMemo(
     () => isEmptyAppliedSelection(selectedSources, filters.sources),
@@ -402,7 +424,8 @@ export default function App() {
           sourceFilter,
           vendorFilter,
           tzOffset,
-          resolution
+          resolution,
+          modelFilter
         ),
         fetchFilters(),
       ]);
@@ -435,6 +458,7 @@ export default function App() {
     tzOffset,
     hasEmptyRequiredSelection,
     resolution,
+    modelFilter,
   ]);
 
   // Filtered models derived from stats (respects source/vendor filters, with merging)
@@ -598,6 +622,19 @@ export default function App() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showChartFilter]);
+
+  // Close model filter dropdown on outside click
+  useEffect(() => {
+    if (!showModelFilter) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".model-filter-dropdown")) {
+        setShowModelFilter(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showModelFilter]);
 
   const chartData = useMemo(() => {
     if (!stats?.by_date) return [];
@@ -1666,10 +1703,90 @@ export default function App() {
 
             {/* Vendor & Model Performance - pivot table with expand/collapse */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-3">
-              <div className="px-4 py-2.5 border-b border-slate-100">
+              <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
                 <h3 className="text-xs font-semibold text-slate-700">
                   {ZH.vendorAndModel}
                 </h3>
+                {/* Model Filter Dropdown */}
+                <div className="relative model-filter-dropdown">
+                  <button
+                    onClick={() => {
+                      setPendingPivotModels(new Set(selectedPivotModels));
+                      setShowModelFilter(!showModelFilter);
+                    }}
+                    className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md border transition-colors ${
+                      selectedPivotModels.size > 0
+                        ? "bg-blue-50 border-blue-300 text-blue-700"
+                        : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Filter className="w-3 h-3" />
+                    {ZH.modelFilter}
+                    {selectedPivotModels.size > 0 && (
+                      <span className="ml-0.5 px-1 py-0.5 text-[9px] bg-blue-100 text-blue-700 rounded-full">
+                        {selectedPivotModels.size}
+                      </span>
+                    )}
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                  {showModelFilter && (
+                    <div className="absolute right-0 top-full mt-1 w-56 max-h-80 bg-white border border-slate-200 rounded-lg shadow-lg z-50 flex flex-col">
+                      <div className="shrink-0 bg-white border-b border-slate-100 px-2 py-1.5 flex gap-2">
+                        <button
+                          onClick={() => setPendingPivotModels(new Set(pivotModelOptions))}
+                          className="text-[10px] text-blue-600 hover:text-blue-800"
+                        >
+                          {ZH.selectAll}
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          onClick={() => setPendingPivotModels(new Set())}
+                          className="text-[10px] text-slate-500 hover:text-slate-700"
+                        >
+                          {ZH.clearAll}
+                        </button>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-1">
+                        {pivotModelOptions.map((model) => (
+                          <label
+                            key={model}
+                            className="flex items-center gap-2 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 rounded cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={pendingPivotModels.has(model)}
+                              onChange={() => {
+                                const next = new Set(pendingPivotModels);
+                                if (next.has(model)) next.delete(model);
+                                else next.add(model);
+                                setPendingPivotModels(next);
+                              }}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="truncate" title={model}>{model}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="shrink-0 bg-white border-t border-slate-100 px-2 py-1.5 flex justify-end gap-2">
+                        <button
+                          onClick={() => setShowModelFilter(false)}
+                          className="px-2 py-1 text-[10px] font-medium rounded text-slate-500 hover:bg-slate-100 transition-colors"
+                        >
+                          {ZH.cancel}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPivotModels(pendingPivotModels);
+                            setShowModelFilter(false);
+                          }}
+                          className="px-2 py-1 text-[10px] font-medium rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+                        >
+                          {ZH.apply}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -1683,6 +1800,7 @@ export default function App() {
                       <th className="px-3 py-2 text-right font-medium">{ZH.total}</th>
                       <th className="px-3 py-2 text-right font-medium">{ZH.cacheHit}</th>
                       <th className="px-3 py-2 text-right font-medium">{ZH.cost}</th>
+                      <th className="px-3 py-2 text-right font-medium">{ZH.avgCost}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1735,6 +1853,7 @@ export default function App() {
                               }`}>{formatPercent(vendorCacheHit)}</span>
                             </td>
                             <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatCost(vendorSummary.cost)}</td>
+                            <td className="px-3 py-2 text-right text-slate-600">{formatAvgCost(vendorSummary.cost, vendorSummary.total_tokens)}</td>
                           </tr>
 
                           {vendorExpanded &&
@@ -1787,6 +1906,7 @@ export default function App() {
                                       }`}>{formatPercent(model.cache_hit_ratio)}</span>
                                     </td>
                                     <td className="px-3 py-2 text-right text-slate-600">{formatCost(model.cost)}</td>
+                                    <td className="px-3 py-2 text-right text-slate-600">{formatAvgCost(model.cost, model.total_tokens)}</td>
                                   </tr>
 
                                   {modelExpanded && !singleSource &&
@@ -1813,6 +1933,7 @@ export default function App() {
                                           }`}>{formatPercent(source.cache_hit_ratio)}</span>
                                         </td>
                                         <td className="px-3 py-2 text-right text-slate-600">{formatCost(source.cost)}</td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{formatAvgCost(source.cost, source.total_tokens)}</td>
                                       </tr>
                                     ))}
                                 </Fragment>
@@ -1839,6 +1960,7 @@ export default function App() {
                           }`}>{formatPercent(pivotSummary.cache_hit_ratio)}</span>
                         </td>
                         <td className="px-3 py-2 text-right font-bold text-slate-800">{formatCost(pivotSummary.cost)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-slate-800">{formatAvgCost(pivotSummary.cost, pivotSummary.total_tokens)}</td>
                       </tr>
                     )}
                   </tbody>
