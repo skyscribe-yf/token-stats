@@ -63,16 +63,19 @@ pub fn aggregate_records(
     to: Option<&TimeBound>,
     source: Option<&str>,
     provider: Option<&str>,
+    model: Option<&str>,
     tz: Option<&FixedOffset>,
     resolution: Resolution,
 ) -> StatsResponse {
     let sources = parse_csv_filter(source);
     let providers = parse_csv_filter(provider);
+    let models = parse_csv_filter(model);
     let filtered: Vec<&TokenRecord> = records
         .iter()
         .filter(|r| record_matches_bound(r, from, to, tz))
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
+        .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
         .collect();
 
     let overall = compute_overall_stats(&filtered);
@@ -532,6 +535,7 @@ mod tests {
             Some("pi,codex"),
             Some("openai"),
             None,
+            None,
             Resolution::Day,
         );
 
@@ -540,6 +544,79 @@ mod tests {
         assert_eq!(stats.by_source.len(), 2);
         assert!(stats.by_source.iter().any(|s| s.source == "pi"));
         assert!(stats.by_source.iter().any(|s| s.source == "codex"));
+    }
+
+    #[test]
+    fn model_filter_filters_by_single_model() {
+        let records = vec![
+            record("pi", "openai", "gpt-4", "2026-05-17T10:00:00Z", 100),
+            record("pi", "openai", "claude-3", "2026-05-17T11:00:00Z", 200),
+            record("codex", "openai", "gpt-4-turbo", "2026-05-17T12:00:00Z", 300),
+        ];
+
+        let stats = aggregate_records(
+            &records,
+            None,
+            None,
+            None,
+            None,
+            Some("gpt-4"),
+            None,
+            Resolution::Day,
+        );
+
+        assert_eq!(stats.overall.total_calls, 1);
+        assert_eq!(stats.overall.total_tokens, 100);
+        assert_eq!(stats.by_model.len(), 1);
+        assert_eq!(stats.by_model[0].model, "gpt-4");
+    }
+
+    #[test]
+    fn model_filter_filters_by_comma_separated_models() {
+        let records = vec![
+            record("pi", "openai", "gpt-4", "2026-05-17T10:00:00Z", 100),
+            record("pi", "openai", "claude-3", "2026-05-17T11:00:00Z", 200),
+            record("codex", "openai", "gpt-4-turbo", "2026-05-17T12:00:00Z", 300),
+        ];
+
+        let stats = aggregate_records(
+            &records,
+            None,
+            None,
+            None,
+            None,
+            Some("gpt-4,claude-3"),
+            None,
+            Resolution::Day,
+        );
+
+        assert_eq!(stats.overall.total_calls, 2);
+        assert_eq!(stats.overall.total_tokens, 300);
+        assert!(stats.by_model.iter().any(|m| m.model == "gpt-4"));
+        assert!(stats.by_model.iter().any(|m| m.model == "claude-3"));
+    }
+
+    #[test]
+    fn model_filter_none_passes_all_records() {
+        let records = vec![
+            record("pi", "openai", "gpt-4", "2026-05-17T10:00:00Z", 100),
+            record("pi", "openai", "claude-3", "2026-05-17T11:00:00Z", 200),
+            record("codex", "openai", "gpt-4-turbo", "2026-05-17T12:00:00Z", 300),
+        ];
+
+        let stats = aggregate_records(
+            &records,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Resolution::Day,
+        );
+
+        assert_eq!(stats.overall.total_calls, 3);
+        assert_eq!(stats.overall.total_tokens, 600);
     }
 
     #[test]

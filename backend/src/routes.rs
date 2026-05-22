@@ -26,6 +26,7 @@ pub struct StatsQuery {
     pub to: Option<String>,
     pub source: Option<String>,
     pub provider: Option<String>,
+    pub model: Option<String>,
     /// Timezone offset in minutes from UTC (e.g. 480 for UTC+8, -300 for UTC-5)
     pub tz_offset: Option<i32>,
     /// Aggregation resolution: "day" (default), "4h", "1h"
@@ -75,6 +76,7 @@ pub async fn get_stats(
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let provider = query.provider.as_deref().filter(|s| !s.is_empty());
+    let model = query.model.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
     let resolution = query
         .resolution
@@ -88,6 +90,7 @@ pub async fn get_stats(
         to.as_ref(),
         source,
         provider,
+        model,
         tz.as_ref(),
         resolution,
     );
