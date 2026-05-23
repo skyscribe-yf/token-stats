@@ -176,14 +176,20 @@ def recover_pi_sessions(existing_keys, dry_run=False):
 
 # ── Source 2: DeepSeek platform export ───────────────────────────────────────
 
+# Map DeepSeek export api_key_name -> (provider, source).
+# All DeepSeek export rows describe calls billed directly by DeepSeek's
+# official platform - the api_key_name is just the channel that owned
+# the key. Classify them all as provider=deepseek, source=deepseek-ai
+# so the dashboard treats them uniformly and pricing.rs computes their
+# cost from pricing.toml deepseek rates (CNY native, no OpenCode divisor).
 API_KEY_MAP = {
-    "opencode": "opencode-go",
+    "opencode": "deepseek",
     "pi": "deepseek",
     "ai小北": "deepseek",
 }
 
 SOURCE_MAP = {
-    "opencode": "opencode",
+    "opencode": "deepseek-ai",
     "pi": "pi",
     "ai小北": "deepseek-ai",
 }

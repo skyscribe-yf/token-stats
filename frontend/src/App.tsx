@@ -35,7 +35,11 @@ import {
   computeNextBillingDate,
   isWithin24Hours,
 } from "./lib/utils";
-import { getDisplayModel, getOriginalModels } from "./lib/pivotTable";
+import {
+  expandDisplayModels,
+  getDisplayModelOptions,
+  reconcileSelectedModels,
+} from "./lib/pivotTable";
 import {
   buildCsvFilterParam,
   isEmptyAppliedSelection,
@@ -136,7 +140,6 @@ export default function App() {
   });
   const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState<string>("");
   const [hideFreeModels, setHideFreeModels] = useState(false);
   const [page, setPage] = useState(1);
 
@@ -189,6 +192,7 @@ export default function App() {
   const [selectedPivotModels, setSelectedPivotModels] = useState<Set<string>>(
     new Set()
   );
+  const [sliceModelOptions, setSliceModelOptions] = useState<string[]>([]);
 
   // ─── Derived ──────────────────────────────────────────────────────────
   const tzOffset = useMemo(() => -new Date().getTimezoneOffset(), []);
@@ -202,11 +206,6 @@ export default function App() {
     () => buildCsvFilterParam(selectedVendors, filters.vendors),
     [selectedVendors, filters.vendors]
   );
-
-  const modelFilter = useMemo(() => {
-    if (selectedPivotModels.size === 0) return undefined;
-    return [...selectedPivotModels].join(",");
-  }, [selectedPivotModels]);
 
   const hasEmptySourceSelection = useMemo(
     () => isEmptyAppliedSelection(selectedSources, filters.sources),
@@ -236,25 +235,27 @@ export default function App() {
     const rawModels = stats?.by_model
       ? [...new Set(stats.by_model.map((m) => m.model))]
       : filters.models;
-    return [...new Set(rawModels.map(getDisplayModel))].sort();
+    return getDisplayModelOptions(rawModels);
   }, [stats, filters.models]);
 
-  const effectiveModel = useMemo(() => {
-    if (!selectedModel) return "";
-    if (filteredModels.includes(selectedModel)) return selectedModel;
-    return "";
-  }, [selectedModel, filteredModels]);
+  const availableSliceModels =
+    sliceModelOptions.length > 0 ? sliceModelOptions : filteredModels;
 
-  const pivotModelOptions = useMemo(
-    () => [...filters.models].sort(),
-    [filters.models]
+  const effectiveSelectedPivotModels = reconcileSelectedModels(
+    selectedPivotModels,
+    availableSliceModels
   );
+  const modelFilter = useMemo(() => {
+    if (effectiveSelectedPivotModels.size === 0) return undefined;
+    return expandDisplayModels(effectiveSelectedPivotModels).join(",");
+  }, [effectiveSelectedPivotModels]);
 
   // ─── Data loading ─────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     if (!appliedRange.from || !appliedRange.to) return;
     if (hasEmptyRequiredSelection) {
       setStats(emptyStatsResponse());
+      setSliceModelOptions([]);
       setRequests(emptyRequests(1));
       setPage(1);
       setLastUpdatedAt(new Date());
@@ -263,19 +264,36 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [s, f] = await Promise.all([
-        fetchStats(
-          appliedRange.from,
-          appliedRange.to,
-          sourceFilter,
-          vendorFilter,
-          tzOffset,
-          resolution,
-          modelFilter
-        ),
+      const filteredStatsPromise = fetchStats(
+        appliedRange.from,
+        appliedRange.to,
+        sourceFilter,
+        vendorFilter,
+        tzOffset,
+        resolution,
+        modelFilter
+      );
+      const sliceStatsPromise = modelFilter
+        ? fetchStats(
+            appliedRange.from,
+            appliedRange.to,
+            sourceFilter,
+            vendorFilter,
+            tzOffset,
+            resolution
+          )
+        : filteredStatsPromise;
+      const [s, sliceStats, f] = await Promise.all([
+        filteredStatsPromise,
+        sliceStatsPromise,
         fetchFilters(),
       ]);
       setStats(s);
+      setSliceModelOptions(
+        getDisplayModelOptions(
+          sliceStats.by_model.map((modelStats) => modelStats.model)
+        )
+      );
       setFilters(f);
       setLastUpdatedAt(new Date());
       if (!filtersInitializedRef.current) {
@@ -306,9 +324,7 @@ export default function App() {
       return;
     }
     try {
-      const modelParam = effectiveModel
-        ? getOriginalModels(effectiveModel)?.join(",") || effectiveModel
-        : undefined;
+      const modelParam = modelFilter;
       const r = await fetchRequests(
         appliedRange.from,
         appliedRange.to,
@@ -327,7 +343,7 @@ export default function App() {
     appliedRange.from,
     appliedRange.to,
     vendorFilter,
-    effectiveModel,
+    modelFilter,
     sourceFilter,
     page,
     tzOffset,
@@ -675,6 +691,17 @@ export default function App() {
     setPage(1);
   }, []);
 
+  const handleSourceGroupToggle = useCallback(
+    (selectAll: boolean) => {
+      setSelectedSources(() => {
+        if (selectAll) return new Set(filters.sources);
+        return new Set();
+      });
+      setPage(1);
+    },
+    [filters.sources]
+  );
+
   const handleVendorToggle = useCallback((vendor: string) => {
     setSelectedVendors((prev) => toggleInSet(prev, vendor));
     setPage(1);
@@ -698,8 +725,26 @@ export default function App() {
     [filters.vendors]
   );
 
-  const handleModelChange = useCallback((model: string) => {
-    setSelectedModel(model);
+  const handleVendorGroupToggle = useCallback(
+    (selectAll: boolean) => {
+      const regularVendors = filters.vendors.filter(
+        (v) => !["kimi", "xunfei", "opencode-go", "opencode"].includes(v)
+      );
+      setSelectedVendors((prev) => {
+        const next = new Set(prev);
+        for (const v of regularVendors) {
+          if (selectAll) next.add(v);
+          else next.delete(v);
+        }
+        return next;
+      });
+      setPage(1);
+    },
+    [filters.vendors]
+  );
+
+  const handleSelectedPivotModelsChange = useCallback((next: Set<string>) => {
+    setSelectedPivotModels(next);
     setPage(1);
   }, []);
 
@@ -810,13 +855,16 @@ export default function App() {
             sources={filters.sources}
             selectedSources={selectedSources}
             onSourceToggle={handleSourceToggle}
+            onSourceGroupToggle={handleSourceGroupToggle}
             vendors={filters.vendors}
             selectedVendors={selectedVendors}
             onVendorToggle={handleVendorToggle}
             onSubscriptionGroupToggle={handleSubscriptionGroupToggle}
-            models={filteredModels}
-            selectedModel={selectedModel}
-            onModelChange={handleModelChange}
+            onVendorGroupToggle={handleVendorGroupToggle}
+            models={availableSliceModels}
+            selectedModels={effectiveSelectedPivotModels}
+            onSelectedModelsChange={handleSelectedPivotModelsChange}
+            advancedModels={advancedModels}
             hideFreeModels={hideFreeModels}
             onHideFreeModelsChange={setHideFreeModels}
             onOpenSettings={() => setShowSettings(true)}
@@ -873,9 +921,9 @@ export default function App() {
                 hideFreeModels={hideFreeModels}
                 page={page}
                 onPageChange={setPage}
-                pivotModelOptions={pivotModelOptions}
-                selectedPivotModels={selectedPivotModels}
-                onSelectedPivotModelsChange={setSelectedPivotModels}
+                pivotModelOptions={availableSliceModels}
+                selectedPivotModels={effectiveSelectedPivotModels}
+                onSelectedPivotModelsChange={handleSelectedPivotModelsChange}
                 advancedModels={advancedModels}
                 onAdvancedModelsChange={setAdvancedModels}
               />

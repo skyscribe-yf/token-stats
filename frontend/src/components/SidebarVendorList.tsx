@@ -7,6 +7,7 @@ interface SidebarVendorListProps {
   selectedVendors: ReadonlySet<string>;
   onToggle: (vendor: string) => void;
   onToggleSubscriptionGroup: (selectAll: boolean) => void;
+  onToggleRegularGroup: (selectAll: boolean) => void;
 }
 
 export function SidebarVendorList({
@@ -14,6 +15,7 @@ export function SidebarVendorList({
   selectedVendors,
   onToggle,
   onToggleSubscriptionGroup,
+  onToggleRegularGroup,
 }: SidebarVendorListProps) {
   if (vendors.length === 0) return null;
 
@@ -21,12 +23,24 @@ export function SidebarVendorList({
   const subVendors = vendors.filter((v) => SUBSCRIPTION_VENDORS.includes(v));
   const allSubSelected =
     subVendors.length > 0 && subVendors.every((v) => selectedVendors.has(v));
+  const allRegSelected =
+    regularVendors.length > 0 && regularVendors.every((v) => selectedVendors.has(v));
 
   return (
     <div className="py-3 px-3">
-      <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1.5 px-2">
-        供应商
-      </p>
+      <div className="px-2 mb-1.5 flex items-center justify-between">
+        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+          供应商
+        </p>
+        {regularVendors.length > 0 && (
+          <button
+            onClick={() => onToggleRegularGroup(!allRegSelected)}
+            className="text-[10px] text-primary-600 hover:text-primary-700 font-medium"
+          >
+            {allRegSelected ? "取消全选" : "全选"}
+          </button>
+        )}
+      </div>
       <div className="space-y-0.5">
         {regularVendors.map((v) => (
           <VendorRow

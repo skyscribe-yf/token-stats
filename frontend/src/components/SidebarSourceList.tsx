@@ -4,19 +4,31 @@ interface SidebarSourceListProps {
   sources: string[];
   selectedSources: ReadonlySet<string>;
   onToggle: (source: string) => void;
+  onToggleAll: (selectAll: boolean) => void;
 }
 
 export function SidebarSourceList({
   sources,
   selectedSources,
   onToggle,
+  onToggleAll,
 }: SidebarSourceListProps) {
   if (sources.length === 0) return null;
+  const allSelected = sources.every((s) => selectedSources.has(s));
+
   return (
     <div className="py-3 px-3">
-      <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1.5 px-2">
-        工具
-      </p>
+      <div className="px-2 mb-1.5 flex items-center justify-between">
+        <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+          工具
+        </p>
+        <button
+          onClick={() => onToggleAll(!allSelected)}
+          className="text-[10px] text-primary-600 hover:text-primary-700 font-medium"
+        >
+          {allSelected ? "取消全选" : "全选"}
+        </button>
+      </div>
       <div className="space-y-0.5">
         {sources.map((s) => (
           <label

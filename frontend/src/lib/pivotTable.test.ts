@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPivotTree, getSortValue } from "./pivotTable.ts";
+import {
+  buildPivotTree,
+  expandDisplayModels,
+  getAdvancedDisplayModelSelection,
+  getDisplayModelOptions,
+  getSortValue,
+  reconcileSelectedModels,
+} from "./pivotTable.ts";
 import type { ModelStats, SourceDetailStats } from "../api.ts";
 
 function makeSourceDetail(overrides: Partial<SourceDetailStats> = {}): SourceDetailStats {
@@ -171,6 +178,7 @@ test("getSortValue returns correct values for all columns", () => {
     total_tokens: 175,
     cost: 2.5,
     cache_hit_ratio: 16.666,
+    output_ratio: 0,
   };
   assert.equal(getSortValue(summary, "calls"), 10);
   assert.equal(getSortValue(summary, "input_tokens"), 100);
@@ -196,4 +204,108 @@ test("buildPivotTree sorts source details by the same column", () => {
   const tree = buildPivotTree(stats, "total_tokens", "asc", false);
   assert.equal(tree[0].models[0].source_details[0].source, "pi");
   assert.equal(tree[0].models[0].source_details[1].source, "codex");
+});
+
+test("buildPivotTree computes output_ratio from output_tokens / total_tokens", () => {
+  const stats = [
+    makeModelStats({
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      total_tokens: 1_000,
+      output_tokens: 50,
+      input_tokens: 950,
+      source_details: [
+        makeSourceDetail({
+          source: "pi",
+          total_tokens: 1_000,
+          output_tokens: 50,
+          input_tokens: 950,
+        }),
+      ],
+    }),
+  ];
+  const tree = buildPivotTree(stats, "total_tokens", "desc", false);
+  assert.equal(tree[0].models[0].summary.output_ratio, 5);
+  assert.equal(tree[0].summary.output_ratio, 5);
+});
+
+test("getSortValue returns output_ratio in percent", () => {
+  const summary = {
+    calls: 1,
+    input_tokens: 80,
+    output_tokens: 20,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 100,
+    cost: 0,
+    cache_hit_ratio: 0,
+    output_ratio: 20,
+  };
+  assert.equal(getSortValue(summary, "output_ratio"), 20);
+});
+
+test("buildPivotTree handles zero total_tokens for output_ratio", () => {
+  const stats = [
+    makeModelStats({
+      provider: "x",
+      model: "m",
+      total_tokens: 0,
+      output_tokens: 0,
+      input_tokens: 0,
+      source_details: [
+        makeSourceDetail({
+          source: "pi",
+          total_tokens: 0,
+          output_tokens: 0,
+          input_tokens: 0,
+        }),
+      ],
+    }),
+  ];
+  const tree = buildPivotTree(stats, "total_tokens", "desc", false);
+  assert.equal(tree[0].models[0].summary.output_ratio, 0);
+});
+
+test("expandDisplayModels expands merged display models to raw API names", () => {
+  const expanded = expandDisplayModels(new Set(["kimi-k2.6", "gpt-4.1"]));
+  assert.deepEqual(expanded, [
+    "kimi-k2.6",
+    "kimi-k2.6:high",
+    "kimi-for-coding",
+    "gpt-4.1",
+  ]);
+});
+
+test("reconcileSelectedModels drops models absent from the current visible slice even if globally known", () => {
+  const reconciled = reconcileSelectedModels(
+    new Set(["kimi-k2.6", "gpt-4.1"]),
+    ["gpt-4.1", "claude-sonnet-4"]
+  );
+  assert.deepEqual([...reconciled], ["gpt-4.1"]);
+});
+
+test("getDisplayModelOptions keeps the full slice model universe after display-model merging", () => {
+  const options = getDisplayModelOptions([
+    "kimi-k2.6",
+    "kimi-k2.6:high",
+    "gpt-4.1",
+    "claude-sonnet-4",
+  ]);
+  assert.deepEqual(options, ["claude-sonnet-4", "gpt-4.1", "kimi-k2.6"]);
+});
+
+test("getAdvancedDisplayModelSelection maps merged preset models to display options", () => {
+  const selection = getAdvancedDisplayModelSelection(
+    ["kimi-k2.6:high", "kimi-for-coding", "gpt-4.1"],
+    ["kimi-k2.6", "gpt-4.1", "claude-sonnet-4"]
+  );
+  assert.deepEqual([...selection], ["gpt-4.1", "kimi-k2.6"]);
+});
+
+test("getAdvancedDisplayModelSelection preserves non-merged preset models", () => {
+  const selection = getAdvancedDisplayModelSelection(
+    ["claude-sonnet-4"],
+    ["kimi-k2.6", "claude-sonnet-4"]
+  );
+  assert.deepEqual([...selection], ["claude-sonnet-4"]);
 });
