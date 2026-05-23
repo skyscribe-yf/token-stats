@@ -37,6 +37,44 @@ export function formatPercent(pct: number): string {
   return pct.toFixed(1) + "%";
 }
 
+export interface CycleCountdown {
+  daysRemaining: number;
+  isUrgent: boolean;
+  text: string;
+}
+
+function startOfLocalDay(value: Date): number {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+}
+
+/** Build Chinese countdown text for the next subscription cycle. */
+export function buildCycleCountdown(
+  targetDate: Date | string | null | undefined,
+  now: Date = new Date()
+): CycleCountdown | null {
+  if (!targetDate) return null;
+  const target = targetDate instanceof Date ? targetDate : new Date(targetDate);
+  if (Number.isNaN(target.getTime()) || Number.isNaN(now.getTime())) return null;
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  const daysRemaining = Math.max(
+    0,
+    Math.ceil((startOfLocalDay(target) - startOfLocalDay(now)) / dayMs)
+  );
+
+  return {
+    daysRemaining,
+    isUrgent: daysRemaining < 3,
+    text: `距下周期 ${daysRemaining} 天`,
+  };
+}
+
+export function cycleCountdownTextClass(isUrgent: boolean): string {
+  return isUrgent
+    ? "text-[10px] font-semibold text-rose-600"
+    : "text-[10px] font-medium text-slate-500";
+}
+
 /** Format a date string (e.g. "2025-05-17") for display – keeps as-is since it's just a date */
 export function formatDate(dateStr: string): string {
   return dateStr;
@@ -161,8 +199,10 @@ export function formatResetTime(resetTime: string | null | undefined): string | 
 /** Compute the next billing/reset date for a monthly subscription
  *  that starts on the given day of month (1-28).
  *  Returns the Date of the next occurrence (could be this month or next). */
-export function computeNextBillingDate(startDay: number): Date {
-  const now = new Date();
+export function computeNextBillingDate(
+  startDay: number,
+  now: Date = new Date()
+): Date {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const billingThisMonth = new Date(now.getFullYear(), now.getMonth(), startDay);
   if (billingThisMonth >= today) return billingThisMonth;
