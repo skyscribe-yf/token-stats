@@ -1,8 +1,12 @@
 import { ExternalLink } from "lucide-react";
 import {
+  buildCycleCountdown,
+  computeNextBillingDate,
+  cycleCountdownTextClass,
   formatCalls,
   formatNumber,
   formatResetTime,
+  type CycleCountdown,
 } from "../../lib/utils";
 import type {
   QuotaResponse,
@@ -62,12 +66,14 @@ function CardHeader({
   name,
   href,
   suffix,
+  cycleCountdown,
 }: {
   active: boolean;
   loading: boolean;
   name: string;
   href?: string;
   suffix?: string;
+  cycleCountdown?: CycleCountdown | null;
 }) {
   const dotClass = loading
     ? "bg-amber-400"
@@ -75,23 +81,30 @@ function CardHeader({
       ? "bg-emerald-500"
       : "bg-slate-300";
   return (
-    <div className="flex items-center justify-between mb-1.5">
-      <div className="flex items-center gap-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
-        <span className="text-xs font-semibold text-slate-700">{name}</span>
+    <div className="mb-1.5 space-y-0.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+          <span className="text-xs font-semibold text-slate-700">{name}</span>
+        </div>
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-slate-600"
+          >
+            {suffix ?? new URL(href).hostname}
+            <ExternalLink className="w-2.5 h-2.5" />
+          </a>
+        ) : (
+          suffix && <span className="text-[10px] text-slate-400">{suffix}</span>
+        )}
       </div>
-      {href ? (
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-slate-600"
-        >
-          {suffix ?? new URL(href).hostname}
-          <ExternalLink className="w-2.5 h-2.5" />
-        </a>
-      ) : (
-        suffix && <span className="text-[10px] text-slate-400">{suffix}</span>
+      {cycleCountdown && (
+        <div className={cycleCountdownTextClass(cycleCountdown.isUrgent)}>
+          {cycleCountdown.text}
+        </div>
       )}
     </div>
   );
@@ -146,6 +159,13 @@ function XunfeiCard({
   const cardId = `quota-xunfei-${account.label}`;
   const flash = useHighlightFlash(highlightId, cardId);
   const active = account.available && account.data?.status === "active";
+  const cycleCountdown = buildCycleCountdown(
+    account.data?.expires_at
+      ? account.data.expires_at.includes("T")
+        ? account.data.expires_at
+        : account.data.expires_at.replace(" ", "T")
+      : null
+  );
 
   return (
     <CardShell id={cardId} available={!!active} highlight={flash}>
@@ -155,6 +175,7 @@ function XunfeiCard({
         name={`讯飞编程套餐${account.label === "ex" ? " (EX)" : ""}`}
         href="https://xinghuo.xfyun.cn"
         suffix="xfyun.cn"
+        cycleCountdown={cycleCountdown}
       />
       {loading ? (
         <SkeletonBars />
@@ -228,6 +249,7 @@ function AinaibaCard({
 }) {
   const cardId = "quota-ainaiba";
   const flash = useHighlightFlash(highlightId, cardId);
+  const cycleCountdown = buildCycleCountdown(status?.data?.expires_at ?? null);
   return (
     <CardShell
       id={cardId}
@@ -239,6 +261,7 @@ function AinaibaCard({
         loading={loading}
         name="Ainaiba"
         suffix="xai.ainaibahub"
+        cycleCountdown={cycleCountdown}
       />
       {loading ? (
         <SkeletonBars />
@@ -335,6 +358,11 @@ function KimiCard({
 }) {
   const cardId = "quota-kimi";
   const flash = useHighlightFlash(highlightId, cardId);
+  const cycleCountdown = subscriptionSettings?.kimi_monthly_start_day
+    ? buildCycleCountdown(
+        computeNextBillingDate(subscriptionSettings.kimi_monthly_start_day)
+      )
+    : null;
   return (
     <CardShell
       id={cardId}
@@ -347,6 +375,7 @@ function KimiCard({
         name="Kimi Code"
         href="https://kimi.com"
         suffix="kimi.com"
+        cycleCountdown={cycleCountdown}
       />
       {loading ? (
         <SkeletonBars />
@@ -412,6 +441,10 @@ function OpenCodeCard({
   const cardId = `quota-opencode-${cardKey}`;
   const flash = useHighlightFlash(highlightId, cardId);
   const exLabel = suffix === "ex" ? " (EX)" : "";
+  const monthlyEntry = status?.data?.entries.find(
+    (entry) => entry.usage_type === "Monthly"
+  );
+  const cycleCountdown = buildCycleCountdown(monthlyEntry?.reset_at ?? null);
   return (
     <CardShell
       id={cardId}
@@ -424,6 +457,7 @@ function OpenCodeCard({
         name={`OpenCode-go${exLabel}`}
         href="https://opencode.ai"
         suffix="opencode.ai"
+        cycleCountdown={cycleCountdown}
       />
       {loading ? (
         <SkeletonBars />
@@ -482,6 +516,11 @@ function XiaomiMiMoCard({
 }) {
   const cardId = "quota-xiaomi-mimo";
   const flash = useHighlightFlash(highlightId, cardId);
+  const cycleCountdown = buildCycleCountdown(
+    status?.data?.current_period_end
+      ? status.data.current_period_end.replace(" ", "T")
+      : null
+  );
   return (
     <CardShell id={cardId} available={!!status?.available} highlight={flash}>
       <CardHeader
@@ -489,6 +528,7 @@ function XiaomiMiMoCard({
         loading={loading}
         name="Xiaomi MiMo TP"
         suffix="xiaomi.com"
+        cycleCountdown={cycleCountdown}
       />
       {loading ? (
         <SkeletonBars />
