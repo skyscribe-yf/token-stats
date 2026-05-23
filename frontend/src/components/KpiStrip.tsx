@@ -1,99 +1,125 @@
-import { formatNumber, formatCost, formatPercent, getSourceColor, getSourceLabel } from "../lib/utils";
-import type { AggregatedStats, SourceStats } from "../api";
-import ZH from "../i18n/zh";
+import { useMemo } from "react";
+import {
+  formatCalls,
+  formatNumber,
+  formatPercent,
+  formatCost,
+} from "../lib/utils";
+import type { AggregatedStats } from "../api";
 
-export function KpiStrip({
-  overall,
-  bySource,
-}: {
+interface KpiStripProps {
   overall: AggregatedStats;
-  bySource: SourceStats[];
+}
+
+export function KpiStrip({ overall }: KpiStripProps) {
+  const tokenSegments = useMemo(() => {
+    const total = overall.total_tokens || 1;
+    return [
+      {
+        key: "input",
+        label: "输入",
+        value: overall.total_input_tokens,
+        pct: (overall.total_input_tokens / total) * 100,
+        color: "#0ea5e9",
+      },
+      {
+        key: "output",
+        label: "输出",
+        value: overall.total_output_tokens,
+        pct: (overall.total_output_tokens / total) * 100,
+        color: "#94a3b8",
+      },
+      {
+        key: "cache",
+        label: "缓存",
+        value:
+          overall.total_cache_read_tokens + overall.total_cache_write_tokens,
+        pct:
+          ((overall.total_cache_read_tokens +
+            overall.total_cache_write_tokens) /
+            total) *
+          100,
+        color: "#c084fc",
+      },
+    ];
+  }, [overall]);
+
+  const cacheHit = overall.weighted_cache_hit_ratio;
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <KpiCard label="调用" value={formatCalls(overall.total_calls)} />
+      <KpiCard
+        label="Token"
+        value={formatNumber(overall.total_tokens)}
+        accent
+        composition={
+          <div className="mt-1.5">
+            <div className="flex h-1 w-full rounded-full overflow-hidden bg-slate-100">
+              {tokenSegments.map((seg) => (
+                <div
+                  key={seg.key}
+                  className="h-full"
+                  style={{ width: `${seg.pct}%`, background: seg.color }}
+                  title={`${seg.label}: ${formatNumber(seg.value)} (${seg.pct.toFixed(1)}%)`}
+                />
+              ))}
+            </div>
+            <div className="mt-0.5 flex justify-between text-[9px] text-slate-400">
+              {tokenSegments.map((seg) => (
+                <span key={seg.key} className="inline-flex items-center gap-0.5">
+                  <span
+                    className="w-1.5 h-1.5 rounded-full inline-block"
+                    style={{ background: seg.color }}
+                  />
+                  {seg.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        }
+      />
+      <KpiCard
+        label="命中率"
+        value={formatPercent(cacheHit)}
+        badge={cacheHit > 50 ? "cached" : undefined}
+      />
+      <KpiCard label="费用" value={formatCost(overall.total_cost)} />
+    </div>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  accent,
+  composition,
+  badge,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  composition?: React.ReactNode;
+  badge?: string;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3 mb-3">
-      <div className="flex flex-wrap items-center divide-x divide-slate-200 gap-y-1">
-        <div className="pr-4 min-w-0">
-          <p className="text-[11px] text-slate-400 font-medium">
-            {ZH.totalCalls}
-          </p>
-          <p className="text-lg font-bold text-slate-800 leading-tight">
-            {formatNumber(overall.total_calls)}
-          </p>
-        </div>
-        <div className="px-4 min-w-0">
-          <p className="text-[11px] text-slate-400 font-medium">
-            {ZH.inputTokens}
-          </p>
-          <p className="text-lg font-bold text-emerald-600 leading-tight">
-            {formatNumber(overall.total_input_tokens)}
-          </p>
-        </div>
-        <div className="px-4 min-w-0">
-          <p className="text-[11px] text-slate-400 font-medium">
-            {ZH.outputTokens}
-          </p>
-          <p className="text-lg font-bold text-amber-600 leading-tight">
-            {formatNumber(overall.total_output_tokens)}
-          </p>
-        </div>
-        <div className="px-4 min-w-0">
-          <p className="text-[11px] text-slate-400 font-medium">
-            {ZH.cacheRead}
-          </p>
-          <p className="text-lg font-bold text-violet-600 leading-tight">
-            {formatNumber(overall.total_cache_read_tokens)}
-          </p>
-        </div>
-        <div className="px-4 min-w-0">
-          <p className="text-[11px] text-slate-400 font-medium">
-            {ZH.cacheHitRatio}
-          </p>
-          <p className="text-lg font-bold text-rose-600 leading-tight">
-            {formatPercent(overall.weighted_cache_hit_ratio)}
-          </p>
-        </div>
-        <div className="pl-4 min-w-0">
-          <p className="text-[11px] text-slate-400 font-medium">
-            {ZH.totalCost}
-          </p>
-          <p className="text-lg font-bold text-slate-800 leading-tight">
-            {formatCost(overall.total_cost)}
-          </p>
-        </div>
+    <div className="bg-white px-4 py-3 rounded-lg border border-slate-200 min-w-0">
+      <p className="text-[11px] font-medium text-slate-400">{label}</p>
+      <div className="flex items-baseline gap-1.5">
+        <p
+          className={`text-lg font-bold leading-tight tabular-nums truncate ${
+            accent ? "text-primary-600" : "text-slate-800"
+          }`}
+        >
+          {value}
+        </p>
+        {badge && (
+          <span className="px-1.5 py-0 rounded-full text-[9px] font-medium bg-emerald-100 text-emerald-700">
+            {badge}
+          </span>
+        )}
       </div>
-
-      {/* Source Overview - compact inline */}
-      {bySource.length > 1 && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
-          {bySource.map((s) => (
-            <span key={s.source} className="inline-flex items-center gap-1.5">
-              <span
-                className="w-1.5 h-1.5 rounded-full"
-                style={{ background: getSourceColor(s.source) }}
-              />
-              <span
-                className="font-medium"
-                style={{ color: getSourceColor(s.source) }}
-              >
-                {getSourceLabel(s.source)}
-              </span>
-              <span className="text-slate-400">{formatNumber(s.calls)}次</span>
-              <span className="text-slate-400">·</span>
-              <span className="text-slate-400">
-                {formatNumber(s.total_tokens)}tok
-              </span>
-              <span className="text-slate-400">·</span>
-              <span className="text-slate-400">
-                {formatCost(s.cost, s.source)}
-              </span>
-              <span className="text-slate-400">·</span>
-              <span className="text-slate-400">
-                {formatPercent(s.cache_hit_ratio)}
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
+      {composition}
     </div>
   );
 }
