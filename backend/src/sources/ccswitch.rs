@@ -32,6 +32,31 @@ impl CcSwitchSource {
             .unwrap_or_else(|| super::home_dir().join(".cc-switch").join("cc-switch.db"))
     }
 
+    /// Query the cc-switch DB for the currently active provider name
+    /// for a given `app_type` (e.g. "claude", "codex").
+    ///
+    /// Returns `None` if the DB is missing, cannot be opened, or no
+    /// active provider is found for the given app_type.
+    pub fn get_active_provider(app_type: &str) -> Option<String> {
+        let path = Self::db_path();
+        if !path.exists() {
+            return None;
+        }
+
+        let conn = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .ok()?;
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM providers WHERE app_type = ?1 AND is_current = 1")
+            .ok()?;
+
+        let name: String = stmt.query_row([app_type], |row| row.get(0)).ok()?;
+        Some(name)
+    }
+
     fn parse(path: &std::path::Path) -> Vec<TokenRecord> {
         if !path.exists() {
             tracing::warn!("ccswitch DB not found at {:?}, skipping", path);

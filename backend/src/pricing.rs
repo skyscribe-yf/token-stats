@@ -22,6 +22,8 @@ pub struct SpecialPricing {
     pub kimi_per_token: f64,
     pub opencode_divisor: f64,
     pub ainaba_divisor: f64,
+    #[serde(default)]
+    pub freemodel_divisor: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +56,7 @@ impl Default for PricingConfig {
                 kimi_per_token: 199.0 / 2_800_000_000.0,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
+                freemodel_divisor: 68.2,
             },
             model: Vec::new(),
         }
@@ -279,6 +282,12 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             cny /= cfg.special.ainaba_divisor;
         }
 
+        // FreeModel discount: 1 USD face value = 0.1 CNY actual cost
+        // divisor = usd_to_cny / 0.1 = 68.2
+        if record.provider == "FreeModel" {
+            cny /= cfg.special.freemodel_divisor;
+        }
+
         return cny;
     }
 
@@ -296,6 +305,10 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             // Ainaba 40x discount: all records going through ainaibahub.com
             if record.provider == "ainaba" {
                 cny /= cfg.special.ainaba_divisor;
+            }
+            // FreeModel discount: 1 USD face value = 0.1 CNY actual cost
+            if record.provider == "FreeModel" {
+                cny /= cfg.special.freemodel_divisor;
             }
             return cny;
         }
@@ -406,5 +419,104 @@ mod tests {
         let record = make_record("pi", "openai", "gpt-5.5", 1_000_000, 0.0);
         let cost = display_cost(&record);
         assert_eq!(cost, 0.0, "non-kimi zero-cost record should return 0");
+    }
+
+    #[test]
+    fn freemodel_stored_cost_applies_divisor() {
+        // FreeModel records with stored cost (USD) should apply the 68.2x divisor
+        // before converting to CNY: cost_usd * usd_to_cny / freemodel_divisor
+        let record = make_record("pi", "FreeModel", "claude-opus-4-7", 1_000_000, 0.166844);
+        let cost = display_cost(&record);
+        let expected = 0.166844 * PricingConfig::default().usd_to_cny
+            / PricingConfig::default().special.freemodel_divisor;
+        assert!(
+            cost > 0.0,
+            "FreeModel record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "FreeModel cost should use divisor, expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn freemodel_derived_cost_applies_divisor() {
+        // FreeModel claude-code records (no stored cost) should compute from tokens
+        // and then apply the 68.2x divisor.
+        // The default PricingConfig has an empty model list, so derived-cost
+        // calculation cannot resolve model prices. We write a temp config with
+        // model prices so resolve_model_price() can find claude-opus-4-7.
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.as_file()
+            .write_all(
+                br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "claude-opus-4-7"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+"#,
+            )
+            .unwrap();
+
+        // Save current config, then override with temp config
+        let prev_config = get_config();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap());
+        reload();
+
+        let mut record = make_record("claude-code", "FreeModel", "claude-opus-4-7", 10_000, 0.0);
+        record.input_tokens = 5_000;
+        record.output_tokens = 5_000;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        let cost = display_cost(&record);
+        // claude-opus-4-7: input=$5/M, output=$25/M
+        // usd = 5000*5/1M + 5000*25/1M = 0.025 + 0.125 = 0.15
+        // cny = 0.15 * 6.82 / 68.2 = 0.015
+        let usd = 5_000.0 * 5.0 / 1_000_000.0 + 5_000.0 * 25.0 / 1_000_000.0;
+        let expected = usd * 6.82 / 68.2;
+        assert!(
+            cost > 0.0,
+            "FreeModel claude-code record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 0.001,
+            "FreeModel claude-code cost should use divisor, expected {}, got {}",
+            expected,
+            cost
+        );
+
+        // Restore previous config by writing it to a temp file and reloading
+        let restore_tmp = tempfile::NamedTempFile::new().unwrap();
+        let restore_toml = toml::to_string(&prev_config).unwrap();
+        restore_tmp
+            .as_file()
+            .write_all(restore_toml.as_bytes())
+            .unwrap();
+        std::env::set_var("PRICING_CONFIG", restore_tmp.path().to_str().unwrap());
+        reload();
+
+        // Restore env var
+        match prev_env {
+            Some(v) => std::env::set_var("PRICING_CONFIG", v),
+            None => std::env::remove_var("PRICING_CONFIG"),
+        }
     }
 }

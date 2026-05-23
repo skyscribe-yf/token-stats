@@ -17,6 +17,9 @@ opencode_divisor = 6.0
 # Ainaba 折扣：实际成本 = 原始 cost / 40
 ainaba_divisor = 40.0
 
+# FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.82 / 0.1 = 68.2
+freemodel_divisor = 68.2
+
 # 模型价格（USD per 1_000_000 tokens）
 # 用于 codex/claude-code 等无原始 cost 的源，从 token 用量计算
 # cache_write 对 OpenAI 模型等于 input（首次缓存按正常输入计费）
