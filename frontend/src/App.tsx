@@ -47,11 +47,10 @@ import {
   type TimePreset,
 } from "./lib/timeRange";
 
-import { TopBar } from "./components/TopBar";
+import { TopBar, type SectionId } from "./components/TopBar";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { GlanceBand } from "./components/GlanceBand";
-import { SectionNav, type SectionId } from "./components/SectionNav";
 import {
   UsageSection,
   type ChartMetricKey,
@@ -783,9 +782,11 @@ export default function App() {
         loading={loading}
         onRefresh={handleManualRefresh}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        activeSection={activeSection}
+        onSectionSelect={handleSectionSelect}
       />
 
-      <div className="flex">
+      <div className="flex items-start">
         {showSettings ? (
           <SettingsDrawer
             open={showSettings}
@@ -844,11 +845,6 @@ export default function App() {
                   quotaLoading || xunfeiLoading || ainaibaCreditLoading
                 }
                 onChipClick={handleQuotaChipClick}
-              />
-
-              <SectionNav
-                active={activeSection}
-                onSelect={handleSectionSelect}
               />
 
               <UsageSection
