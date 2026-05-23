@@ -64,7 +64,7 @@ export function Sidebar({
       <aside
         className={`w-52 shrink-0 bg-white border-r border-slate-200 flex flex-col h-[calc(100vh-2.75rem)] sticky top-11 z-30 transition-transform ${
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-        } lg:static lg:translate-x-0 max-lg:fixed max-lg:top-11 max-lg:left-0`}
+        } lg:translate-x-0 max-lg:fixed max-lg:top-11 max-lg:left-0`}
       >
         <div className="lg:hidden flex items-center justify-end px-3 py-1 border-b border-slate-100">
           <button
