@@ -340,6 +340,12 @@ export function RequestsSection({
                 </th>
                 <th
                   className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  onClick={() => handleSort("output_ratio")}
+                >
+                  输出比{sortIndicator("output_ratio")}
+                </th>
+                <th
+                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
                   onClick={() => handleSort("cost")}
                 >
                   费用{sortIndicator("cost")}
@@ -409,6 +415,19 @@ export function RequestsSection({
                           }`}
                         >
                           {formatPercent(vendorCacheHit)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span
+                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                            vendorSummary.output_ratio > 20
+                              ? "bg-amber-100 text-amber-700"
+                              : vendorSummary.output_ratio < 5
+                                ? "bg-slate-100 text-slate-500"
+                                : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {formatPercent(vendorSummary.output_ratio)}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right font-semibold text-slate-700">
@@ -497,6 +516,19 @@ export function RequestsSection({
                                   {formatPercent(ms.cache_hit_ratio)}
                                 </span>
                               </td>
+                              <td className="px-3 py-2 text-right">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                    ms.output_ratio > 20
+                                      ? "bg-amber-100 text-amber-700"
+                                      : ms.output_ratio < 5
+                                        ? "bg-slate-100 text-slate-500"
+                                        : "bg-slate-100 text-slate-600"
+                                  }`}
+                                >
+                                  {formatPercent(ms.output_ratio)}
+                                </span>
+                              </td>
                               <td className="px-3 py-2 text-right text-slate-600">
                                 {formatCost(ms.cost)}
                               </td>
@@ -553,6 +585,26 @@ export function RequestsSection({
                                       {formatPercent(source.cache_hit_ratio)}
                                     </span>
                                   </td>
+                                  <td className="px-3 py-2 text-right">
+                                    {(() => {
+                                      const ratio = source.total_tokens > 0
+                                        ? (source.output_tokens / source.total_tokens) * 100
+                                        : 0;
+                                      return (
+                                        <span
+                                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                            ratio > 20
+                                              ? "bg-amber-100 text-amber-700"
+                                              : ratio < 5
+                                                ? "bg-slate-100 text-slate-500"
+                                                : "bg-slate-100 text-slate-600"
+                                          }`}
+                                        >
+                                          {formatPercent(ratio)}
+                                        </span>
+                                      );
+                                    })()}
+                                  </td>
                                   <td className="px-3 py-2 text-right text-slate-600">
                                     {formatCost(source.cost)}
                                   </td>
@@ -604,6 +656,19 @@ export function RequestsSection({
                       {formatPercent(pivotSummary.cache_hit_ratio)}
                     </span>
                   </td>
+                  <td className="px-3 py-2 text-right">
+                    <span
+                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        pivotSummary.output_ratio > 20
+                          ? "bg-amber-100 text-amber-700"
+                          : pivotSummary.output_ratio < 5
+                            ? "bg-slate-100 text-slate-500"
+                            : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {formatPercent(pivotSummary.output_ratio)}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-right font-bold text-slate-800">
                     {formatCost(pivotSummary.cost)}
                   </td>
@@ -651,6 +716,7 @@ export function RequestsSection({
                 <th className="px-3 py-2 text-right font-medium">缓存</th>
                 <th className="px-3 py-2 text-right font-medium">合计</th>
                 <th className="px-3 py-2 text-right font-medium">缓存命中</th>
+                <th className="px-3 py-2 text-right font-medium">输出比</th>
                 <th className="px-3 py-2 text-right font-medium">费用</th>
               </tr>
             </thead>
@@ -706,6 +772,26 @@ export function RequestsSection({
                     >
                       {formatPercent(r.cache_hit_ratio)}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {(() => {
+                      const ratio = r.total_tokens > 0
+                        ? (r.output_tokens / r.total_tokens) * 100
+                        : 0;
+                      return (
+                        <span
+                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                            ratio > 20
+                              ? "bg-amber-100 text-amber-700"
+                              : ratio < 5
+                                ? "bg-slate-100 text-slate-500"
+                                : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {formatPercent(ratio)}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-600">
                     {formatCost(r.cost, r.source)}
