@@ -305,8 +305,6 @@ export default function App() {
   // Subscription settings & alerts
   const [subscriptionSettings, setSubscriptionSettings] = useState<SubscriptionSettings | null>(null);
   const [showSubscriptionSettings, setShowSubscriptionSettings] = useState(false);
-  const [alertItems, setAlertItems] = useState<AlertItem[]>([]);
-  const [showAlertModal, setShowAlertModal] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
@@ -646,8 +644,8 @@ export default function App() {
   }, []);
 
   // ─── Subscription Alert Checking ──────────────────────────────────────────
-  useEffect(() => {
-    if (!quota && !xunfei && !ainaibaCredit) return;
+  const alertItems = useMemo(() => {
+    if (!quota && !xunfei && !ainaibaCredit) return [];
 
     const alerts: AlertItem[] = [];
 
@@ -773,13 +771,12 @@ export default function App() {
       }
     }
 
-    // Filter out dismissed alerts
-    const newAlerts = alerts.filter((a) => !dismissedAlerts.has(a.id));
-    setAlertItems(newAlerts);
-    if (newAlerts.length > 0) {
-      setShowAlertModal(true);
-    }
+    return alerts.filter((a) => !dismissedAlerts.has(a.id));
   }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
+
+  // Show alert modal when there are undismissed alerts
+  // (derived from alertItems, not set in an effect to avoid cascading renders)
+  const showAlertModal = alertItems.length > 0 && !showSubscriptionSettings;
 
   // Fetch hourly stats whenever main filters change
   useEffect(() => {
@@ -1412,7 +1409,7 @@ export default function App() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-bold text-slate-800">⚠️ 订阅提醒</h2>
               <button onClick={() => {
-                setShowAlertModal(false);
+
                 setDismissedAlerts(prev => {
                   const next = new Set(prev);
                   alertItems.forEach(a => next.add(a.id));
@@ -1440,7 +1437,7 @@ export default function App() {
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => {
-                setShowAlertModal(false);
+
                 setDismissedAlerts(prev => {
                   const next = new Set(prev);
                   alertItems.forEach(a => next.add(a.id));

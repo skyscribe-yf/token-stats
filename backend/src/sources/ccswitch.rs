@@ -51,9 +51,11 @@ impl CcSwitchSource {
 
         // Build provider_id → name mapping
         let mut provider_names: HashMap<String, String> = HashMap::new();
+        // Build app_type → active provider name mapping (is_current = 1)
+        let mut active_provider_by_app: HashMap<String, String> = HashMap::new();
         {
             let mut stmt =
-                match conn.prepare("SELECT id, name FROM providers WHERE app_type = 'claude'") {
+                match conn.prepare("SELECT id, name, app_type, is_current FROM providers") {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::warn!("Failed to query providers: {}", e);
@@ -63,17 +65,24 @@ impl CcSwitchSource {
             let rows = stmt.query_map([], |row| {
                 let id: String = row.get(0)?;
                 let name: String = row.get(1)?;
-                Ok((id, name))
+                let app_type: String = row.get(2)?;
+                let is_current: bool = row.get(3)?;
+                Ok((id, name, app_type, is_current))
             });
             match rows {
                 Ok(r) => {
-                    for (id, name) in r.flatten() {
-                        provider_names.insert(id, name);
+                    for (id, name, app_type, is_current) in r.flatten() {
+                        provider_names.insert(id.clone(), name.clone());
+                        if is_current {
+                            active_provider_by_app.insert(app_type, name);
+                        }
                     }
                 }
                 Err(e) => tracing::warn!("Failed to iterate providers: {}", e),
             }
         }
+
+        tracing::info!("cc-switch active providers: {:?}", active_provider_by_app);
 
         let mut records = Vec::new();
         let sql = "SELECT request_id, provider_id, model, request_model, \
@@ -142,9 +151,21 @@ impl CcSwitchSource {
                     }
                     .to_string();
 
+                    let app_type_for_lookup = match data_source.as_str() {
+                        "session_log" => "claude",
+                        "codex_session" => "codex",
+                        _ => "claude",
+                    };
+
                     let provider =
                         if provider_id.starts_with("_session") || provider_id == "_codex_session" {
-                            super::resolve_provider_from_model(&model)
+                            // For session-based entries, the provider_id is generic ("_session").
+                            // Try the currently active provider for this app_type first,
+                            // falling back to model-based resolution.
+                            active_provider_by_app
+                                .get(app_type_for_lookup)
+                                .cloned()
+                                .unwrap_or_else(|| super::resolve_provider_from_model(&model))
                         } else {
                             provider_names
                                 .get(&provider_id)
@@ -193,5 +214,65 @@ impl CcSwitchSource {
         }
 
         records
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_provider_for_session_with_active_provider() {
+        // Simulate: active_provider_by_app = {"claude": "FreeModel"}
+        let mut active_provider_by_app: HashMap<String, String> = HashMap::new();
+        active_provider_by_app.insert("claude".to_string(), "FreeModel".to_string());
+
+        let model = "claude-opus-4-7";
+        let provider_id = "_session";
+        let data_source = "session_log";
+
+        let app_type_for_lookup = match data_source {
+            "session_log" => "claude",
+            "codex_session" => "codex",
+            _ => "claude",
+        };
+
+        let provider = if provider_id.starts_with("_session") || provider_id == "_codex_session" {
+            active_provider_by_app
+                .get(app_type_for_lookup)
+                .cloned()
+                .unwrap_or_else(|| super::super::resolve_provider_from_model(model))
+        } else {
+            "fallback".to_string()
+        };
+
+        assert_eq!(provider, "FreeModel");
+    }
+
+    #[test]
+    fn test_resolve_provider_for_session_without_active_provider() {
+        // No active provider: fall back to resolve_provider_from_model
+        let active_provider_by_app: HashMap<String, String> = HashMap::new();
+
+        let model = "claude-opus-4-7";
+        let provider_id = "_session";
+        let data_source = "session_log";
+
+        let app_type_for_lookup = match data_source {
+            "session_log" => "claude",
+            "codex_session" => "codex",
+            _ => "claude",
+        };
+
+        let provider = if provider_id.starts_with("_session") || provider_id == "_codex_session" {
+            active_provider_by_app
+                .get(app_type_for_lookup)
+                .cloned()
+                .unwrap_or_else(|| super::super::resolve_provider_from_model(model))
+        } else {
+            "fallback".to_string()
+        };
+
+        assert_eq!(provider, "anthropic");
     }
 }

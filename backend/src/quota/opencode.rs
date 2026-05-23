@@ -24,19 +24,19 @@ fn parse_resets_in(resets_in: &str) -> Option<Duration> {
         if let Ok(value) = tokens[i].parse::<i64>() {
             let unit = tokens[i + 1].to_lowercase();
             if unit.starts_with("day") {
-                total = total + Duration::days(value);
+                total += Duration::days(value);
                 found = true;
                 i += 2;
             } else if unit.starts_with("hour") {
-                total = total + Duration::hours(value);
+                total += Duration::hours(value);
                 found = true;
                 i += 2;
             } else if unit.starts_with("minute") {
-                total = total + Duration::minutes(value);
+                total += Duration::minutes(value);
                 found = true;
                 i += 2;
             } else if unit.starts_with("second") {
-                total = total + Duration::seconds(value);
+                total += Duration::seconds(value);
                 found = true;
                 i += 2;
             } else {
@@ -48,7 +48,11 @@ fn parse_resets_in(resets_in: &str) -> Option<Duration> {
         }
     }
 
-    if found { Some(total) } else { None }
+    if found {
+        Some(total)
+    } else {
+        None
+    }
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -306,8 +310,8 @@ fn extract_usage_entries(text: &str) -> Vec<QuotaOpenCodeUsageEntry> {
 
                     // Read until the next usage keyword or end of string
                     let resets_in = read_until_next_keyword(reset_text);
-                    let reset_at = parse_resets_in(&resets_in)
-                        .map(|dur| (Utc::now() + dur).to_rfc3339());
+                    let reset_at =
+                        parse_resets_in(&resets_in).map(|dur| (Utc::now() + dur).to_rfc3339());
 
                     entries.push(QuotaOpenCodeUsageEntry {
                         usage_type: keyword.to_string(),

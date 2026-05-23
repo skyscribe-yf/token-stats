@@ -86,6 +86,8 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         "deepseek-v4-pro" | "deepseek-v4-flash" => "deepseek".to_string(),
         "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" => "openai".to_string(),
         "glm-5.1" => "opencode-go".to_string(),
+        "sonnet" | "haiku" => "anthropic".to_string(),
+        _ if model.starts_with("claude-") => "anthropic".to_string(),
         _ => model.to_string(),
     }
 }
@@ -124,4 +126,47 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
     }
 
     all_records
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_claude_model_to_anthropic() {
+        assert_eq!(resolve_provider_from_model("claude-opus-4-7"), "anthropic");
+        assert_eq!(
+            resolve_provider_from_model("claude-sonnet-4-6"),
+            "anthropic"
+        );
+        assert_eq!(resolve_provider_from_model("claude-haiku-4-5"), "anthropic");
+        assert_eq!(
+            resolve_provider_from_model("claude-3-5-sonnet-20241022"),
+            "anthropic"
+        );
+    }
+
+    #[test]
+    fn resolve_shorthand_claude_models() {
+        assert_eq!(resolve_provider_from_model("sonnet"), "anthropic");
+        assert_eq!(resolve_provider_from_model("haiku"), "anthropic");
+    }
+
+    #[test]
+    fn resolve_existing_providers_unchanged() {
+        assert_eq!(resolve_provider_from_model("kimi-for-coding"), "kimi");
+        assert_eq!(resolve_provider_from_model("astron-code-latest"), "xunfei");
+        assert_eq!(resolve_provider_from_model("mimo-v2.5-pro"), "xiaomi-mimo");
+        assert_eq!(resolve_provider_from_model("deepseek-v4-pro"), "deepseek");
+        assert_eq!(resolve_provider_from_model("gpt-5.5"), "openai");
+        assert_eq!(resolve_provider_from_model("glm-5.1"), "opencode-go");
+    }
+
+    #[test]
+    fn resolve_unknown_model_returns_model_name() {
+        assert_eq!(
+            resolve_provider_from_model("some-unknown-model"),
+            "some-unknown-model"
+        );
+    }
 }
