@@ -80,6 +80,13 @@ Each button updates the relevant `Set<string>` in `App.tsx` via existing callbac
 
 **Computation:** Add `output_ratio` to `PivotSummary` and to source-detail sort values. `getSortValue` learns a new `output_ratio` `SortColumn` variant.
 
+**Pre-verified finding (from `usage.jsonl` analysis):** Output ratios for deepseek-v4-pro records are nearly identical across sources (0.33%–0.88%) — so the user's hypothesis that output ratio drives the avg-cost spread is incorrect. The real causes are:
+- `source=opencode` records get the 6× `opencode_divisor` applied + USD→CNY conversion (≈ 1.14× of original USD).
+- `pi/deepseek` records store cost in CNY directly (no divisor).
+- 117 records have cost=0 entirely (suppressing their per-call avg).
+
+The column still belongs in the design — it gives transparency for future investigations and is consistent with the requested feature — but the user should know the diagnosis already.
+
 **UI:**
 - New column in the pivot table titled "输出比" between the existing "缓存命中" and "费用" columns.
 - Same column in the detailed-requests table.
