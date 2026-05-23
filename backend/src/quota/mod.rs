@@ -7,8 +7,9 @@
 pub mod kimi;
 pub mod opencode;
 pub mod types;
+pub mod xiaomi_mimo;
 
-pub use types::{KimiQuotaStatus, OpenCodeQuotaStatus, QuotaResponse};
+pub use types::{KimiQuotaStatus, OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus};
 
 use serde::de;
 
@@ -106,6 +107,11 @@ impl QuotaFetcher {
     /// Fetch OpenCode-go **EX** workspace subscription/quota info.
     pub async fn fetch_opencode_quota_ex(&self) -> OpenCodeQuotaStatus {
         opencode::fetch_opencode_quota_ex(&self.client).await
+    }
+
+    /// Fetch Xiaomi MiMo TP token plan usage.
+    pub async fn fetch_xiaomi_mimo_quota(&self) -> XiaomiMiMoQuotaStatus {
+        xiaomi_mimo::fetch_xiaomi_mimo_quota(&self.client).await
     }
 }
 

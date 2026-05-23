@@ -205,12 +205,38 @@ export interface OpenCodeQuotaStatus {
   error: string | null;
 }
 
+// ─── Xiaomi MiMo TP Quota ────────────────────────────────────────────────────
+
+export interface XiaomiMiMoUsageEntry {
+  name: string;
+  used: number;
+  limit: number;
+  percent: number;
+}
+
+export interface XiaomiMiMoQuotaData {
+  entries: XiaomiMiMoUsageEntry[];
+  month_percent: number;
+  plan_name: string;
+  plan_code: string;
+  current_period_end: string | null;
+  expired: boolean;
+  enable_auto_renew: boolean;
+}
+
+export interface XiaomiMiMoQuotaStatus {
+  available: boolean;
+  data: XiaomiMiMoQuotaData | null;
+  error: string | null;
+}
+
 // ─── Unified quota response ───────────────────────────────────────────────────
 
 export interface QuotaResponse {
   kimi: KimiQuotaStatus | null;
   opencode_go: OpenCodeQuotaStatus | null;
   opencode_go_ex: OpenCodeQuotaStatus | null;
+  xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
 }
 
 export async function fetchQuota(): Promise<QuotaResponse> {

@@ -11,6 +11,7 @@ import type {
   AinaibaCreditResponse,
   OpenCodeQuotaStatus,
   KimiQuotaStatus,
+  XiaomiMiMoQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
 
@@ -470,6 +471,69 @@ function OpenCodeCard({
   );
 }
 
+function XiaomiMiMoCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: XiaomiMiMoQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-xiaomi-mimo";
+  const flash = useHighlightFlash(highlightId, cardId);
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="Xiaomi MiMo TP"
+        suffix="xiaomi.com"
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && status.data ? (
+        <>
+          <div className="flex items-center gap-2 text-[11px] mb-1">
+            <span className="font-medium text-slate-600">
+              {status.data.plan_name || status.data.plan_code}
+            </span>
+            {status.data.enable_auto_renew && (
+              <span className="px-1 py-0 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                自动续费
+              </span>
+            )}
+          </div>
+          <div className="space-y-1">
+            {status.data.entries.map((entry) => (
+              <ProgressBar
+                key={entry.name}
+                label={entry.name === "plan_total_token" ? "总配额" : entry.name}
+                used={entry.used}
+                limit={entry.limit}
+              />
+            ))}
+          </div>
+          {status.data.current_period_end && (
+            <div className="mt-1 pt-1 border-t border-slate-100 text-[10px] text-slate-500">
+              到期 {status.data.current_period_end.split(" ")[0]}
+            </div>
+          )}
+          <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-[10px] text-amber-700">
+              ⚠️ 此价格为估算值，需根据实际使用情况调整
+            </p>
+          </div>
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function SkeletonBars() {
   return (
     <div className="space-y-1.5">
@@ -513,6 +577,11 @@ export function QuotasSection({
           loading={quotaLoading}
           highlightId={highlightCardId}
           subscriptionSettings={subscriptionSettings}
+        />
+        <XiaomiMiMoCard
+          status={quota?.xiaomi_mimo ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
         />
         <OpenCodeCard
           status={quota?.opencode_go ?? null}
