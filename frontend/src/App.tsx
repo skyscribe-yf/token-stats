@@ -237,13 +237,9 @@ export default function App() {
     return [...new Set(rawModels.map(getDisplayModel))].sort();
   }, [stats, filters.models]);
 
-  const pivotModelOptions = useMemo(
-    () => [...new Set(filters.models.map(getDisplayModel))].sort(),
-    [filters.models]
-  );
   const effectiveSelectedPivotModels = reconcileSelectedModels(
     selectedPivotModels,
-    pivotModelOptions
+    filteredModels
   );
   const modelFilter = useMemo(() => {
     if (effectiveSelectedPivotModels.size === 0) return undefined;
@@ -898,7 +894,7 @@ export default function App() {
                 hideFreeModels={hideFreeModels}
                 page={page}
                 onPageChange={setPage}
-                pivotModelOptions={pivotModelOptions}
+                pivotModelOptions={filteredModels}
                 selectedPivotModels={effectiveSelectedPivotModels}
                 onSelectedPivotModelsChange={setSelectedPivotModels}
                 advancedModels={advancedModels}

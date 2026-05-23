@@ -274,10 +274,10 @@ test("expandDisplayModels expands merged display models to raw API names", () =>
   ]);
 });
 
-test("reconcileSelectedModels drops display models not present in available options", () => {
+test("reconcileSelectedModels drops models absent from the current visible slice even if globally known", () => {
   const reconciled = reconcileSelectedModels(
-    new Set(["kimi-k2.6", "missing-model", "gpt-4.1"]),
-    ["kimi-k2.6", "gpt-4.1", "claude-sonnet-4"]
+    new Set(["kimi-k2.6", "gpt-4.1"]),
+    ["gpt-4.1", "claude-sonnet-4"]
   );
-  assert.deepEqual([...reconciled], ["kimi-k2.6", "gpt-4.1"]);
+  assert.deepEqual([...reconciled], ["gpt-4.1"]);
 });
