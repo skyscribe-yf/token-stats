@@ -171,6 +171,7 @@ pub struct QuotaResponse {
     pub kimi: Option<KimiQuotaStatus>,
     pub opencode_go: Option<OpenCodeQuotaStatus>,
     pub opencode_go_ex: Option<OpenCodeQuotaStatus>,
+    pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,5 +185,36 @@ pub struct KimiQuotaStatus {
 pub struct OpenCodeQuotaStatus {
     pub available: bool,
     pub data: Option<QuotaOpenCode>,
+    pub error: Option<String>,
+}
+
+// ─── Xiaomi MiMo TP types ────────────────────────────────────────────────────
+
+/// Single usage entry from Xiaomi MiMo TP platform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XiaomiMiMoUsageEntry {
+    pub name: String,
+    pub used: i64,
+    pub limit: i64,
+    pub percent: f64,
+}
+
+/// Xiaomi MiMo TP quota data for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XiaomiMiMoQuotaData {
+    pub entries: Vec<XiaomiMiMoUsageEntry>,
+    pub month_percent: f64,
+    pub plan_name: String,
+    pub plan_code: String,
+    pub current_period_end: Option<String>,
+    pub expired: bool,
+    pub enable_auto_renew: bool,
+}
+
+/// Xiaomi MiMo TP quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XiaomiMiMoQuotaStatus {
+    pub available: bool,
+    pub data: Option<XiaomiMiMoQuotaData>,
     pub error: Option<String>,
 }

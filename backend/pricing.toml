@@ -11,6 +11,10 @@ xunfei_per_call = 0.002211111111
 # Kimi CLI：199 元 / 28 亿 Token（2_800_000_000）
 kimi_per_token = 0.000000071071429
 
+# Xiaomi MiMo TP：99 元 / 20 亿 Token（2_000_000_000）
+# 注意：此价格为估算值，需根据实际使用情况调整
+xiaomi_mimo_tp_per_token = 0.0000000495
+
 # OpenCode 折扣：官方 10 美金可用 60 美金额度，实际成本 = 原始 cost / 6
 opencode_divisor = 6.0
 

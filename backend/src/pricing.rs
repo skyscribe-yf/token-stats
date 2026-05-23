@@ -20,6 +20,7 @@ use std::sync::{Mutex, OnceLock};
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
     pub kimi_per_token: f64,
+    pub xiaomi_mimo_tp_per_token: f64,
     pub opencode_divisor: f64,
     pub ainaba_divisor: f64,
     #[serde(default)]
@@ -54,6 +55,7 @@ impl Default for PricingConfig {
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
                 kimi_per_token: 199.0 / 2_800_000_000.0,
+                xiaomi_mimo_tp_per_token: 99.0 / 2_000_000_000.0,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
                 freemodel_divisor: 68.2,
@@ -246,6 +248,12 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
     //    provider to "kimi" and no cost was recorded by the upstream tool.
     if record.provider == "kimi" && record.cost == 0.0 {
         return record.total_tokens as f64 * cfg.special.kimi_per_token;
+    }
+
+    // 2b. Xiaomi MiMo TP provider with zero stored cost: per-token estimate in CNY
+    //     Similar to Kimi subscription model: 99 元 / 20 亿 Token (2_000_000_000)
+    if record.provider == "xiaomi-mimo-tp" && record.cost == 0.0 {
+        return record.total_tokens as f64 * cfg.special.xiaomi_mimo_tp_per_token;
     }
 
     // 3. OpenCode source (direct from OpenCode DB): cost is in USD
@@ -518,5 +526,39 @@ cache_write = 6.25
             Some(v) => std::env::set_var("PRICING_CONFIG", v),
             None => std::env::remove_var("PRICING_CONFIG"),
         }
+    }
+
+    #[test]
+    fn xiaomi_mimo_tp_zero_cost_uses_per_token_estimate() {
+        // xiaomi-mimo-tp records with cost=0 and provider="xiaomi-mimo-tp"
+        let record = make_record("pi", "xiaomi-mimo-tp", "mimo-v2.5-pro", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = 1_000_000.0 * PricingConfig::default().special.xiaomi_mimo_tp_per_token;
+        assert!(
+            cost > 0.0,
+            "xiaomi-mimo-tp record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_tp_with_stored_cost_uses_stored_cost() {
+        // Records with provider="xiaomi-mimo-tp" but cost>0 should use the stored cost path
+        let record = make_record("pi", "xiaomi-mimo-tp", "mimo-v2.5-pro", 1_000_000, 0.05);
+        let cost = display_cost(&record);
+        // cost is in USD, so should be converted to CNY (0.05 * 6.82)
+        let expected = 0.05 * PricingConfig::default().usd_to_cny;
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "xiaomi-mimo-tp record with stored cost should use USD→CNY, expected {}, got {}",
+            expected,
+            cost
+        );
     }
 }
