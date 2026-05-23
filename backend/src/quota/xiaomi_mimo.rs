@@ -126,18 +126,9 @@ pub async fn fetch_xiaomi_mimo_quota(client: &Client) -> XiaomiMiMoQuotaStatus {
                     .and_then(|n| n.as_str())
                     .unwrap_or("")
                     .to_string();
-                let used = item
-                    .get("used")
-                    .and_then(|u| u.as_i64())
-                    .unwrap_or(0);
-                let limit = item
-                    .get("limit")
-                    .and_then(|l| l.as_i64())
-                    .unwrap_or(0);
-                let percent = item
-                    .get("percent")
-                    .and_then(|p| p.as_f64())
-                    .unwrap_or(0.0);
+                let used = item.get("used").and_then(|u| u.as_i64()).unwrap_or(0);
+                let limit = item.get("limit").and_then(|l| l.as_i64()).unwrap_or(0);
+                let percent = item.get("percent").and_then(|p| p.as_f64()).unwrap_or(0.0);
 
                 if limit > 0 {
                     entries.push(XiaomiMiMoUsageEntry {
@@ -168,8 +159,14 @@ pub async fn fetch_xiaomi_mimo_quota(client: &Client) -> XiaomiMiMoQuotaStatus {
         data: Some(super::types::XiaomiMiMoQuotaData {
             entries,
             month_percent,
-            plan_name: plan_detail.as_ref().map(|p| p.0.clone()).unwrap_or_default(),
-            plan_code: plan_detail.as_ref().map(|p| p.1.clone()).unwrap_or_default(),
+            plan_name: plan_detail
+                .as_ref()
+                .map(|p| p.0.clone())
+                .unwrap_or_default(),
+            plan_code: plan_detail
+                .as_ref()
+                .map(|p| p.1.clone())
+                .unwrap_or_default(),
             current_period_end: plan_detail.as_ref().and_then(|p| p.2.clone()),
             expired: plan_detail.as_ref().map(|p| p.3).unwrap_or(false),
             enable_auto_renew: plan_detail.as_ref().map(|p| p.4).unwrap_or(false),
@@ -234,5 +231,11 @@ async fn fetch_plan_detail(
         .and_then(|a| a.as_bool())
         .unwrap_or(false);
 
-    Some((plan_name, plan_code, current_period_end, expired, enable_auto_renew))
+    Some((
+        plan_name,
+        plan_code,
+        current_period_end,
+        expired,
+        enable_auto_renew,
+    ))
 }
