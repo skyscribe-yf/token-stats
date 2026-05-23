@@ -37,7 +37,7 @@ import {
 } from "./lib/utils";
 import {
   expandDisplayModels,
-  getDisplayModel,
+  getDisplayModelOptions,
   reconcileSelectedModels,
 } from "./lib/pivotTable";
 import {
@@ -192,6 +192,7 @@ export default function App() {
   const [selectedPivotModels, setSelectedPivotModels] = useState<Set<string>>(
     new Set()
   );
+  const [sliceModelOptions, setSliceModelOptions] = useState<string[]>([]);
 
   // ─── Derived ──────────────────────────────────────────────────────────
   const tzOffset = useMemo(() => -new Date().getTimezoneOffset(), []);
@@ -234,12 +235,15 @@ export default function App() {
     const rawModels = stats?.by_model
       ? [...new Set(stats.by_model.map((m) => m.model))]
       : filters.models;
-    return [...new Set(rawModels.map(getDisplayModel))].sort();
+    return getDisplayModelOptions(rawModels);
   }, [stats, filters.models]);
+
+  const availableSliceModels =
+    sliceModelOptions.length > 0 ? sliceModelOptions : filteredModels;
 
   const effectiveSelectedPivotModels = reconcileSelectedModels(
     selectedPivotModels,
-    filteredModels
+    availableSliceModels
   );
   const modelFilter = useMemo(() => {
     if (effectiveSelectedPivotModels.size === 0) return undefined;
@@ -251,6 +255,7 @@ export default function App() {
     if (!appliedRange.from || !appliedRange.to) return;
     if (hasEmptyRequiredSelection) {
       setStats(emptyStatsResponse());
+      setSliceModelOptions([]);
       setRequests(emptyRequests(1));
       setPage(1);
       setLastUpdatedAt(new Date());
@@ -259,19 +264,36 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [s, f] = await Promise.all([
-        fetchStats(
-          appliedRange.from,
-          appliedRange.to,
-          sourceFilter,
-          vendorFilter,
-          tzOffset,
-          resolution,
-          modelFilter
-        ),
+      const filteredStatsPromise = fetchStats(
+        appliedRange.from,
+        appliedRange.to,
+        sourceFilter,
+        vendorFilter,
+        tzOffset,
+        resolution,
+        modelFilter
+      );
+      const sliceStatsPromise = modelFilter
+        ? fetchStats(
+            appliedRange.from,
+            appliedRange.to,
+            sourceFilter,
+            vendorFilter,
+            tzOffset,
+            resolution
+          )
+        : filteredStatsPromise;
+      const [s, sliceStats, f] = await Promise.all([
+        filteredStatsPromise,
+        sliceStatsPromise,
         fetchFilters(),
       ]);
       setStats(s);
+      setSliceModelOptions(
+        getDisplayModelOptions(
+          sliceStats.by_model.map((modelStats) => modelStats.model)
+        )
+      );
       setFilters(f);
       setLastUpdatedAt(new Date());
       if (!filtersInitializedRef.current) {
@@ -834,7 +856,7 @@ export default function App() {
             onVendorToggle={handleVendorToggle}
             onSubscriptionGroupToggle={handleSubscriptionGroupToggle}
             onVendorGroupToggle={handleVendorGroupToggle}
-            models={filteredModels}
+            models={availableSliceModels}
             selectedModels={effectiveSelectedPivotModels}
             onSelectedModelsChange={setSelectedPivotModels}
             advancedModels={advancedModels}
@@ -894,7 +916,7 @@ export default function App() {
                 hideFreeModels={hideFreeModels}
                 page={page}
                 onPageChange={setPage}
-                pivotModelOptions={filteredModels}
+                pivotModelOptions={availableSliceModels}
                 selectedPivotModels={effectiveSelectedPivotModels}
                 onSelectedPivotModelsChange={setSelectedPivotModels}
                 advancedModels={advancedModels}

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildPivotTree,
   expandDisplayModels,
+  getDisplayModelOptions,
   getSortValue,
   reconcileSelectedModels,
 } from "./pivotTable.ts";
@@ -280,4 +281,14 @@ test("reconcileSelectedModels drops models absent from the current visible slice
     ["gpt-4.1", "claude-sonnet-4"]
   );
   assert.deepEqual([...reconciled], ["gpt-4.1"]);
+});
+
+test("getDisplayModelOptions keeps the full slice model universe after display-model merging", () => {
+  const options = getDisplayModelOptions([
+    "kimi-k2.6",
+    "kimi-k2.6:high",
+    "gpt-4.1",
+    "claude-sonnet-4",
+  ]);
+  assert.deepEqual(options, ["claude-sonnet-4", "gpt-4.1", "kimi-k2.6"]);
 });

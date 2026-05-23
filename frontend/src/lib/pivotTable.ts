@@ -348,6 +348,10 @@ export function reconcileSelectedModels(
   return new Set([...selectedModels].filter((model) => available.has(model)));
 }
 
+export function getDisplayModelOptions(rawModels: readonly string[]): string[] {
+  return [...new Set(rawModels.map(getDisplayModel))].sort();
+}
+
 export function computePivotSummary(tree: PivotTreeNode[]): PivotSummary | null {
   if (tree.length === 0) return null;
   const summary = emptySummary();
