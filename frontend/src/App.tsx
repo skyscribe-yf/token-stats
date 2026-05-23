@@ -743,6 +743,11 @@ export default function App() {
     [filters.vendors]
   );
 
+  const handleSelectedPivotModelsChange = useCallback((next: Set<string>) => {
+    setSelectedPivotModels(next);
+    setPage(1);
+  }, []);
+
   const handleSectionSelect = useCallback((id: SectionId) => {
     setActiveSection(id);
     const el = document.getElementById(`section-${id}`);
@@ -858,7 +863,7 @@ export default function App() {
             onVendorGroupToggle={handleVendorGroupToggle}
             models={availableSliceModels}
             selectedModels={effectiveSelectedPivotModels}
-            onSelectedModelsChange={setSelectedPivotModels}
+            onSelectedModelsChange={handleSelectedPivotModelsChange}
             advancedModels={advancedModels}
             hideFreeModels={hideFreeModels}
             onHideFreeModelsChange={setHideFreeModels}
@@ -918,7 +923,7 @@ export default function App() {
                 onPageChange={setPage}
                 pivotModelOptions={availableSliceModels}
                 selectedPivotModels={effectiveSelectedPivotModels}
-                onSelectedPivotModelsChange={setSelectedPivotModels}
+                onSelectedPivotModelsChange={handleSelectedPivotModelsChange}
                 advancedModels={advancedModels}
                 onAdvancedModelsChange={setAdvancedModels}
               />
