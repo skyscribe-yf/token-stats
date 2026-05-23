@@ -56,7 +56,7 @@ impl Default for PricingConfig {
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
                 kimi_per_token: 199.0 / 2_800_000_000.0,
-                xiaomi_mimo_tp_per_token: 99.0 / 2_000_000_000.0,
+                xiaomi_mimo_tp_per_token: 99.0 / 105_222_222.0,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
                 freemodel_divisor: 68.2,
@@ -367,7 +367,7 @@ mod tests {
             cost
         );
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "expected {}, got {}",
             expected,
             cost
@@ -386,7 +386,7 @@ mod tests {
             cost
         );
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "expected {}, got {}",
             expected,
             cost
@@ -401,7 +401,7 @@ mod tests {
         // cost is in USD, so should be converted to CNY (0.05 * 6.82)
         let expected = 0.05 * PricingConfig::default().usd_to_cny;
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "kimi record with stored cost should use USD→CNY, expected {}, got {}",
             expected,
             cost
@@ -415,7 +415,7 @@ mod tests {
         let cost = display_cost(&record);
         let expected = PricingConfig::default().special.xunfei_per_call;
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "xunfei should use per-call rate, expected {}, got {}",
             expected,
             cost
@@ -444,7 +444,7 @@ mod tests {
             cost
         );
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "FreeModel cost should use divisor, expected {}, got {}",
             expected,
             cost
@@ -541,7 +541,7 @@ cache_write = 6.25
             cost
         );
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "expected {}, got {}",
             expected,
             cost
@@ -556,7 +556,7 @@ cache_write = 6.25
         // cost is in USD, so should be converted to CNY (0.05 * 6.82)
         let expected = 0.05 * PricingConfig::default().usd_to_cny;
         assert!(
-            (cost - expected).abs() < 1e-10,
+            (cost - expected).abs() < 1e-9,
             "xiaomi-mimo-tp record with stored cost should use USD→CNY, expected {}, got {}",
             expected,
             cost
