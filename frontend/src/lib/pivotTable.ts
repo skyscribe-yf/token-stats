@@ -325,6 +325,29 @@ export function getOriginalModels(display: string): string[] | null {
   return group ? group.originals : null;
 }
 
+export function expandDisplayModels(
+  selectedModels: Iterable<string>
+): string[] {
+  const expanded: string[] = [];
+  for (const model of selectedModels) {
+    const originals = getOriginalModels(model);
+    if (originals) {
+      expanded.push(...originals);
+    } else {
+      expanded.push(model);
+    }
+  }
+  return expanded;
+}
+
+export function reconcileSelectedModels(
+  selectedModels: ReadonlySet<string>,
+  availableModels: readonly string[]
+): Set<string> {
+  const available = new Set(availableModels);
+  return new Set([...selectedModels].filter((model) => available.has(model)));
+}
+
 export function computePivotSummary(tree: PivotTreeNode[]): PivotSummary | null {
   if (tree.length === 0) return null;
   const summary = emptySummary();

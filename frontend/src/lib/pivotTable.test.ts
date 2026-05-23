@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPivotTree, getSortValue } from "./pivotTable.ts";
+import {
+  buildPivotTree,
+  expandDisplayModels,
+  getSortValue,
+  reconcileSelectedModels,
+} from "./pivotTable.ts";
 import type { ModelStats, SourceDetailStats } from "../api.ts";
 
 function makeSourceDetail(overrides: Partial<SourceDetailStats> = {}): SourceDetailStats {
@@ -257,4 +262,22 @@ test("buildPivotTree handles zero total_tokens for output_ratio", () => {
   ];
   const tree = buildPivotTree(stats, "total_tokens", "desc", false);
   assert.equal(tree[0].models[0].summary.output_ratio, 0);
+});
+
+test("expandDisplayModels expands merged display models to raw API names", () => {
+  const expanded = expandDisplayModels(new Set(["kimi-k2.6", "gpt-4.1"]));
+  assert.deepEqual(expanded, [
+    "kimi-k2.6",
+    "kimi-k2.6:high",
+    "kimi-for-coding",
+    "gpt-4.1",
+  ]);
+});
+
+test("reconcileSelectedModels drops display models not present in available options", () => {
+  const reconciled = reconcileSelectedModels(
+    new Set(["kimi-k2.6", "missing-model", "gpt-4.1"]),
+    ["kimi-k2.6", "gpt-4.1", "claude-sonnet-4"]
+  );
+  assert.deepEqual([...reconciled], ["kimi-k2.6", "gpt-4.1"]);
 });

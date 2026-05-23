@@ -35,7 +35,11 @@ import {
   computeNextBillingDate,
   isWithin24Hours,
 } from "./lib/utils";
-import { getDisplayModel } from "./lib/pivotTable";
+import {
+  expandDisplayModels,
+  getDisplayModel,
+  reconcileSelectedModels,
+} from "./lib/pivotTable";
 import {
   buildCsvFilterParam,
   isEmptyAppliedSelection,
@@ -202,11 +206,6 @@ export default function App() {
     [selectedVendors, filters.vendors]
   );
 
-  const modelFilter = useMemo(() => {
-    if (selectedPivotModels.size === 0) return undefined;
-    return [...selectedPivotModels].join(",");
-  }, [selectedPivotModels]);
-
   const hasEmptySourceSelection = useMemo(
     () => isEmptyAppliedSelection(selectedSources, filters.sources),
     [selectedSources, filters.sources]
@@ -242,6 +241,14 @@ export default function App() {
     () => [...new Set(filters.models.map(getDisplayModel))].sort(),
     [filters.models]
   );
+  const effectiveSelectedPivotModels = reconcileSelectedModels(
+    selectedPivotModels,
+    pivotModelOptions
+  );
+  const modelFilter = useMemo(() => {
+    if (effectiveSelectedPivotModels.size === 0) return undefined;
+    return expandDisplayModels(effectiveSelectedPivotModels).join(",");
+  }, [effectiveSelectedPivotModels]);
 
   // ─── Data loading ─────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -832,7 +839,7 @@ export default function App() {
             onSubscriptionGroupToggle={handleSubscriptionGroupToggle}
             onVendorGroupToggle={handleVendorGroupToggle}
             models={filteredModels}
-            selectedModels={selectedPivotModels}
+            selectedModels={effectiveSelectedPivotModels}
             onSelectedModelsChange={setSelectedPivotModels}
             advancedModels={advancedModels}
             hideFreeModels={hideFreeModels}
@@ -892,7 +899,7 @@ export default function App() {
                 page={page}
                 onPageChange={setPage}
                 pivotModelOptions={pivotModelOptions}
-                selectedPivotModels={selectedPivotModels}
+                selectedPivotModels={effectiveSelectedPivotModels}
                 onSelectedPivotModelsChange={setSelectedPivotModels}
                 advancedModels={advancedModels}
                 onAdvancedModelsChange={setAdvancedModels}
