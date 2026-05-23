@@ -15,15 +15,18 @@ interface SidebarProps {
   sources: string[];
   selectedSources: ReadonlySet<string>;
   onSourceToggle: (source: string) => void;
+  onSourceGroupToggle: (selectAll: boolean) => void;
 
   vendors: string[];
   selectedVendors: ReadonlySet<string>;
   onVendorToggle: (vendor: string) => void;
   onSubscriptionGroupToggle: (selectAll: boolean) => void;
+  onVendorGroupToggle: (selectAll: boolean) => void;
 
   models: string[];
-  selectedModel: string;
-  onModelChange: (model: string) => void;
+  selectedModels: ReadonlySet<string>;
+  onSelectedModelsChange: (next: Set<string>) => void;
+  advancedModels: string[];
 
   hideFreeModels: boolean;
   onHideFreeModelsChange: (hide: boolean) => void;
@@ -39,13 +42,16 @@ export function Sidebar({
   sources,
   selectedSources,
   onSourceToggle,
+  onSourceGroupToggle,
   vendors,
   selectedVendors,
   onVendorToggle,
   onSubscriptionGroupToggle,
+  onVendorGroupToggle,
   models,
-  selectedModel,
-  onModelChange,
+  selectedModels,
+  onSelectedModelsChange,
+  advancedModels,
   hideFreeModels,
   onHideFreeModelsChange,
   onOpenSettings,
@@ -85,17 +91,20 @@ export function Sidebar({
             sources={sources}
             selectedSources={selectedSources}
             onToggle={onSourceToggle}
+            onToggleAll={onSourceGroupToggle}
           />
           <SidebarVendorList
             vendors={vendors}
             selectedVendors={selectedVendors}
             onToggle={onVendorToggle}
             onToggleSubscriptionGroup={onSubscriptionGroupToggle}
+            onToggleRegularGroup={onVendorGroupToggle}
           />
           <SidebarModelPicker
             models={models}
-            selectedModel={selectedModel}
-            onChange={onModelChange}
+            selectedModels={selectedModels}
+            onSelectedModelsChange={onSelectedModelsChange}
+            advancedModels={advancedModels}
             hideFreeModels={hideFreeModels}
             onHideFreeModelsChange={onHideFreeModelsChange}
           />

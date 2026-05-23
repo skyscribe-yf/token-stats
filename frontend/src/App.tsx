@@ -35,7 +35,7 @@ import {
   computeNextBillingDate,
   isWithin24Hours,
 } from "./lib/utils";
-import { getDisplayModel, getOriginalModels } from "./lib/pivotTable";
+import { getDisplayModel } from "./lib/pivotTable";
 import {
   buildCsvFilterParam,
   isEmptyAppliedSelection,
@@ -136,7 +136,6 @@ export default function App() {
   });
   const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState<string>("");
   const [hideFreeModels, setHideFreeModels] = useState(false);
   const [page, setPage] = useState(1);
 
@@ -239,14 +238,8 @@ export default function App() {
     return [...new Set(rawModels.map(getDisplayModel))].sort();
   }, [stats, filters.models]);
 
-  const effectiveModel = useMemo(() => {
-    if (!selectedModel) return "";
-    if (filteredModels.includes(selectedModel)) return selectedModel;
-    return "";
-  }, [selectedModel, filteredModels]);
-
   const pivotModelOptions = useMemo(
-    () => [...filters.models].sort(),
+    () => [...new Set(filters.models.map(getDisplayModel))].sort(),
     [filters.models]
   );
 
@@ -306,9 +299,7 @@ export default function App() {
       return;
     }
     try {
-      const modelParam = effectiveModel
-        ? getOriginalModels(effectiveModel)?.join(",") || effectiveModel
-        : undefined;
+      const modelParam = modelFilter;
       const r = await fetchRequests(
         appliedRange.from,
         appliedRange.to,
@@ -327,7 +318,7 @@ export default function App() {
     appliedRange.from,
     appliedRange.to,
     vendorFilter,
-    effectiveModel,
+    modelFilter,
     sourceFilter,
     page,
     tzOffset,
@@ -675,6 +666,17 @@ export default function App() {
     setPage(1);
   }, []);
 
+  const handleSourceGroupToggle = useCallback(
+    (selectAll: boolean) => {
+      setSelectedSources(() => {
+        if (selectAll) return new Set(filters.sources);
+        return new Set();
+      });
+      setPage(1);
+    },
+    [filters.sources]
+  );
+
   const handleVendorToggle = useCallback((vendor: string) => {
     setSelectedVendors((prev) => toggleInSet(prev, vendor));
     setPage(1);
@@ -698,10 +700,23 @@ export default function App() {
     [filters.vendors]
   );
 
-  const handleModelChange = useCallback((model: string) => {
-    setSelectedModel(model);
-    setPage(1);
-  }, []);
+  const handleVendorGroupToggle = useCallback(
+    (selectAll: boolean) => {
+      const regularVendors = filters.vendors.filter(
+        (v) => !["kimi", "xunfei", "opencode-go", "opencode"].includes(v)
+      );
+      setSelectedVendors((prev) => {
+        const next = new Set(prev);
+        for (const v of regularVendors) {
+          if (selectAll) next.add(v);
+          else next.delete(v);
+        }
+        return next;
+      });
+      setPage(1);
+    },
+    [filters.vendors]
+  );
 
   const handleSectionSelect = useCallback((id: SectionId) => {
     setActiveSection(id);
@@ -810,13 +825,16 @@ export default function App() {
             sources={filters.sources}
             selectedSources={selectedSources}
             onSourceToggle={handleSourceToggle}
+            onSourceGroupToggle={handleSourceGroupToggle}
             vendors={filters.vendors}
             selectedVendors={selectedVendors}
             onVendorToggle={handleVendorToggle}
             onSubscriptionGroupToggle={handleSubscriptionGroupToggle}
+            onVendorGroupToggle={handleVendorGroupToggle}
             models={filteredModels}
-            selectedModel={selectedModel}
-            onModelChange={handleModelChange}
+            selectedModels={selectedPivotModels}
+            onSelectedModelsChange={setSelectedPivotModels}
+            advancedModels={advancedModels}
             hideFreeModels={hideFreeModels}
             onHideFreeModelsChange={setHideFreeModels}
             onOpenSettings={() => setShowSettings(true)}
