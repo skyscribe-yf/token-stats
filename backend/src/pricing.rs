@@ -235,6 +235,9 @@ fn resolve_model_price<'a>(
 ///   cost is in **USD**
 /// - OpenCode DB records (source="opencode"): cost is in USD
 /// - Codex/Claude-code: no stored cost, computed from tokens using pricing.toml (USD)
+/// - Records with provider=deepseek and cost=0: derived from pricing.toml
+///   deepseek rates (USD→CNY, no divisor). Covers session-recovery records
+///   and DeepSeek platform CSV export.
 pub fn display_cost(record: &TokenRecord) -> f64 {
     let state = state_cell().lock().unwrap();
     let cfg = &state.config;
@@ -298,6 +301,24 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         }
 
         return cny;
+    }
+
+    // 4d. DeepSeek records with cost=0 (e.g. from session recovery or DeepSeek
+    //     platform CSV export). pricing.toml deepseek rates are listed as USD;
+    //     multiply by usd_to_cny to display in CNY. No divisor - the user
+    //     pays DeepSeek directly at official rates.
+    let effective_provider = record
+        .original_provider
+        .as_deref()
+        .unwrap_or(&record.provider);
+    if effective_provider == "deepseek" && record.cost == 0.0 {
+        if let Some(price) = resolve_model_price(&state, &record.model, &record.provider) {
+            let usd = record.input_tokens as f64 * price.input / 1_000_000.0
+                + record.output_tokens as f64 * price.output / 1_000_000.0
+                + record.cache_read_tokens as f64 * price.cache_read / 1_000_000.0
+                + record.cache_write_tokens as f64 * price.cache_write / 1_000_000.0;
+            return usd * cfg.usd_to_cny;
+        }
     }
 
     // 5. Derived sources without original cost: codex, claude-code, etc.
@@ -527,6 +548,70 @@ cache_write = 6.25
             Some(v) => std::env::set_var("PRICING_CONFIG", v),
             None => std::env::remove_var("PRICING_CONFIG"),
         }
+    }
+
+    #[test]
+    fn deepseek_zero_cost_computes_from_tokens_in_cny() {
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.as_file()
+            .write_all(
+                br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "deepseek-v4-pro"
+input = 0.5865
+output = 2.346
+cache_read = 0.05865
+cache_write = 0.5865
+"#,
+            )
+            .unwrap();
+
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap());
+        reload();
+
+        let mut record = make_record("deepseek-ai", "deepseek", "deepseek-v4-pro", 0, 0.0);
+        record.input_tokens = 1_000_000;
+        record.output_tokens = 100_000;
+        record.cache_read_tokens = 500_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 1_600_000;
+
+        let cny = display_cost(&record);
+
+        let usd = 1_000_000.0 * 0.5865 / 1_000_000.0
+            + 100_000.0 * 2.346 / 1_000_000.0
+            + 500_000.0 * 0.05865 / 1_000_000.0;
+        let expected = usd * 6.82;
+
+        assert!(
+            cny > 0.0,
+            "deepseek zero-cost record should compute non-zero, got {}",
+            cny
+        );
+        assert!(
+            (cny - expected).abs() < 0.001,
+            "deepseek cost mismatch: expected {}, got {}",
+            expected,
+            cny
+        );
+
+        match prev_env {
+            Some(v) => std::env::set_var("PRICING_CONFIG", v),
+            None => std::env::remove_var("PRICING_CONFIG"),
+        }
+        reload();
     }
 
     #[test]
