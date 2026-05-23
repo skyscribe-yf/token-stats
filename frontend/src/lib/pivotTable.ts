@@ -352,6 +352,18 @@ export function getDisplayModelOptions(rawModels: readonly string[]): string[] {
   return [...new Set(rawModels.map(getDisplayModel))].sort();
 }
 
+export function getAdvancedDisplayModelSelection(
+  configuredModels: readonly string[],
+  availableDisplayModels: readonly string[]
+): Set<string> {
+  const available = new Set(availableDisplayModels);
+  return new Set(
+    getDisplayModelOptions(configuredModels).filter((model) =>
+      available.has(model)
+    )
+  );
+}
+
 export function computePivotSummary(tree: PivotTreeNode[]): PivotSummary | null {
   if (tree.length === 0) return null;
   const summary = emptySummary();

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { getAdvancedDisplayModelSelection } from "../lib/pivotTable";
 
 interface SidebarModelPickerProps {
   models: string[];
@@ -46,9 +47,9 @@ export function SidebarModelPicker({
   };
 
   const applyAdvanced = () => {
-    const available = new Set(models);
-    const next = new Set(advancedModels.filter((m) => available.has(m)));
-    onSelectedModelsChange(next);
+    onSelectedModelsChange(
+      getAdvancedDisplayModelSelection(advancedModels, models)
+    );
   };
 
   return (

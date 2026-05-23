@@ -23,6 +23,7 @@ import {
 import {
   buildPivotTree,
   computePivotSummary,
+  getAdvancedDisplayModelSelection,
   getDisplayModel,
   type SortColumn,
   type SortDirection,
@@ -258,9 +259,9 @@ export function RequestsSection({
                     <div className="shrink-0 bg-white border-t border-slate-100 px-2 py-1.5 flex justify-between items-center">
                       <button
                         onClick={() => {
-                          const available = new Set(pivotModelOptions);
-                          const next = new Set(
-                            advancedModels.filter((m) => available.has(m))
+                          const next = getAdvancedDisplayModelSelection(
+                            advancedModels,
+                            pivotModelOptions
                           );
                           setPendingPivotModels(next);
                         }}

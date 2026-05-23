@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildPivotTree,
   expandDisplayModels,
+  getAdvancedDisplayModelSelection,
   getDisplayModelOptions,
   getSortValue,
   reconcileSelectedModels,
@@ -291,4 +292,20 @@ test("getDisplayModelOptions keeps the full slice model universe after display-m
     "claude-sonnet-4",
   ]);
   assert.deepEqual(options, ["claude-sonnet-4", "gpt-4.1", "kimi-k2.6"]);
+});
+
+test("getAdvancedDisplayModelSelection maps merged preset models to display options", () => {
+  const selection = getAdvancedDisplayModelSelection(
+    ["kimi-k2.6:high", "kimi-for-coding", "gpt-4.1"],
+    ["kimi-k2.6", "gpt-4.1", "claude-sonnet-4"]
+  );
+  assert.deepEqual([...selection], ["gpt-4.1", "kimi-k2.6"]);
+});
+
+test("getAdvancedDisplayModelSelection preserves non-merged preset models", () => {
+  const selection = getAdvancedDisplayModelSelection(
+    ["claude-sonnet-4"],
+    ["kimi-k2.6", "claude-sonnet-4"]
+  );
+  assert.deepEqual([...selection], ["claude-sonnet-4"]);
 });
