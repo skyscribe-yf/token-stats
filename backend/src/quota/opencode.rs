@@ -24,19 +24,19 @@ fn parse_resets_in(resets_in: &str) -> Option<Duration> {
         if let Ok(value) = tokens[i].parse::<i64>() {
             let unit = tokens[i + 1].to_lowercase();
             if unit.starts_with("day") {
-                total = total + Duration::days(value);
+                total += Duration::days(value);
                 found = true;
                 i += 2;
             } else if unit.starts_with("hour") {
-                total = total + Duration::hours(value);
+                total += Duration::hours(value);
                 found = true;
                 i += 2;
             } else if unit.starts_with("minute") {
-                total = total + Duration::minutes(value);
+                total += Duration::minutes(value);
                 found = true;
                 i += 2;
             } else if unit.starts_with("second") {
-                total = total + Duration::seconds(value);
+                total += Duration::seconds(value);
                 found = true;
                 i += 2;
             } else {
