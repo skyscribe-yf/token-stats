@@ -119,6 +119,43 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
 
     tracing::info!("Total records across all sources: {}", all_records.len());
 
+    // ── Cross-source dedup: deepseek-ai vs opencode ────────────────────
+    // deepseek-ai records imported from DeepSeek official platform exports
+    // (daily aggregates) may duplicate individual records from the OpenCode
+    // SQLite DB (source=opencode). Remove deepseek-ai records whose
+    // (date, provider, model, total_tokens) closely matches an opencode
+    // record (within 5% token count tolerance).
+    let opencode_totals: std::collections::HashMap<_, i64> = all_records
+        .iter()
+        .filter(|r| r.source == "opencode")
+        .fold(std::collections::HashMap::new(), |mut map, r| {
+            let key = (r.date.clone(), r.provider.clone(), r.model.clone());
+            *map.entry(key).or_insert(0) += r.total_tokens;
+            map
+        });
+
+    all_records.retain(|r| {
+        if r.source != "deepseek-ai" {
+            return true;
+        }
+        let key = (r.date.clone(), r.provider.clone(), r.model.clone());
+        match opencode_totals.get(&key) {
+            Some(&oc_total) if oc_total > 0 => {
+                let diff_pct = (r.total_tokens - oc_total).unsigned_abs() as f64 / oc_total as f64 * 100.0;
+                if diff_pct < 5.0 {
+                    tracing::debug!(
+                        "Removing duplicate deepseek-ai record: {} {} {} ({} tokens vs opencode {})",
+                        r.date, r.provider, r.model, r.total_tokens, oc_total
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        }
+    });
+
     // Apply vendor merging from config
     let merge_config_path = config::get_vendor_merge_config_path();
     if let Some(merge_map) = config::load_vendor_merge_map(&merge_config_path) {
