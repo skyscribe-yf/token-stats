@@ -8,6 +8,7 @@ export type SortColumn =
   | "cache"
   | "total_tokens"
   | "cache_hit_ratio"
+  | "output_ratio"
   | "cost"
   | "avg_cost";
 
@@ -22,6 +23,7 @@ export interface PivotSummary {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
+  output_ratio: number;
 }
 
 export interface PivotModelNode {
@@ -46,6 +48,7 @@ function emptySummary(): PivotSummary {
     total_tokens: 0,
     cost: 0,
     cache_hit_ratio: 0,
+    output_ratio: 0,
   };
 }
 
@@ -64,10 +67,17 @@ function computeCacheHitRatio(summary: PivotSummary): number {
   return denom > 0 ? (summary.cache_read_tokens / denom) * 100 : 0;
 }
 
+function computeOutputRatio(summary: PivotSummary): number {
+  return summary.total_tokens > 0
+    ? (summary.output_tokens / summary.total_tokens) * 100
+    : 0;
+}
+
 function finalizeSummary(summary: PivotSummary): PivotSummary {
   return {
     ...summary,
     cache_hit_ratio: computeCacheHitRatio(summary),
+    output_ratio: computeOutputRatio(summary),
   };
 }
 
@@ -95,6 +105,8 @@ export function getSortValue(
       return summary.total_tokens;
     case "cache_hit_ratio":
       return summary.cache_hit_ratio;
+    case "output_ratio":
+      return summary.output_ratio;
     case "cost":
       return summary.cost;
     case "avg_cost":
@@ -261,8 +273,28 @@ function sortSourceDetails(
     if (sortColumn === "name") {
       return compareValues(a.source, b.source, sortDirection);
     }
-    const aSummary = { ...emptySummary(), calls: a.calls, input_tokens: a.input_tokens, output_tokens: a.output_tokens, cache_read_tokens: a.cache_read_tokens, cache_write_tokens: a.cache_write_tokens, total_tokens: a.total_tokens, cost: a.cost, cache_hit_ratio: a.cache_hit_ratio };
-    const bSummary = { ...emptySummary(), calls: b.calls, input_tokens: b.input_tokens, output_tokens: b.output_tokens, cache_read_tokens: b.cache_read_tokens, cache_write_tokens: b.cache_write_tokens, total_tokens: b.total_tokens, cost: b.cost, cache_hit_ratio: b.cache_hit_ratio };
+    const aSummary: PivotSummary = {
+      calls: a.calls,
+      input_tokens: a.input_tokens,
+      output_tokens: a.output_tokens,
+      cache_read_tokens: a.cache_read_tokens,
+      cache_write_tokens: a.cache_write_tokens,
+      total_tokens: a.total_tokens,
+      cost: a.cost,
+      cache_hit_ratio: a.cache_hit_ratio,
+      output_ratio: a.total_tokens > 0 ? (a.output_tokens / a.total_tokens) * 100 : 0,
+    };
+    const bSummary: PivotSummary = {
+      calls: b.calls,
+      input_tokens: b.input_tokens,
+      output_tokens: b.output_tokens,
+      cache_read_tokens: b.cache_read_tokens,
+      cache_write_tokens: b.cache_write_tokens,
+      total_tokens: b.total_tokens,
+      cost: b.cost,
+      cache_hit_ratio: b.cache_hit_ratio,
+      output_ratio: b.total_tokens > 0 ? (b.output_tokens / b.total_tokens) * 100 : 0,
+    };
     return compareValues(
       getSortValue(aSummary, sortColumn),
       getSortValue(bSummary, sortColumn),

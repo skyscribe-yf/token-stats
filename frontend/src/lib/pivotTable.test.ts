@@ -171,6 +171,7 @@ test("getSortValue returns correct values for all columns", () => {
     total_tokens: 175,
     cost: 2.5,
     cache_hit_ratio: 16.666,
+    output_ratio: 0,
   };
   assert.equal(getSortValue(summary, "calls"), 10);
   assert.equal(getSortValue(summary, "input_tokens"), 100);
@@ -196,4 +197,64 @@ test("buildPivotTree sorts source details by the same column", () => {
   const tree = buildPivotTree(stats, "total_tokens", "asc", false);
   assert.equal(tree[0].models[0].source_details[0].source, "pi");
   assert.equal(tree[0].models[0].source_details[1].source, "codex");
+});
+
+test("buildPivotTree computes output_ratio from output_tokens / total_tokens", () => {
+  const stats = [
+    makeModelStats({
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      total_tokens: 1_000,
+      output_tokens: 50,
+      input_tokens: 950,
+      source_details: [
+        makeSourceDetail({
+          source: "pi",
+          total_tokens: 1_000,
+          output_tokens: 50,
+          input_tokens: 950,
+        }),
+      ],
+    }),
+  ];
+  const tree = buildPivotTree(stats, "total_tokens", "desc", false);
+  assert.equal(tree[0].models[0].summary.output_ratio, 5);
+  assert.equal(tree[0].summary.output_ratio, 5);
+});
+
+test("getSortValue returns output_ratio in percent", () => {
+  const summary = {
+    calls: 1,
+    input_tokens: 80,
+    output_tokens: 20,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 100,
+    cost: 0,
+    cache_hit_ratio: 0,
+    output_ratio: 20,
+  };
+  assert.equal(getSortValue(summary, "output_ratio"), 20);
+});
+
+test("buildPivotTree handles zero total_tokens for output_ratio", () => {
+  const stats = [
+    makeModelStats({
+      provider: "x",
+      model: "m",
+      total_tokens: 0,
+      output_tokens: 0,
+      input_tokens: 0,
+      source_details: [
+        makeSourceDetail({
+          source: "pi",
+          total_tokens: 0,
+          output_tokens: 0,
+          input_tokens: 0,
+        }),
+      ],
+    }),
+  ];
+  const tree = buildPivotTree(stats, "total_tokens", "desc", false);
+  assert.equal(tree[0].models[0].summary.output_ratio, 0);
 });
