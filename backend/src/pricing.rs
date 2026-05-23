@@ -351,6 +351,20 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn pricing_test_guard() -> MutexGuard<'static, ()> {
+        static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        let guard = match TEST_MUTEX.get_or_init(|| Mutex::new(())).lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        std::env::remove_var("PRICING_CONFIG");
+        let mut state = state_cell().lock().unwrap();
+        state.reload(PricingConfig::default());
+        drop(state);
+        guard
+    }
 
     fn make_record(
         source: &str,
@@ -378,6 +392,7 @@ mod tests {
 
     #[test]
     fn kimi_cli_zero_cost_uses_per_token_estimate() {
+        let _guard = pricing_test_guard();
         // kimi-cli records have cost=0 and provider="kimi"
         let record = make_record("kimi-cli", "kimi", "kimi-k2.6", 1_000_000, 0.0);
         let cost = display_cost(&record);
@@ -397,6 +412,7 @@ mod tests {
 
     #[test]
     fn pi_kimi_zero_cost_uses_per_token_estimate() {
+        let _guard = pricing_test_guard();
         // Pi-sourced kimi records with cost=0 should use the same formula
         let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.0);
         let cost = display_cost(&record);
@@ -416,6 +432,7 @@ mod tests {
 
     #[test]
     fn kimi_with_stored_cost_uses_stored_cost() {
+        let _guard = pricing_test_guard();
         // Records with provider="kimi" but cost>0 should use the stored cost path
         let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.05);
         let cost = display_cost(&record);
@@ -431,6 +448,7 @@ mod tests {
 
     #[test]
     fn xunfei_takes_precedence_over_kimi() {
+        let _guard = pricing_test_guard();
         // xunfei provider should use flat per-call rate, not kimi per-token
         let record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
         let cost = display_cost(&record);
@@ -445,6 +463,7 @@ mod tests {
 
     #[test]
     fn non_kimi_provider_zero_cost_returns_zero() {
+        let _guard = pricing_test_guard();
         // Non-kimi records with cost=0 should still return 0 (fallback)
         let record = make_record("pi", "openai", "gpt-5.5", 1_000_000, 0.0);
         let cost = display_cost(&record);
@@ -453,6 +472,7 @@ mod tests {
 
     #[test]
     fn freemodel_stored_cost_applies_divisor() {
+        let _guard = pricing_test_guard();
         // FreeModel records with stored cost (USD) should apply the 68.2x divisor
         // before converting to CNY: cost_usd * usd_to_cny / freemodel_divisor
         let record = make_record("pi", "FreeModel", "claude-opus-4-7", 1_000_000, 0.166844);
@@ -474,6 +494,7 @@ mod tests {
 
     #[test]
     fn freemodel_derived_cost_applies_divisor() {
+        let _guard = pricing_test_guard();
         // FreeModel claude-code records (no stored cost) should compute from tokens
         // and then apply the 68.2x divisor.
         // The default PricingConfig has an empty model list, so derived-cost
@@ -552,6 +573,7 @@ cache_write = 6.25
 
     #[test]
     fn deepseek_zero_cost_computes_from_tokens_in_cny() {
+        let _guard = pricing_test_guard();
         use std::io::Write;
         let tmp = tempfile::NamedTempFile::new().unwrap();
         tmp.as_file()
@@ -616,6 +638,7 @@ cache_write = 0.5865
 
     #[test]
     fn xiaomi_mimo_tp_zero_cost_uses_per_token_estimate() {
+        let _guard = pricing_test_guard();
         // xiaomi-mimo-tp records with cost=0 and provider="xiaomi-mimo-tp"
         let record = make_record("pi", "xiaomi-mimo-tp", "mimo-v2.5-pro", 1_000_000, 0.0);
         let cost = display_cost(&record);
@@ -635,6 +658,7 @@ cache_write = 0.5865
 
     #[test]
     fn xiaomi_mimo_tp_with_stored_cost_uses_stored_cost() {
+        let _guard = pricing_test_guard();
         // Records with provider="xiaomi-mimo-tp" but cost>0 should use the stored cost path
         let record = make_record("pi", "xiaomi-mimo-tp", "mimo-v2.5-pro", 1_000_000, 0.05);
         let cost = display_cost(&record);
