@@ -112,8 +112,7 @@ fn default_advanced_models() -> Vec<String> {
 ///
 /// Tracks user-configurable subscription parameters like billing cycle start dates
 /// so the dashboard can compute expiration alerts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SubscriptionSettings {
     /// Day of month (1–28) when the Kimi monthly subscription renews.
     /// `None` means the user has not configured it yet.
