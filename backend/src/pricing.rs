@@ -20,6 +20,7 @@ use std::sync::{Mutex, OnceLock};
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
     pub kimi_per_token: f64,
+    #[serde(default)]
     pub xiaomi_mimo_tp_per_token: f64,
     pub opencode_divisor: f64,
     pub ainaba_divisor: f64,
