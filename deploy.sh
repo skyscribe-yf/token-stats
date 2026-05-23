@@ -166,6 +166,20 @@ else
     echo "⚠️  XAI_API_KEY not set"
 fi
 
+if [ -n "${XIAOMI_MIMO_SERVICE_TOKEN:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "XIAOMI_MIMO_SERVICE_TOKEN" "$XIAOMI_MIMO_SERVICE_TOKEN"
+    echo "✅ Injected XIAOMI_MIMO_SERVICE_TOKEN"
+else
+    echo "⚠️  XIAOMI_MIMO_SERVICE_TOKEN not set"
+fi
+
+if [ -n "${XIAOMI_MIMO_USER_ID:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "XIAOMI_MIMO_USER_ID" "$XIAOMI_MIMO_USER_ID"
+    echo "✅ Injected XIAOMI_MIMO_USER_ID"
+else
+    echo "⚠️  XIAOMI_MIMO_USER_ID not set"
+fi
+
 sudo systemctl daemon-reload
 
 # ── 6. Start new instance ─────────────────────────────────────────────
