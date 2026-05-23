@@ -126,7 +126,16 @@ impl ClaudeCodeSource {
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    let provider = super::resolve_provider_from_model(&model);
+                    let provider = {
+                        // For claude-* models, try to resolve the actual provider
+                        // from cc-switch DB (e.g. "FreeModel") instead of hardcoded "anthropic".
+                        if model.starts_with("claude-") || model == "sonnet" || model == "haiku" {
+                            super::CcSwitchSource::get_active_provider("claude")
+                                .unwrap_or_else(|| super::resolve_provider_from_model(&model))
+                        } else {
+                            super::resolve_provider_from_model(&model)
+                        }
+                    };
 
                     let ts_str = obj.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
                     let (date, time) = super::parse_iso_timestamp(ts_str);
