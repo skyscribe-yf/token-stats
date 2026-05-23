@@ -305,7 +305,6 @@ export default function App() {
   // Subscription settings & alerts
   const [subscriptionSettings, setSubscriptionSettings] = useState<SubscriptionSettings | null>(null);
   const [showSubscriptionSettings, setShowSubscriptionSettings] = useState(false);
-  const [alertItems, setAlertItems] = useState<AlertItem[]>([]);
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState<FilterOptions>({
@@ -646,8 +645,8 @@ export default function App() {
   }, []);
 
   // ─── Subscription Alert Checking ──────────────────────────────────────────
-  useEffect(() => {
-    if (!quota && !xunfei && !ainaibaCredit) return;
+  const alertItems = useMemo(() => {
+    if (!quota && !xunfei && !ainaibaCredit) return [];
 
     const alerts: AlertItem[] = [];
 
@@ -773,13 +772,15 @@ export default function App() {
       }
     }
 
-    // Filter out dismissed alerts
-    const newAlerts = alerts.filter((a) => !dismissedAlerts.has(a.id));
-    setAlertItems(newAlerts);
-    if (newAlerts.length > 0) {
+    return alerts.filter((a) => !dismissedAlerts.has(a.id));
+  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
+
+  // Show alert modal when new alerts appear
+  useEffect(() => {
+    if (alertItems.length > 0) {
       setShowAlertModal(true);
     }
-  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
+  }, [alertItems]);
 
   // Fetch hourly stats whenever main filters change
   useEffect(() => {
