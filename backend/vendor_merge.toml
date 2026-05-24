@@ -10,3 +10,7 @@ providers = ["kimi", "kimi-coding"]
 [[vendor_group]]
 name = "ainaba"
 providers = ["openai", "ainaiba"]
+
+[[vendor_group]]
+name = "FreeModel"
+providers = ["freemodel", "FreeModel"]

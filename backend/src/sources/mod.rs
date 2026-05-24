@@ -92,6 +92,19 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
     }
 }
 
+// ─── Model name normalization ────────────────────────────────────────────────
+
+/// Normalize model names across sources so the same model appears under one name.
+///
+/// Pi uses `claude-opus-4.7` (dot) while Claude Code uses `claude-opus-4-7` (hyphen).
+pub fn normalize_model_name(model: &str) -> String {
+    // Normalize claude-opus-4.7 -> claude-opus-4-7
+    if let Some(rest) = model.strip_prefix("claude-opus-") {
+        return format!("claude-opus-{}", rest.replace('.', "-"));
+    }
+    model.to_string()
+}
+
 // ─── Load all sources ────────────────────────────────────────────────────────
 
 pub fn load_all_sources() -> Vec<TokenRecord> {
@@ -156,6 +169,11 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
         }
     });
 
+    // Normalize model names across sources (e.g. claude-opus-4.7 -> claude-opus-4-7)
+    for record in all_records.iter_mut() {
+        record.model = normalize_model_name(&record.model);
+    }
+
     // Apply vendor merging from config
     let merge_config_path = config::get_vendor_merge_config_path();
     if let Some(merge_map) = config::load_vendor_merge_map(&merge_config_path) {
@@ -205,5 +223,18 @@ mod tests {
             resolve_provider_from_model("some-unknown-model"),
             "some-unknown-model"
         );
+    }
+
+    #[test]
+    fn normalize_model_name_converts_dot_to_hyphen() {
+        // claude-opus-4.7 (from Pi) should normalize to claude-opus-4-7 (from Claude Code)
+        assert_eq!(normalize_model_name("claude-opus-4.7"), "claude-opus-4-7");
+    }
+
+    #[test]
+    fn normalize_model_name_preserves_others() {
+        assert_eq!(normalize_model_name("gpt-5.5"), "gpt-5.5");
+        assert_eq!(normalize_model_name("deepseek-v4-pro"), "deepseek-v4-pro");
+        assert_eq!(normalize_model_name("kimi-for-coding"), "kimi-for-coding");
     }
 }

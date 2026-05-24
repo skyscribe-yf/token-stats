@@ -119,15 +119,21 @@ providers = ["kimi", "kimi-coding"]
 [[vendor_group]]
 name = "ainaba"
 providers = ["openai", "ainaiba"]
+
+[[vendor_group]]
+name = "FreeModel"
+providers = ["freemodel", "FreeModel"]
 "#;
         let config: VendorMergeConfig = toml::from_str(toml).unwrap();
-        assert_eq!(config.vendor_group.len(), 2);
+        assert_eq!(config.vendor_group.len(), 3);
 
         let map = build_map(&config);
         assert_eq!(map.get("kimi"), Some(&"kimi".to_string()));
         assert_eq!(map.get("kimi-coding"), Some(&"kimi".to_string()));
         assert_eq!(map.get("openai"), Some(&"ainaba".to_string()));
         assert_eq!(map.get("ainaiba"), Some(&"ainaba".to_string()));
+        assert_eq!(map.get("freemodel"), Some(&"FreeModel".to_string()));
+        assert_eq!(map.get("FreeModel"), Some(&"FreeModel".to_string()));
         assert_eq!(map.get("anthropic"), None);
     }
 
@@ -150,6 +156,24 @@ providers = ["openai", "ainaiba"]
         assert_eq!(records[1].provider, "kimi"); // remapped
         assert_eq!(records[2].provider, "ainaba"); // remapped
         assert_eq!(records[3].provider, "anthropic"); // unchanged
+    }
+
+    #[test]
+    fn apply_merge_remaps_freemodel_to_free_model() {
+        let mut map = HashMap::new();
+        map.insert("freemodel".to_string(), "FreeModel".to_string());
+
+        let mut records = vec![
+            test_record("freemodel"),
+            test_record("FreeModel"),
+            test_record("anthropic"),
+        ];
+
+        apply_vendor_merge(&mut records, &map);
+
+        assert_eq!(records[0].provider, "FreeModel"); // remapped from lowercase
+        assert_eq!(records[1].provider, "FreeModel"); // unchanged (already FreeModel)
+        assert_eq!(records[2].provider, "anthropic"); // unchanged
     }
 
     #[test]
