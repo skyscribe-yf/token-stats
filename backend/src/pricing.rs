@@ -795,9 +795,9 @@ cache_write = 5.00
 
 [[model]]
 name = "gpt-5.5"
-tier_threshold = 128000
+tier_threshold = 272000
 input = 10.00
-output = 60.00
+output = 45.00
 cache_read = 1.00
 cache_write = 10.00
 "#,
@@ -850,26 +850,26 @@ cache_write = 5.00
 
 [[model]]
 name = "gpt-5.5"
-tier_threshold = 128000
+tier_threshold = 272000
 input = 10.00
-output = 60.00
+output = 45.00
 cache_read = 1.00
 cache_write = 10.00
 "#,
         );
 
-        // Long context (200K total input) → should use high tier
+        // Long context (300K total input) → should use high tier
         let mut record = make_record("codex", "openai", "gpt-5.5", 0, 0.0);
-        record.input_tokens = 150_000;
+        record.input_tokens = 250_000;
         record.output_tokens = 10_000;
-        record.cache_read_tokens = 50_000; // total_input = 200K > 128K
+        record.cache_read_tokens = 50_000; // total_input = 300K > 272K
         record.cache_write_tokens = 0;
-        record.total_tokens = 210_000;
+        record.total_tokens = 310_000;
 
         let cny = display_cost(&record);
-        // High tier: input=$10/M, output=$60/M, cache_read=$1/M
-        // usd = 150000*10/1M + 10000*60/1M + 50000*1/1M = 1.5 + 0.6 + 0.05 = 2.15
-        let expected = 2.15 * 6.82;
+        // High tier: input=$10/M, output=$45/M, cache_read=$1/M
+        // usd = 250000*10/1M + 10000*45/1M + 50000*1/1M = 2.5 + 0.45 + 0.05 = 3.0
+        let expected = 3.0 * 6.82;
         assert!(
             (cny - expected).abs() < 0.001,
             "high tier: expected {}, got {}",
@@ -905,26 +905,26 @@ cache_write = 5.00
 
 [[model]]
 name = "gpt-5.5"
-tier_threshold = 128000
+tier_threshold = 272000
 input = 10.00
-output = 60.00
+output = 45.00
 cache_read = 1.00
 cache_write = 10.00
 "#,
         );
 
-        // Exactly at threshold (128K total input) → should use high tier (>= threshold)
+        // Exactly at threshold (272K total input) → should use high tier (>= threshold)
         let mut record = make_record("codex", "openai", "gpt-5.5", 0, 0.0);
-        record.input_tokens = 128_000;
+        record.input_tokens = 272_000;
         record.output_tokens = 5_000;
         record.cache_read_tokens = 0;
         record.cache_write_tokens = 0;
-        record.total_tokens = 133_000;
+        record.total_tokens = 277_000;
 
         let cny = display_cost(&record);
-        // High tier: input=$10/M, output=$60/M
-        // usd = 128000*10/1M + 5000*60/1M = 1.28 + 0.30 = 1.58
-        let expected = 1.58 * 6.82;
+        // High tier: input=$10/M, output=$45/M
+        // usd = 272000*10/1M + 5000*45/1M = 2.72 + 0.225 = 2.945
+        let expected = 2.945 * 6.82;
         assert!(
             (cny - expected).abs() < 0.001,
             "at threshold: expected {}, got {}",
@@ -960,9 +960,9 @@ cache_write = 5.00
 
 [[model]]
 name = "gpt-5.5"
-tier_threshold = 128000
+tier_threshold = 272000
 input = 10.00
-output = 60.00
+output = 45.00
 cache_read = 1.00
 cache_write = 10.00
 
