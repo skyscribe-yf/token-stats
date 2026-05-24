@@ -374,6 +374,7 @@ export interface ModelPriceConfig {
   output: number;
   cache_read: number;
   cache_write: number;
+  tier_threshold?: number;
 }
 
 export interface SpecialPricing {

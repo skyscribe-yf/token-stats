@@ -270,7 +270,7 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 4. **SQLite read-only** — ccswitch DB opened with `SQLITE_OPEN_READ_ONLY`. Never write to it.
 5. **Kimi CLI cost is estimated** — Kimi CLI doesn't report cost natively. Backend estimates it as `total_tokens * (199元 / 2.8B tokens)` based on the subscription price.
 
-6. **Pricing configuration** — `backend/pricing.toml` controls model prices, USD→CNY exchange rate, and special billing rules. Run `./scripts/reload-pricing.sh` to apply changes without restart.
+6. **Pricing configuration** — `backend/pricing.toml` controls model prices, USD→CNY exchange rate, and special billing rules. Run `./scripts/reload-pricing.sh` to apply changes without restart. Supports tiered pricing via the `tier_threshold` field: when `total_input_tokens = input + cache_read + cache_write` is greater than or equal to the threshold, that tier's rates are used. Models without a threshold use flat pricing (base tier).
 7. **Zero-downtime deployment** — `deploy.sh` uses a blue-green pattern: it builds while the old instance is still running, starts a new instance on the alternate port (3000 ↔ 3001), health-checks it, switches nginx upstream, then gracefully drains and stops the old instance. Legacy `token-stats.service` is automatically migrated to `token-stats@.service` on first deploy.
 8. **Date vs DateTime bounds** — Date-only upper bound (`to=2025-05-17`) includes the entire day. DateTime upper bound is exclusive-ish (compares naive UTC datetime).
 9. **Sort stability** — Requests sorted by time DESC, then source ASC, provider ASC, model ASC.

@@ -37,6 +37,14 @@ cache_read = 0.50
 cache_write = 5.00
 
 [[model]]
+name = "gpt-5.5"
+tier_threshold = 128000
+input = 10.00
+output = 60.00
+cache_read = 1.00
+cache_write = 10.00
+
+[[model]]
 name = "gpt-5.4"
 input = 2.50
 output = 15.00

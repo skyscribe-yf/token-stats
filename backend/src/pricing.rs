@@ -37,6 +37,10 @@ pub struct ModelPriceConfig {
     pub cache_read: f64,
     #[serde(default)]
     pub cache_write: f64,
+    /// Tier threshold in total input tokens (input + cache_read + cache_write).
+    /// None = base tier (threshold 0). Some(128000) = applies when total_input >= 128K.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_threshold: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,28 +73,100 @@ impl Default for PricingConfig {
 impl PricingConfig {
     /// Build a fast lookup map from model names to prices.
     fn build_model_map(&self) -> HashMap<String, ModelPrice> {
-        let mut map = HashMap::with_capacity(self.model.len());
+        // Group configs by model name
+        let mut groups: HashMap<String, Vec<&ModelPriceConfig>> = HashMap::new();
         for m in &self.model {
-            map.insert(
-                m.name.clone(),
-                ModelPrice {
-                    input: m.input,
-                    output: m.output,
-                    cache_read: m.cache_read,
-                    cache_write: m.cache_write,
-                },
-            );
+            groups.entry(m.name.clone()).or_default().push(m);
         }
-        map
+        // Build ModelPrice from each group
+        groups
+            .into_iter()
+            .map(|(name, configs)| {
+                let base_count = configs
+                    .iter()
+                    .filter(|c| c.tier_threshold.is_none())
+                    .count();
+                if base_count > 1 {
+                    tracing::warn!(
+                        "Model '{}' has {} base-tier entries, using last one",
+                        name,
+                        base_count
+                    );
+                } else if base_count == 0 {
+                    tracing::warn!(
+                        "Model '{}' has no base-tier entry (all entries specify tier_threshold); \
+                         inputs below the lowest threshold will use that tier's rates",
+                        name
+                    );
+                }
+                (name, ModelPrice::from_configs(&configs))
+            })
+            .collect()
     }
 }
 
 #[derive(Debug, Clone)]
-struct ModelPrice {
+struct PriceTier {
+    threshold: i64,
     input: f64,
     output: f64,
     cache_read: f64,
     cache_write: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ModelPrice {
+    /// Price tiers sorted by threshold ascending. First tier has threshold=0 (base).
+    tiers: Vec<PriceTier>,
+}
+
+impl ModelPrice {
+    /// Build from a slice of ModelPriceConfig entries sharing the same name.
+    fn from_configs(configs: &[&ModelPriceConfig]) -> Self {
+        let mut tiers: Vec<PriceTier> = configs
+            .iter()
+            .map(|c| PriceTier {
+                threshold: c.tier_threshold.unwrap_or(0),
+                input: c.input,
+                output: c.output,
+                cache_read: c.cache_read,
+                cache_write: c.cache_write,
+            })
+            .collect();
+        tiers.sort_by_key(|t| t.threshold);
+        Self { tiers }
+    }
+
+    /// Select the appropriate tier based on total input tokens.
+    /// Total input = input_tokens + cache_read_tokens + cache_write_tokens.
+    /// Returns the last tier whose threshold <= total_input.
+    fn select_tier(&self, total_input: i64) -> &PriceTier {
+        let mut selected = &self.tiers[0];
+        for tier in &self.tiers {
+            if total_input >= tier.threshold {
+                selected = tier;
+            } else {
+                break;
+            }
+        }
+        selected
+    }
+
+    /// Compute cost in USD for the given token counts.
+    fn compute_usd(
+        &self,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_tokens: i64,
+        cache_write_tokens: i64,
+    ) -> f64 {
+        let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
+        let tier = self.select_tier(total_input);
+        input_tokens as f64 * tier.input / 1_000_000.0
+            + output_tokens as f64 * tier.output / 1_000_000.0
+            + cache_read_tokens as f64 * tier.cache_read / 1_000_000.0
+            + cache_write_tokens as f64 * tier.cache_write / 1_000_000.0
+    }
 }
 
 /// Internal state that holds both the user config and the derived lookup map.
@@ -312,11 +388,13 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         .as_deref()
         .unwrap_or(&record.provider);
     if effective_provider == "deepseek" && record.cost == 0.0 {
-        if let Some(price) = resolve_model_price(&state, &record.model, &record.provider) {
-            let usd = record.input_tokens as f64 * price.input / 1_000_000.0
-                + record.output_tokens as f64 * price.output / 1_000_000.0
-                + record.cache_read_tokens as f64 * price.cache_read / 1_000_000.0
-                + record.cache_write_tokens as f64 * price.cache_write / 1_000_000.0;
+        if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+            );
             return usd * cfg.usd_to_cny;
         }
     }
@@ -324,13 +402,13 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
     // 5. Derived sources without original cost: codex, claude-code, etc.
     //    Compute from per-model token rates. pricing.toml model prices are in USD.
     if record.source == "codex" || record.source == "claude-code" {
-        if let Some(price) = resolve_model_price(&state, &record.model, &record.provider) {
-            let input_cost = record.input_tokens as f64 * price.input / 1_000_000.0;
-            let cache_read_cost = record.cache_read_tokens as f64 * price.cache_read / 1_000_000.0;
-            let output_cost = record.output_tokens as f64 * price.output / 1_000_000.0;
-            let cache_write_cost =
-                record.cache_write_tokens as f64 * price.cache_write / 1_000_000.0;
-            let usd = input_cost + cache_read_cost + output_cost + cache_write_cost;
+        if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+            );
             let mut cny = usd * cfg.usd_to_cny;
             // Ainaba 40x discount: all records going through ainaibahub.com
             if record.provider == "ainaba" {
@@ -364,6 +442,26 @@ mod tests {
         state.reload(PricingConfig::default());
         drop(state);
         guard
+    }
+
+    /// Load a temp pricing config from TOML bytes, saving/restoring PRICING_CONFIG env var.
+    /// Returns the NamedTempFile (must be kept alive for the file to exist).
+    fn load_temp_config(toml: &[u8]) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.as_file().write_all(toml).unwrap();
+        std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap());
+        reload();
+        tmp
+    }
+
+    /// Restore PRICING_CONFIG env var after a temp config test.
+    fn restore_pricing_env(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("PRICING_CONFIG", v),
+            None => std::env::remove_var("PRICING_CONFIG"),
+        }
+        reload();
     }
 
     fn make_record(
@@ -670,5 +768,232 @@ cache_write = 0.5865
             expected,
             cost
         );
+    }
+
+    #[test]
+    fn tiered_pricing_base_tier_for_short_context() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "gpt-5.5"
+tier_threshold = 128000
+input = 10.00
+output = 60.00
+cache_read = 1.00
+cache_write = 10.00
+"#,
+        );
+
+        // Short context (50K input) → should use base tier
+        let mut record = make_record("codex", "openai", "gpt-5.5", 0, 0.0);
+        record.input_tokens = 50_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 60_000;
+
+        let cny = display_cost(&record);
+        // Base tier: input=$5/M, output=$30/M
+        // usd = 50000*5/1M + 10000*30/1M = 0.25 + 0.30 = 0.55
+        let expected = 0.55 * 6.82;
+        assert!(
+            (cny - expected).abs() < 0.001,
+            "base tier: expected {}, got {}",
+            expected,
+            cny
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn tiered_pricing_high_tier_for_long_context() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "gpt-5.5"
+tier_threshold = 128000
+input = 10.00
+output = 60.00
+cache_read = 1.00
+cache_write = 10.00
+"#,
+        );
+
+        // Long context (200K total input) → should use high tier
+        let mut record = make_record("codex", "openai", "gpt-5.5", 0, 0.0);
+        record.input_tokens = 150_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 50_000; // total_input = 200K > 128K
+        record.cache_write_tokens = 0;
+        record.total_tokens = 210_000;
+
+        let cny = display_cost(&record);
+        // High tier: input=$10/M, output=$60/M, cache_read=$1/M
+        // usd = 150000*10/1M + 10000*60/1M + 50000*1/1M = 1.5 + 0.6 + 0.05 = 2.15
+        let expected = 2.15 * 6.82;
+        assert!(
+            (cny - expected).abs() < 0.001,
+            "high tier: expected {}, got {}",
+            expected,
+            cny
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn tiered_pricing_exactly_at_threshold() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "gpt-5.5"
+tier_threshold = 128000
+input = 10.00
+output = 60.00
+cache_read = 1.00
+cache_write = 10.00
+"#,
+        );
+
+        // Exactly at threshold (128K total input) → should use high tier (>= threshold)
+        let mut record = make_record("codex", "openai", "gpt-5.5", 0, 0.0);
+        record.input_tokens = 128_000;
+        record.output_tokens = 5_000;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 133_000;
+
+        let cny = display_cost(&record);
+        // High tier: input=$10/M, output=$60/M
+        // usd = 128000*10/1M + 5000*60/1M = 1.28 + 0.30 = 1.58
+        let expected = 1.58 * 6.82;
+        assert!(
+            (cny - expected).abs() < 0.001,
+            "at threshold: expected {}, got {}",
+            expected,
+            cny
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn flat_pricing_unchanged_with_tiered_config() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "gpt-5.5"
+tier_threshold = 128000
+input = 10.00
+output = 60.00
+cache_read = 1.00
+cache_write = 10.00
+
+[[model]]
+name = "claude-sonnet-4-6"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 3.75
+"#,
+        );
+
+        // Claude model (flat pricing, no tiers) should work exactly as before
+        let mut record = make_record("claude-code", "anthropic", "claude-sonnet-4-6", 0, 0.0);
+        record.input_tokens = 100_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 50_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 160_000;
+
+        let cny = display_cost(&record);
+        // Flat: input=$3/M, output=$15/M, cache_read=$0.30/M
+        // usd = 100000*3/1M + 10000*15/1M + 50000*0.30/1M = 0.3 + 0.15 + 0.015 = 0.465
+        let expected = 0.465 * 6.82;
+        assert!(
+            (cny - expected).abs() < 0.001,
+            "flat pricing: expected {}, got {}",
+            expected,
+            cny
+        );
+
+        restore_pricing_env(prev_env);
     }
 }

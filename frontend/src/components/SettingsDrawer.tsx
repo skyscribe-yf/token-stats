@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X, Download, Upload, Calendar, Receipt } from "lucide-react";
-import type { PricingConfig, RestoreResponse, SubscriptionSettings } from "../api";
+import type { PricingConfig, ModelPriceConfig, RestoreResponse, SubscriptionSettings } from "../api";
 
 interface SettingsDrawerProps {
   open: boolean;
@@ -134,25 +134,52 @@ export function SettingsDrawer({
                   <thead>
                     <tr className="text-slate-400 border-b border-slate-200">
                       <th className="pb-1 font-medium">模型</th>
+                      <th className="pb-1 font-medium">档位</th>
                       <th className="pb-1 font-medium">In</th>
                       <th className="pb-1 font-medium">Out</th>
                       <th className="pb-1 font-medium">Cache</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {pricingConfig.model.map((m) => (
-                      <tr
-                        key={m.name}
-                        className="border-b border-slate-100 last:border-0"
-                      >
-                        <td className="py-0.5 font-medium text-slate-700 truncate max-w-[80px]">
-                          {m.name}
-                        </td>
-                        <td className="py-0.5">${m.input}</td>
-                        <td className="py-0.5">${m.output}</td>
-                        <td className="py-0.5">${m.cache_read}</td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      // Group models by name
+                      const groups: Record<string, ModelPriceConfig[]> = {};
+                      for (const m of pricingConfig.model) {
+                        (groups[m.name] ??= []).push(m);
+                      }
+                      const rows: React.ReactNode[] = [];
+                      for (const [name, tiers] of Object.entries(groups)) {
+                        tiers.forEach((t, i) => {
+                          const thresholdLabel = t.tier_threshold
+                            ? `>${(t.tier_threshold / 1000).toFixed(0)}K`
+                            : i === 0 && tiers.length > 1
+                            ? "基础"
+                            : "";
+                          rows.push(
+                            <tr
+                              key={`${name}-${i}`}
+                              className="border-b border-slate-100 last:border-0"
+                            >
+                              {i === 0 && (
+                                <td
+                                  rowSpan={tiers.length}
+                                  className="py-0.5 font-medium text-slate-700 truncate max-w-[80px] align-top"
+                                >
+                                  {name}
+                                </td>
+                              )}
+                              <td className="py-0.5 text-slate-500">
+                                {thresholdLabel}
+                              </td>
+                              <td className="py-0.5">${t.input}</td>
+                              <td className="py-0.5">${t.output}</td>
+                              <td className="py-0.5">${t.cache_read}</td>
+                            </tr>
+                          );
+                        });
+                      }
+                      return rows;
+                    })()}
                   </tbody>
                 </table>
               </details>
