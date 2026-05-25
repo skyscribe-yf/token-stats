@@ -147,6 +147,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   "xiaomi-mimo": "#ef4444", // red-500
   anthropic: "#6366f1",    // indigo-500
   openai: "#06b6d4",       // cyan-500
+  commandcode: "#f472b6",  // pink-400
 };
 
 export function getVendorColor(vendor: string): string {

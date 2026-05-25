@@ -142,17 +142,59 @@ function buildQuotaChips(
     }
   }
 
-  // Ainaiba credit balance
+  // Ainaiba credit balance — show individual cards when multiple exist
   if (ainaibaCredit?.available && ainaibaCredit.data) {
     const a = ainaibaCredit.data;
-    chips.push({
-      id: "ainaiba-balance",
-      cardId: "quota-ainaiba",
-      vendor: "Ainaiba",
-      scope: "余",
-      display: `¥${a.balance.toFixed(2)}`,
-      pct: null,
-    });
+    if (a.cards && a.cards.length > 1) {
+      // Multiple cards: show each one individually
+      for (let i = 0; i < a.cards.length; i++) {
+        const card = a.cards[i];
+        chips.push({
+          id: `ainaiba-balance-${i}`,
+          cardId: "quota-ainaiba",
+          vendor: "Ainaiba",
+          scope: `卡${i + 1}`,
+          display: `¥${card.amount.toFixed(2)}`,
+          pct: null,
+        });
+      }
+    } else {
+      // Single card or legacy: show total balance
+      chips.push({
+        id: "ainaiba-balance",
+        cardId: "quota-ainaiba",
+        vendor: "Ainaiba",
+        scope: "余",
+        display: `¥${a.balance.toFixed(2)}`,
+        pct: null,
+      });
+    }
+  }
+
+  // CommandCode
+  if (quota?.commandcode?.available && quota.commandcode.data) {
+    const cc = quota.commandcode.data;
+    if (cc.monthly_credits_total != null && cc.monthly_credits_total > 0) {
+      const pct = (cc.monthly_credits_used / cc.monthly_credits_total) * 100;
+      chips.push({
+        id: "commandcode-monthly",
+        cardId: "quota-commandcode",
+        vendor: "CmdCode",
+        scope: "月",
+        display: `${pct.toFixed(0)}%`,
+        pct,
+      });
+    }
+    if (cc.purchased_credits > 0) {
+      chips.push({
+        id: "commandcode-purchased",
+        cardId: "quota-commandcode",
+        vendor: "CmdCode",
+        scope: "余",
+        display: `$${cc.purchased_credits.toFixed(2)}`,
+        pct: null,
+      });
+    }
   }
 
   return chips;

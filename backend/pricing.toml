@@ -19,11 +19,21 @@ xiaomi_mimo_tp_per_token = 0.000000940905
 # OpenCode 折扣：官方 10 美金可用 60 美金额度，实际成本 = 原始 cost / 6
 opencode_divisor = 6.0
 
-# Ainaba 折扣：实际成本 = 原始 cost / 40
-ainaba_divisor = 40.0
+# Ainaba (AI奶爸) 折扣：按时间段分段
+# 5月25日22:30(UTC+8)之前：40倍
+# 5月25日22:30(UTC+8)之后：25倍
+# 分段按 `before` 时间匹配：记录时间 < before 则使用该段 divisor
+# 最后一段不加 `before` 作为兜底（当前费率）
+ainaba_segments = [
+    { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
+    { divisor = 25.0 },
+]
 
 # FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.82 / 0.1 = 68.2
 freemodel_divisor = 68.2
+
+# CommandCode 订阅折扣：实际成本 = 列出价格 / 10
+commandcode_divisor = 10.0
 
 # 模型价格（USD per 1_000_000 tokens）
 # 用于 codex/claude-code 等无原始 cost 的源，从 token 用量计算
@@ -111,4 +121,192 @@ name = "deepseek-v4-flash-free"
 input = 0.0
 output = 0.0
 cache_read = 0.0
+cache_write = 0.0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Command Code API pricing (USD per 1_000_000 tokens)
+# 来源：https://commandcode.ai/docs/resources/pricing-limits
+# 命名：cc: 前缀区分 Command Code 价格（部分与标准 API 价格不同）
+# 订阅折扣：实际成本 = 列表价格 / commandcode_divisor
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── CC Premium (Anthropic) ──
+
+[[model]]
+name = "cc:claude-opus-4-7"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "cc:claude-opus-4-6"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "cc:claude-sonnet-4-6"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 3.75
+
+[[model]]
+name = "cc:claude-haiku-4-5"
+input = 1.00
+output = 5.00
+cache_read = 0.10
+cache_write = 1.25
+
+# ── CC Premium (OpenAI) ──
+
+[[model]]
+name = "cc:gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "cc:gpt-5.5"
+tier_threshold = 272000
+input = 10.00
+output = 45.00
+cache_read = 1.00
+cache_write = 10.00
+
+[[model]]
+name = "cc:gpt-5.4"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 2.50
+
+[[model]]
+name = "cc:gpt-5.4"
+tier_threshold = 272000
+input = 5.00
+output = 22.50
+cache_read = 0.50
+cache_write = 5.00
+
+[[model]]
+name = "cc:gpt-5.4-mini"
+input = 0.75
+output = 4.50
+cache_read = 0.075
+cache_write = 0.75
+
+[[model]]
+name = "cc:gpt-5.3-codex"
+input = 2.00
+output = 8.00
+cache_read = 0.50
+cache_write = 2.00
+
+# ── CC Premium (Google) ──
+
+[[model]]
+name = "cc:gemini-3.5-flash"
+input = 1.50
+output = 9.00
+cache_read = 0.15
+cache_write = 0.0
+
+# ── CC Open Source ──
+
+[[model]]
+name = "cc:deepseek-v4-pro"
+# 促销价 (4x usage, 75% off, 至 2026-05-31)
+input = 0.435
+output = 0.87
+cache_read = 0.003625
+cache_write = 0.0
+
+[[model]]
+name = "cc:deepseek-v4-pro-full"
+# 原价 (促销结束后恢复)
+input = 1.74
+output = 3.48
+cache_read = 0.0145
+cache_write = 0.0
+
+[[model]]
+name = "cc:deepseek-v4-flash"
+input = 0.14
+output = 0.28
+cache_read = 0.01
+cache_write = 0.0
+
+[[model]]
+name = "cc:kimi-k2.6"
+input = 0.95
+output = 4.00
+cache_read = 0.16
+cache_write = 0.0
+
+[[model]]
+name = "cc:kimi-k2.5"
+input = 0.60
+output = 3.00
+cache_read = 0.10
+cache_write = 0.0
+
+[[model]]
+name = "cc:glm-5.1"
+input = 1.40
+output = 4.40
+cache_read = 0.26
+cache_write = 0.0
+
+[[model]]
+name = "cc:glm-5"
+input = 1.00
+output = 3.20
+cache_read = 0.20
+cache_write = 0.0
+
+[[model]]
+name = "cc:minimax-m2.7"
+input = 0.30
+output = 1.20
+cache_read = 0.06
+cache_write = 0.0
+
+[[model]]
+name = "cc:minimax-m2.5"
+input = 0.27
+output = 0.95
+cache_read = 0.03
+cache_write = 0.0
+
+[[model]]
+name = "cc:qwen3.6-max-preview"
+input = 1.30
+output = 7.80
+cache_read = 0.26
+cache_write = 1.63
+
+[[model]]
+name = "cc:qwen3.6-plus"
+input = 0.50
+output = 3.00
+cache_read = 0.10
+cache_write = 0.0
+
+[[model]]
+name = "cc:qwen3.7-max"
+# 促销价 (2x usage, 50% off, 至 2026-06-22)
+input = 1.25
+output = 3.75
+cache_read = 0.25
+cache_write = 1.56
+
+[[model]]
+name = "cc:step-3.5-flash"
+input = 0.10
+output = 0.30
+cache_read = 0.02
 cache_write = 0.0

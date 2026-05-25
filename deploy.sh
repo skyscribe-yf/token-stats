@@ -180,6 +180,13 @@ else
     echo "⚠️  XIAOMI_MIMO_USER_ID not set"
 fi
 
+if [ -n "${COMMANDCODE_SESSION_TOKEN:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "COMMANDCODE_SESSION_TOKEN" "$COMMANDCODE_SESSION_TOKEN"
+    echo "✅ Injected COMMANDCODE_SESSION_TOKEN"
+else
+    echo "⚠️  COMMANDCODE_SESSION_TOKEN not set"
+fi
+
 sudo systemctl daemon-reload
 
 # ── 6. Start new instance ─────────────────────────────────────────────

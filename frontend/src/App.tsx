@@ -618,6 +618,31 @@ export default function App() {
       }
     }
 
+    if (quota?.commandcode?.available && quota.commandcode.data) {
+      const cc = quota.commandcode.data;
+      const ccRatio = cc.monthly_credits_total != null && cc.monthly_credits_total > 0
+        ? (cc.monthly_credits_total - cc.monthly_credits_used) / cc.monthly_credits_total
+        : 1;
+      if (ccRatio <= 0.2) {
+        alerts.push({
+          id: "commandcode_quota_low",
+          provider: "CommandCode",
+          type: "quota_low",
+          message: "CommandCode 月额度余量不足",
+          detail: `月度已用 ${((1 - ccRatio) * 100).toFixed(0)}%，建议切换至其他模型`,
+        });
+      }
+      if (cc.current_period_end && isWithin24Hours(cc.current_period_end)) {
+        alerts.push({
+          id: "commandcode_expiring",
+          provider: "CommandCode",
+          type: "expiring_soon",
+          message: "CommandCode 月度配额即将重置",
+          detail: `重置于 ${new Date(cc.current_period_end).toLocaleString()}`,
+        });
+      }
+    }
+
     return alerts.filter((a) => !dismissedAlerts.has(a.id));
   }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
 

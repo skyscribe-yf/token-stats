@@ -172,6 +172,7 @@ pub struct QuotaResponse {
     pub opencode_go: Option<OpenCodeQuotaStatus>,
     pub opencode_go_ex: Option<OpenCodeQuotaStatus>,
     pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,
+    pub commandcode: Option<CommandCodeQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,5 +217,34 @@ pub struct XiaomiMiMoQuotaData {
 pub struct XiaomiMiMoQuotaStatus {
     pub available: bool,
     pub data: Option<XiaomiMiMoQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── CommandCode types ───────────────────────────────────────────────────────
+
+/// CommandCode subscription/quota data for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandCodeQuotaData {
+    pub plan_name: String,
+    pub subscription_status: String,
+    pub cancel_at_period_end: Option<bool>,
+    pub monthly_credits_total: Option<f64>,
+    pub monthly_credits_used: f64,
+    pub monthly_credits_remaining: f64,
+    pub purchased_credits: f64,
+    pub premium_monthly_credits: f64,
+    pub opensource_monthly_credits: f64,
+    pub current_period_end: Option<String>,
+    pub total_requests: i64,
+    pub total_tokens: i64,
+    pub total_tokens_in: i64,
+    pub total_tokens_out: i64,
+}
+
+/// CommandCode quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandCodeQuotaStatus {
+    pub available: bool,
+    pub data: Option<CommandCodeQuotaData>,
     pub error: Option<String>,
 }

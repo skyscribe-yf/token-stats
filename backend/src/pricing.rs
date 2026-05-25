@@ -16,6 +16,18 @@ use std::sync::{Mutex, OnceLock};
 
 // ── Configuration structs ────────────────────────────────────────────────────
 
+/// Time-based rate segment for Ainaba (AI奶爸) pricing.
+/// Segments should be ordered from earliest cutoff to latest.
+/// The last segment should have no `before` (catch-all for the current rate).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AinabaSegment {
+    /// Records whose time is before this timestamp use this segment's divisor.
+    /// If `None`, this is the catch-all segment (applies to all remaining records).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    pub divisor: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
@@ -23,9 +35,17 @@ pub struct SpecialPricing {
     #[serde(default)]
     pub xiaomi_mimo_tp_per_token: f64,
     pub opencode_divisor: f64,
+    /// Legacy single-value divisor. Kept for backward compatibility.
+    /// When `ainaba_segments` is non-empty, segments take precedence.
+    #[serde(default)]
     pub ainaba_divisor: f64,
+    /// Time-based rate segments (preferred). If empty, falls back to `ainaba_divisor`.
+    #[serde(default)]
+    pub ainaba_segments: Vec<AinabaSegment>,
     #[serde(default)]
     pub freemodel_divisor: f64,
+    #[serde(default)]
+    pub commandcode_divisor: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +83,9 @@ impl Default for PricingConfig {
                 xiaomi_mimo_tp_per_token: 99.0 / 105_222_222.0,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
+                ainaba_segments: Vec::new(),
                 freemodel_divisor: 68.2,
+                commandcode_divisor: 1.0,
             },
             model: Vec::new(),
         }
@@ -300,7 +322,107 @@ fn resolve_model_price<'a>(
     None
 }
 
+/// Normalize a Command Code model name to the `cc:` prefix used in pricing.toml.
+///
+/// Command Code model names come in two forms:
+/// - Plain: `claude-sonnet-4-6`, `gpt-5.5` (direct CC name)
+/// - Provider-prefixed: `deepseek/deepseek-v4-flash`, `moonshotai/Kimi-K2.6` (pi convention)
+///
+/// Maps to `cc:` prefixed keys in the pricing model map.
+fn resolve_commandcode_price<'a>(
+    state: &'a PricingState,
+    model: &str,
+) -> Option<&'a ModelPrice> {
+    let cc_key = normalize_commandcode_model(model);
+    state.model_map.get(&cc_key)
+}
+
+fn normalize_commandcode_model(model: &str) -> String {
+    // Handle provider/model format: strip the provider prefix
+    let model_only = if let Some(slash_pos) = model.find('/') {
+        &model[slash_pos + 1..]
+    } else {
+        model
+    };
+
+    let lower = model_only.to_lowercase();
+
+    // Map known CC model names to pricing.toml cc: keys
+    let key = match lower.as_str() {
+        // Anthropic
+        "claude-opus-4-7" | "claude-opus-4.7" => "cc:claude-opus-4-7",
+        "claude-opus-4-6" | "claude-opus-4.6" => "cc:claude-opus-4-6",
+        "claude-opus-4-5" | "claude-opus-4.5" => "cc:claude-opus-4-6",
+        "claude-sonnet-4-6" | "claude-sonnet-4.6" => "cc:claude-sonnet-4-6",
+        "claude-sonnet-4-5" | "claude-sonnet-4.5" => "cc:claude-sonnet-4-6",
+        s if s.starts_with("claude-haiku-4-5") => "cc:claude-haiku-4-5",
+
+        // OpenAI
+        "gpt-5.5" => "cc:gpt-5.5",
+        "gpt-5.4" => "cc:gpt-5.4",
+        "gpt-5.4-mini" => "cc:gpt-5.4-mini",
+        "gpt-5.3-codex" => "cc:gpt-5.3-codex",
+
+        // Google
+        "gemini-3.5-flash" => "cc:gemini-3.5-flash",
+
+        // DeepSeek
+        "deepseek-v4-pro" => "cc:deepseek-v4-pro",
+        "deepseek-v4-flash" => "cc:deepseek-v4-flash",
+
+        // Moonshot/Kimi
+        "kimi-k2.6" => "cc:kimi-k2.6",
+        "kimi-k2.5" => "cc:kimi-k2.5",
+
+        // Zhipu/GLM
+        "glm-5.1" => "cc:glm-5.1",
+        "glm-5" => "cc:glm-5",
+
+        // MiniMax
+        "minimax-m2.7" => "cc:minimax-m2.7",
+        "minimax-m2.5" => "cc:minimax-m2.5",
+
+        // Qwen
+        "qwen3.6-max-preview" => "cc:qwen3.6-max-preview",
+        "qwen3.6-plus" => "cc:qwen3.6-plus",
+        "qwen3.7-max" => "cc:qwen3.7-max",
+
+        // Step
+        "step-3.5-flash" => "cc:step-3.5-flash",
+
+        // Fallback: try with cc: prefix
+        other => return format!("cc:{}", other),
+    };
+
+    key.to_string()
+}
+
 // ── Cost calculation ─────────────────────────────────────────────────────────
+
+/// Select the Ainaba divisor for a record based on its timestamp.
+/// Checks `ainaba_segments` first (time-based), falls back to legacy `ainaba_divisor`.
+fn get_ainaba_divisor(special: &SpecialPricing, record_time: &str) -> f64 {
+    if !special.ainaba_segments.is_empty() {
+        if let Ok(record_dt) = chrono::DateTime::parse_from_rfc3339(record_time) {
+            for segment in &special.ainaba_segments {
+                if let Some(ref before) = segment.before {
+                    if let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(before) {
+                        if record_dt < cutoff {
+                            return segment.divisor;
+                        }
+                    }
+                } else {
+                    // Catch-all segment (no `before` field)
+                    return segment.divisor;
+                }
+            }
+        }
+        // If no segment matched or time parsing failed, use first segment
+        return special.ainaba_segments[0].divisor;
+    }
+    // Fallback to legacy single-value divisor
+    special.ainaba_divisor
+}
 
 /// Compute the display cost (CNY) for a single record based on the current
 /// pricing configuration.
@@ -364,10 +486,10 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         // 4c. Other Pi providers: cost is in USD, convert to CNY
         let mut cny = record.cost * cfg.usd_to_cny;
 
-        // Ainaba 40x discount: all records going through ainaibahub.com
+        // Ainaba time-based rate: divisor depends on record timestamp
         // (provider="ainaba" after vendor merge, covering both Pi and Codex)
         if record.provider == "ainaba" {
-            cny /= cfg.special.ainaba_divisor;
+            cny /= get_ainaba_divisor(&cfg.special, &record.time);
         }
 
         // FreeModel discount: 1 USD face value = 0.1 CNY actual cost
@@ -410,15 +532,31 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                 record.cache_write_tokens,
             );
             let mut cny = usd * cfg.usd_to_cny;
-            // Ainaba 40x discount: all records going through ainaibahub.com
+            // Ainaba time-based rate: divisor depends on record timestamp
             if record.provider == "ainaba" {
-                cny /= cfg.special.ainaba_divisor;
+                cny /= get_ainaba_divisor(&cfg.special, &record.time);
             }
             // FreeModel discount: 1 USD face value = 0.1 CNY actual cost
             if record.provider == "FreeModel" {
                 cny /= cfg.special.freemodel_divisor;
             }
             return cny;
+        }
+    }
+
+    // 6. Command Code provider: no stored cost, compute from CC model prices
+    //    CC model prices in pricing.toml are the listed API rate (USD / 1M tokens).
+    //    Apply commandcode_divisor (subscription discount: actual = list / divisor).
+    //    Then convert to CNY.
+    if record.provider == "commandcode" && record.cost == 0.0 {
+        if let Some(mp) = resolve_commandcode_price(&state, &record.model) {
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+            );
+            return usd * cfg.usd_to_cny / cfg.special.commandcode_divisor;
         }
     }
 
@@ -992,6 +1130,314 @@ cache_write = 3.75
             "flat pricing: expected {}, got {}",
             expected,
             cny
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn commandcode_missing_pricing_config_returns_zero() {
+        let _guard = pricing_test_guard();
+        // Without cc: model prices in the config, commandcode records should return 0
+        let mut record = make_record("pi", "commandcode", "deepseek/deepseek-v4-flash", 0, 0.0);
+        // After normalization (done by load_all_sources), input is already
+        // separated from cache. Simulate normalized values:
+        record.input_tokens = 295;      // new input after normalization
+        record.output_tokens = 286;
+        record.cache_read_tokens = 20864;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 21445;
+        let cost = display_cost(&record);
+        // No cc:deepseek-v4-flash in config → returns 0 (fallback)
+        assert_eq!(cost, 0.0, "commandcode without cc: model prices should return 0");
+    }
+
+    #[test]
+    fn commandcode_computes_from_cc_model_prices_with_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+
+[[model]]
+name = "cc:deepseek-v4-flash"
+input = 0.14
+output = 0.28
+cache_read = 0.01
+cache_write = 0.0
+
+[[model]]
+name = "cc:kimi-k2.6"
+input = 0.95
+output = 4.00
+cache_read = 0.16
+cache_write = 0.0
+"#,
+        );
+
+        // Test: deepseek-v4-flash from commandcode
+        // After normalization: input=295 (new), cache_read=20864 (cached)
+        // cc price: input=$0.14/M, output=$0.28/M, cache_read=$0.01/M
+        // usd = 295*0.14/1M + 286*0.28/1M + 20864*0.01/1M
+        //     = 0.0000413 + 0.00008008 + 0.00020864 = 0.00033002
+        // cny = 0.00033002 * 6.82 / 10.0 = 0.000225074
+        let mut record = make_record("pi", "commandcode", "deepseek-v4-flash", 0, 0.0);
+        record.input_tokens = 295;
+        record.output_tokens = 286;
+        record.cache_read_tokens = 20864;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 21445;
+
+        let cny = display_cost(&record);
+        let usd = 295.0 * 0.14 / 1_000_000.0
+            + 286.0 * 0.28 / 1_000_000.0
+            + 20864.0 * 0.01 / 1_000_000.0;
+        let expected = usd * 6.82 / 10.0;
+        assert!(
+            cny > 0.0,
+            "commandcode record should compute non-zero cost, got {}",
+            cny
+        );
+        assert!(
+            (cny - expected).abs() < 1e-9,
+            "commandcode cost: expected {}, got {} (usd={})",
+            expected,
+            cny,
+            usd
+        );
+
+        // Test: model with provider prefix "moonshotai/Kimi-K2.6" → cc:kimi-k2.6
+        let mut record2 = make_record("pi", "commandcode", "moonshotai/Kimi-K2.6", 0, 0.0);
+        record2.input_tokens = 10_000;
+        record2.output_tokens = 2_000;
+        record2.cache_read_tokens = 5_000;
+        record2.cache_write_tokens = 0;
+        record2.total_tokens = 17_000;
+
+        let cny2 = display_cost(&record2);
+        let usd2 = 10_000.0 * 0.95 / 1_000_000.0
+            + 2_000.0 * 4.00 / 1_000_000.0
+            + 5_000.0 * 0.16 / 1_000_000.0;
+        let expected2 = usd2 * 6.82 / 10.0;
+        assert!(
+            (cny2 - expected2).abs() < 1e-9,
+            "commandcode kimi: expected {}, got {}",
+            expected2,
+            cny2
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    // ─── Ainaba time-based segment tests ────────────────────────────────
+
+    #[test]
+    fn ainaba_segments_before_cutoff_uses_40x() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [
+    { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
+    { divisor = 25.0 },
+]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+"#,
+        );
+
+        // Record from May 25 10:00 UTC = May 25 18:00 CST, BEFORE the 22:30 CST cutoff
+        let mut record = make_record("pi", "ainaba", "gpt-5.5", 0, 0.05);
+        record.time = "2025-05-25T10:00:00Z".to_string();
+        let cost = display_cost(&record);
+        // cost=0.05 USD, usd_to_cny=6.82, divisor=40.0
+        // cny = 0.05 * 6.82 / 40.0 = 0.008525
+        let expected = 0.05 * 6.82 / 40.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "before cutoff should use 40x: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn ainaba_segments_after_cutoff_uses_25x() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [
+    { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
+    { divisor = 25.0 },
+]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+"#,
+        );
+
+        // Record from May 25 15:00 UTC = May 25 23:00 CST, AFTER the 22:30 CST cutoff
+        let mut record = make_record("pi", "ainaba", "gpt-5.5", 0, 0.05);
+        record.time = "2025-05-25T15:00:00Z".to_string();
+        let cost = display_cost(&record);
+        // cost=0.05 USD, usd_to_cny=6.82, divisor=25.0
+        // cny = 0.05 * 6.82 / 25.0 = 0.01364
+        let expected = 0.05 * 6.82 / 25.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "after cutoff should use 25x: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn ainaba_segments_exactly_at_cutoff_uses_25x() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [
+    { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
+    { divisor = 25.0 },
+]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+"#,
+        );
+
+        // Exactly at cutoff: 2025-05-25T14:30:00Z = 2025-05-25T22:30:00+08:00
+        let mut record = make_record("pi", "ainaba", "gpt-5.5", 0, 0.05);
+        record.time = "2025-05-25T14:30:00Z".to_string();
+        let cost = display_cost(&record);
+        // Not before (record.time < cutoff is false), so falls through to catch-all: 25x
+        let expected = 0.05 * 6.82 / 25.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "exactly at cutoff should use 25x (not before): expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn ainaba_derived_cost_segments_before_cutoff_uses_40x() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [
+    { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
+    { divisor = 25.0 },
+]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+
+[[model]]
+name = "gpt-5.5"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 5.00
+"#,
+        );
+
+        // Derived-cost record (codex, claude-code) from before cutoff
+        let mut record = make_record("codex", "ainaba", "gpt-5.5", 0, 0.0);
+        record.time = "2025-05-25T10:00:00Z".to_string();
+        record.input_tokens = 100_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 110_000;
+
+        let cost = display_cost(&record);
+        // usd = 100000*5/1M + 10000*30/1M = 0.5 + 0.3 = 0.8
+        // cny = 0.8 * 6.82 / 40.0 = 0.1364
+        let expected = 0.8 * 6.82 / 40.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "derived cost before cutoff should use 40x: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn ainaba_fallback_to_legacy_divisor_when_no_segments() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+"#,
+        );
+
+        // Without ainaba_segments, should fall back to ainaba_divisor
+        let mut record = make_record("pi", "ainaba", "gpt-5.5", 0, 0.05);
+        record.time = "2025-05-25T15:00:00Z".to_string();
+        let cost = display_cost(&record);
+        let expected = 0.05 * 6.82 / 40.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "fallback should use legacy ainaba_divisor: expected {}, got {}",
+            expected,
+            cost
         );
 
         restore_pricing_env(prev_env);

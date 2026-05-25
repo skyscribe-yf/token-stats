@@ -150,11 +150,12 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
 pub async fn get_quota() -> impl IntoResponse {
     let fetcher = QuotaFetcher::new();
 
-    let (kimi_result, opencode_result, opencode_ex_result, xiaomi_mimo_result) = tokio::join!(
+    let (kimi_result, opencode_result, opencode_ex_result, xiaomi_mimo_result, commandcode_result) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_opencode_quota(),
         fetcher.fetch_opencode_quota_ex(),
         fetcher.fetch_xiaomi_mimo_quota(),
+        fetcher.fetch_commandcode_quota(),
     );
 
     let response = QuotaResponse {
@@ -162,6 +163,7 @@ pub async fn get_quota() -> impl IntoResponse {
         opencode_go: Some(opencode_result),
         opencode_go_ex: Some(opencode_ex_result),
         xiaomi_mimo: Some(xiaomi_mimo_result),
+        commandcode: Some(commandcode_result),
     };
 
     Json(response)

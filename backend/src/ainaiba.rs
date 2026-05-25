@@ -2,6 +2,10 @@
 //!
 //! Queries the Ainaiba dashboard API at `api-xai.ainaibahub.com` using
 //! the `XAI_API_KEY` environment variable.
+//!
+//! The Ainaiba platform may have multiple credit balance entries ("到账卡")
+//! with different purchase rates (e.g. 40x legacy vs 25x current).
+//! This module reads all entries and exposes them individually.
 
 use serde::Serialize;
 
@@ -15,6 +19,13 @@ pub struct AinaibaCreditResponse {
     pub error: Option<String>,
 }
 
+/// Individual credit balance entry (a single "到账卡"/top-up card).
+#[derive(Debug, Serialize)]
+pub struct CreditCardInfo {
+    pub amount: f64,
+    pub expires_at: String,
+}
+
 /// Parsed credit balance and usage data from the Ainaiba dashboard.
 #[derive(Debug, Serialize)]
 pub struct AinaibaCreditData {
@@ -22,10 +33,16 @@ pub struct AinaibaCreditData {
     pub name: String,
     pub email: String,
     pub alias: String,
+    /// Total remaining balance across all cards
     pub balance: f64,
+    /// Sum of all credit card amounts
     pub credit_total: f64,
+    /// Total credits used across all cards
     pub credit_used: f64,
+    /// Earliest expiry among all cards
     pub expires_at: String,
+    /// Individual credit balance entries (到账卡)
+    pub cards: Vec<CreditCardInfo>,
     pub total_requests: i64,
     pub daily_used: f64,
     pub daily_requests: i64,
@@ -155,15 +172,48 @@ fn parse_credit_data(
 
     // Extract from credit_balance array
     let credit_balance = &info["credit_balance"];
-    let credit_total = credit_balance
-        .get(0)
-        .and_then(|c| c["amount"].as_f64())
-        .unwrap_or(0.0);
-    let expires_at = credit_balance
-        .get(0)
-        .and_then(|c| c["expires_at"].as_str())
-        .unwrap_or("")
-        .to_string();
+
+    // Read all credit card entries (到账卡)
+    let mut cards: Vec<CreditCardInfo> = Vec::new();
+    let mut credit_total = 0.0_f64;
+    let mut expires_at = String::new();
+
+    if let Some(arr) = credit_balance.as_array() {
+        for entry in arr {
+            let amount = entry["amount"].as_f64().unwrap_or(0.0);
+            let card_expires = entry["expires_at"].as_str().unwrap_or("").to_string();
+            credit_total += amount;
+            // Track the earliest expiry
+            if expires_at.is_empty() || (!card_expires.is_empty() && card_expires < expires_at) {
+                expires_at = card_expires.clone();
+            }
+            cards.push(CreditCardInfo {
+                amount,
+                expires_at: card_expires,
+            });
+        }
+    }
+
+    // Fallback for single-card (legacy API response)
+    if cards.is_empty() {
+        let amount = credit_balance
+            .get(0)
+            .and_then(|c| c["amount"].as_f64())
+            .unwrap_or(0.0);
+        let card_expires = credit_balance
+            .get(0)
+            .and_then(|c| c["expires_at"].as_str())
+            .unwrap_or("")
+            .to_string();
+        credit_total = amount;
+        expires_at = card_expires.clone();
+        if amount > 0.0 {
+            cards.push(CreditCardInfo {
+                amount,
+                expires_at: card_expires,
+            });
+        }
+    }
 
     // Extract daily/monthly usage from live dashboard data
     let daily_used = live["daily_usage"]["CreditUsed"].as_f64().unwrap_or(0.0);
@@ -195,6 +245,7 @@ fn parse_credit_data(
         credit_total,
         credit_used,
         expires_at,
+        cards,
         total_requests,
         daily_used,
         daily_requests,

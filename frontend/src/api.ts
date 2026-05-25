@@ -237,6 +237,32 @@ export interface QuotaResponse {
   opencode_go: OpenCodeQuotaStatus | null;
   opencode_go_ex: OpenCodeQuotaStatus | null;
   xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
+  commandcode: CommandCodeQuotaStatus | null;
+}
+
+// ─── CommandCode Quota ───────────────────────────────────────────────────────
+
+export interface CommandCodeQuotaData {
+  plan_name: string;
+  subscription_status: string;
+  cancel_at_period_end: boolean | null;
+  monthly_credits_total: number | null;
+  monthly_credits_used: number;
+  monthly_credits_remaining: number;
+  purchased_credits: number;
+  premium_monthly_credits: number;
+  opensource_monthly_credits: number;
+  current_period_end: string | null;
+  total_requests: number;
+  total_tokens: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+}
+
+export interface CommandCodeQuotaStatus {
+  available: boolean;
+  data: CommandCodeQuotaData | null;
+  error: string | null;
 }
 
 export async function fetchQuota(): Promise<QuotaResponse> {
@@ -253,6 +279,11 @@ export async function fetchFilters(): Promise<FilterOptions> {
 
 // ─── Ainaiba (XAI) Credit ───────────────────────────────────────────────────
 
+export interface AinaibaCreditCard {
+  amount: number;
+  expires_at: string;
+}
+
 export interface AinaibaCreditData {
   user_id: number;
   name: string;
@@ -262,6 +293,7 @@ export interface AinaibaCreditData {
   credit_total: number;
   credit_used: number;
   expires_at: string;
+  cards: AinaibaCreditCard[];
   total_requests: number;
   daily_used: number;
   daily_requests: number;

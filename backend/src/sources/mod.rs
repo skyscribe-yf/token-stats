@@ -174,6 +174,21 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
         record.model = normalize_model_name(&record.model);
     }
 
+    // ── Command Code normalization ─────────────────────────────────────
+    // Command Code API uses OpenAI convention: input_tokens includes
+    // cache_read_tokens. Subtract to normalize (matching Codex parser).
+    // This ensures correct pricing and cache hit ratio calculations.
+    for record in all_records.iter_mut() {
+        if record.provider == "commandcode" {
+            let effective_input = (record.input_tokens - record.cache_read_tokens).max(0);
+            record.input_tokens = effective_input;
+            record.total_tokens = effective_input
+                + record.output_tokens
+                + record.cache_read_tokens
+                + record.cache_write_tokens;
+        }
+    }
+
     // Apply vendor merging from config
     let merge_config_path = config::get_vendor_merge_config_path();
     if let Some(merge_map) = config::load_vendor_merge_map(&merge_config_path) {
@@ -236,5 +251,56 @@ mod tests {
         assert_eq!(normalize_model_name("gpt-5.5"), "gpt-5.5");
         assert_eq!(normalize_model_name("deepseek-v4-pro"), "deepseek-v4-pro");
         assert_eq!(normalize_model_name("kimi-for-coding"), "kimi-for-coding");
+    }
+
+    #[test]
+    fn commandcode_input_normalization() {
+        // Simulate what load_all_sources does: normalize commandcode
+        // input_tokens from OpenAI convention to Anthropic convention
+        let mut record = TokenRecord {
+            date: "2026-05-25".to_string(),
+            time: "2026-05-25T12:46:55Z".to_string(),
+            api_key_prefix: "sk-test".to_string(),
+            provider: "commandcode".to_string(),
+            original_provider: None,
+            model: "deepseek/deepseek-v4-flash".to_string(),
+            source: "pi".to_string(),
+            input_tokens: 21159,        // includes cache
+            output_tokens: 286,
+            cache_read_tokens: 20864,   // 20864 cached
+            cache_write_tokens: 0,
+            total_tokens: 42309,        // 21159 + 286 + 20864
+            cost: 0.0,
+        };
+
+        // Apply normalization (as load_all_sources does)
+        let effective_input = (record.input_tokens - record.cache_read_tokens).max(0);
+        record.input_tokens = effective_input;
+        record.total_tokens = effective_input
+            + record.output_tokens
+            + record.cache_read_tokens
+            + record.cache_write_tokens;
+
+        // input should be 21159 - 20864 = 295 (only new uncached input)
+        assert_eq!(record.input_tokens, 295);
+        assert_eq!(record.total_tokens, 295 + 286 + 20864 + 0);
+        // No change for non-commandcode records
+        let normal = TokenRecord {
+            date: "2026-05-25".to_string(),
+            time: "2026-05-25T12:00:00Z".to_string(),
+            api_key_prefix: "sk-test".to_string(),
+            provider: "openai".to_string(),
+            original_provider: None,
+            model: "gpt-5.5".to_string(),
+            source: "codex".to_string(),
+            input_tokens: 10000,
+            output_tokens: 5000,
+            cache_read_tokens: 2000,
+            cache_write_tokens: 0,
+            total_tokens: 17000,
+            cost: 0.0,
+        };
+        assert_eq!(normal.input_tokens, 10000);
+        assert_eq!(normal.total_tokens, 17000);
     }
 }

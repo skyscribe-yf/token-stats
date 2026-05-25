@@ -16,6 +16,7 @@ import type {
   OpenCodeQuotaStatus,
   KimiQuotaStatus,
   XiaomiMiMoQuotaStatus,
+  CommandCodeQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
 
@@ -299,6 +300,28 @@ function AinaibaCard({
               limit={status.data.daily_limit}
             />
           </div>
+          {status.data.cards && status.data.cards.length > 1 && (
+            <div className="mt-2 pt-2 border-t border-slate-100">
+              <div className="text-[10px] text-slate-500 mb-1">到账卡明细</div>
+              <div className="space-y-1">
+                {status.data.cards.map((card, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px]">
+                    <span className="text-slate-500">
+                      卡{i + 1}
+                      {card.expires_at && (
+                        <span className="ml-1 text-slate-400">
+                          ({card.expires_at.slice(0, 10)})
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-slate-700 font-medium tabular-nums">
+                      ¥{card.amount.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <details className="group mt-1.5">
             <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700 transition-colors">
               详细用量
@@ -574,6 +597,107 @@ function XiaomiMiMoCard({
   );
 }
 
+function CommandCodeCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: CommandCodeQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-commandcode";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const cycleCountdown = buildCycleCountdown(
+    status?.data?.current_period_end ?? null
+  );
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="CommandCode"
+        href="https://commandcode.ai"
+        suffix="commandcode.ai"
+        cycleCountdown={cycleCountdown}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && status.data ? (
+        <>
+          <div className="flex items-center gap-2 text-[11px] mb-1">
+            <span className="font-medium text-slate-600">
+              {status.data.plan_name}
+            </span>
+            <span
+              className={`px-1 py-0 rounded-full text-[10px] font-medium ${
+                status.data.subscription_status === "active"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {status.data.subscription_status === "active"
+                ? "有效"
+                : status.data.subscription_status}
+            </span>
+          </div>
+          <div className="space-y-1">
+            {status.data.monthly_credits_total != null &&
+              status.data.monthly_credits_total > 0 && (
+                <ProgressBar
+                  label="月额度"
+                  used={status.data.monthly_credits_used}
+                  limit={status.data.monthly_credits_total}
+                />
+              )}
+            {status.data.premium_monthly_credits > 0 && (
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>高级月额</span>
+                <span>${status.data.premium_monthly_credits.toFixed(2)} 剩余</span>
+              </div>
+            )}
+            {status.data.opensource_monthly_credits > 0 && (
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>开源月额</span>
+                <span>
+                  ${status.data.opensource_monthly_credits.toFixed(2)} 剩余
+                </span>
+              </div>
+            )}
+            {status.data.purchased_credits > 0 && (
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>购买额度</span>
+                <span>${status.data.purchased_credits.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+          <div className="mt-1.5 pt-1.5 border-t border-slate-100 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+            <span>
+              请求 {status.data.total_requests.toLocaleString()}
+            </span>
+            <span>
+              输入 {formatNumber(status.data.total_tokens_in)}
+            </span>
+            <span>
+              输出 {formatNumber(status.data.total_tokens_out)}
+            </span>
+          </div>
+          {status.data.current_period_end && (
+            <div className="mt-1 text-[10px] text-slate-400">
+              续订 {status.data.current_period_end.slice(0, 10)}
+              {status.data.cancel_at_period_end && " · 取消续订"}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function SkeletonBars() {
   return (
     <div className="space-y-1.5">
@@ -635,6 +759,11 @@ export function QuotasSection({
           highlightId={highlightCardId}
           cardKey="ex"
           suffix="ex"
+        />
+        <CommandCodeCard
+          status={quota?.commandcode ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
         />
       </div>
     </section>

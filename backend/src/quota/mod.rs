@@ -4,12 +4,16 @@
 //! - **Kimi Code**: Usage via `GET /usages` on the Kimi Code platform (OAuth access token)
 //! - **OpenCode-go**: Usage via direct HTTP request to workspace dashboard (HTML parsing)
 
+pub mod commandcode;
 pub mod kimi;
 pub mod opencode;
 pub mod types;
 pub mod xiaomi_mimo;
 
-pub use types::{KimiQuotaStatus, OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus};
+pub use types::{
+    CommandCodeQuotaStatus, KimiQuotaStatus, OpenCodeQuotaStatus, QuotaResponse,
+    XiaomiMiMoQuotaStatus,
+};
 
 use serde::de;
 
@@ -112,6 +116,11 @@ impl QuotaFetcher {
     /// Fetch Xiaomi MiMo TP token plan usage.
     pub async fn fetch_xiaomi_mimo_quota(&self) -> XiaomiMiMoQuotaStatus {
         xiaomi_mimo::fetch_xiaomi_mimo_quota(&self.client).await
+    }
+
+    /// Fetch CommandCode subscription/quota info.
+    pub async fn fetch_commandcode_quota(&self) -> CommandCodeQuotaStatus {
+        commandcode::fetch_commandcode_quota(&self.client).await
     }
 }
 
