@@ -464,7 +464,28 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         return record.cost / cfg.special.opencode_divisor * cfg.usd_to_cny;
     }
 
-    // 4. Records with stored cost (Pi source, or others that recorded cost)
+    // 4. CommandCode provider: always compute from normalized tokens using
+    //    CC model prices from pricing.toml. We ignore the extension's stored
+    //    cost because the pi extension currently computes cost from raw input
+    //    tokens (which include cache_read per OpenAI convention), inflating
+    //    the result ~10×.
+    //
+    //    CC model prices in pricing.toml are the listed API rate (USD / 1M).
+    //    Apply commandcode_divisor (subscription discount: actual = list / divisor),
+    //    then convert to CNY.
+    if record.provider == "commandcode" {
+        if let Some(mp) = resolve_commandcode_price(&state, &record.model) {
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+            );
+            return usd * cfg.usd_to_cny / cfg.special.commandcode_divisor;
+        }
+    }
+
+    // 5. Records with stored cost (Pi source, or others that recorded cost)
     if record.cost > 0.0 {
         // 4a. DeepSeek official Pi provider: cost is in CNY, display as-is
         //     Use original_provider to distinguish from opencode-go records
@@ -521,7 +542,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         }
     }
 
-    // 5. Derived sources without original cost: codex, claude-code, etc.
+    // 6. Derived sources without original cost: codex, claude-code, etc.
     //    Compute from per-model token rates. pricing.toml model prices are in USD.
     if record.source == "codex" || record.source == "claude-code" {
         if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
@@ -541,22 +562,6 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                 cny /= cfg.special.freemodel_divisor;
             }
             return cny;
-        }
-    }
-
-    // 6. Command Code provider: no stored cost, compute from CC model prices
-    //    CC model prices in pricing.toml are the listed API rate (USD / 1M tokens).
-    //    Apply commandcode_divisor (subscription discount: actual = list / divisor).
-    //    Then convert to CNY.
-    if record.provider == "commandcode" && record.cost == 0.0 {
-        if let Some(mp) = resolve_commandcode_price(&state, &record.model) {
-            let usd = mp.compute_usd(
-                record.input_tokens,
-                record.output_tokens,
-                record.cache_read_tokens,
-                record.cache_write_tokens,
-            );
-            return usd * cfg.usd_to_cny / cfg.special.commandcode_divisor;
         }
     }
 
