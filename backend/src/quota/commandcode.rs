@@ -10,7 +10,8 @@
 
 use super::types::*;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
+use std::fmt;
 use tracing::{info, warn};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -65,6 +66,30 @@ struct SubscriptionData {
     cancel_at_period_end: Option<bool>,
 }
 
+/// Deserialize a number that may be encoded as a JSON string.
+/// CommandCode API returns some numeric fields (like token counts) as strings.
+fn deserialize_number_or_string<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<i64, D::Error> {
+    struct NumberOrString;
+    impl<'de> de::Visitor<'de> for NumberOrString {
+        type Value = i64;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a number or string containing a number")
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
+            i64::try_from(v).map_err(de::Error::custom)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i64, E> {
+            Ok(v)
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<i64, E> {
+            v.parse().map_err(de::Error::custom)
+        }
+    }
+    deserializer.deserialize_any(NumberOrString)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageSummaryResponse {
@@ -72,11 +97,11 @@ struct UsageSummaryResponse {
     total_cost: f64,
     #[serde(default)]
     total_count: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_number_or_string")]
     total_tokens: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_number_or_string")]
     total_tokens_in: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_number_or_string")]
     total_tokens_out: i64,
 }
 
@@ -95,10 +120,7 @@ pub async fn fetch_commandcode_quota(client: &Client) -> CommandCodeQuotaStatus 
         }
     };
 
-    let cookie = format!(
-        "__Secure-commandcode_prod_.session_token={}",
-        token
-    );
+    let cookie = format!("__Secure-commandcode_prod_.session_token={}", token);
 
     // Run all three requests in parallel
     let (credits_result, subscription_result, usage_result) = tokio::join!(
@@ -147,15 +169,11 @@ pub async fn fetch_commandcode_quota(client: &Client) -> CommandCodeQuotaStatus 
         monthly_credits_used: monthly_used,
         monthly_credits_remaining: monthly_remaining,
         purchased_credits: credits.as_ref().map_or(0.0, |c| c.purchased_credits),
-        premium_monthly_credits: credits
-            .as_ref()
-            .map_or(0.0, |c| c.premium_monthly_credits),
+        premium_monthly_credits: credits.as_ref().map_or(0.0, |c| c.premium_monthly_credits),
         opensource_monthly_credits: credits
             .as_ref()
             .map_or(0.0, |c| c.opensource_monthly_credits),
-        current_period_end: sub
-            .as_ref()
-            .and_then(|s| s.current_period_end.clone()),
+        current_period_end: sub.as_ref().and_then(|s| s.current_period_end.clone()),
         total_requests: usage.as_ref().map_or(0, |u| u.total_count),
         total_tokens: usage.as_ref().map_or(0, |u| u.total_tokens),
         total_tokens_in: usage.as_ref().map_or(0, |u| u.total_tokens_in),
@@ -272,5 +290,52 @@ fn plan_id_to_label(plan_id: &str) -> &str {
         "org-pro" => "Organization Pro",
         "free" => "Free",
         _ => plan_id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_usage_summary_with_string_tokens() {
+        let json = r#"{
+            "totalCount": 851,
+            "totalCost": 1.7591,
+            "totalTokensIn": "64973237",
+            "totalTokensOut": "585408",
+            "totalTokens": "65558645"
+        }"#;
+        let parsed: UsageSummaryResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.total_count, 851);
+        assert_eq!(parsed.total_tokens, 65558645);
+        assert_eq!(parsed.total_tokens_in, 64973237);
+        assert_eq!(parsed.total_tokens_out, 585408);
+    }
+
+    #[test]
+    fn deserialize_usage_summary_with_int_tokens() {
+        let json = r#"{
+            "totalCount": 10,
+            "totalCost": 0.5,
+            "totalTokensIn": 1000,
+            "totalTokensOut": 500,
+            "totalTokens": 1500
+        }"#;
+        let parsed: UsageSummaryResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.total_count, 10);
+        assert_eq!(parsed.total_tokens, 1500);
+        assert_eq!(parsed.total_tokens_in, 1000);
+        assert_eq!(parsed.total_tokens_out, 500);
+    }
+
+    #[test]
+    fn deserialize_usage_summary_missing_fields() {
+        let json = r#"{} "#;
+        let parsed: UsageSummaryResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.total_count, 0);
+        assert_eq!(parsed.total_tokens, 0);
+        assert_eq!(parsed.total_tokens_in, 0);
+        assert_eq!(parsed.total_tokens_out, 0);
     }
 }

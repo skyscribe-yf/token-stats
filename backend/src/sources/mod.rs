@@ -265,11 +265,11 @@ mod tests {
             original_provider: None,
             model: "deepseek/deepseek-v4-flash".to_string(),
             source: "pi".to_string(),
-            input_tokens: 21159,        // includes cache
+            input_tokens: 21159, // includes cache
             output_tokens: 286,
-            cache_read_tokens: 20864,   // 20864 cached
+            cache_read_tokens: 20864, // 20864 cached
             cache_write_tokens: 0,
-            total_tokens: 42309,        // 21159 + 286 + 20864
+            total_tokens: 42309, // 21159 + 286 + 20864
             cost: 0.0,
         };
 
@@ -283,7 +283,7 @@ mod tests {
 
         // input should be 21159 - 20864 = 295 (only new uncached input)
         assert_eq!(record.input_tokens, 295);
-        assert_eq!(record.total_tokens, 295 + 286 + 20864 + 0);
+        assert_eq!(record.total_tokens, 295 + 286 + 20864);
         // No change for non-commandcode records
         let normal = TokenRecord {
             date: "2026-05-25".to_string(),

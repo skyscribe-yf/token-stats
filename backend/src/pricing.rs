@@ -329,10 +329,7 @@ fn resolve_model_price<'a>(
 /// - Provider-prefixed: `deepseek/deepseek-v4-flash`, `moonshotai/Kimi-K2.6` (pi convention)
 ///
 /// Maps to `cc:` prefixed keys in the pricing model map.
-fn resolve_commandcode_price<'a>(
-    state: &'a PricingState,
-    model: &str,
-) -> Option<&'a ModelPrice> {
+fn resolve_commandcode_price<'a>(state: &'a PricingState, model: &str) -> Option<&'a ModelPrice> {
     let cc_key = normalize_commandcode_model(model);
     state.model_map.get(&cc_key)
 }
@@ -1147,14 +1144,17 @@ cache_write = 3.75
         let mut record = make_record("pi", "commandcode", "deepseek/deepseek-v4-flash", 0, 0.0);
         // After normalization (done by load_all_sources), input is already
         // separated from cache. Simulate normalized values:
-        record.input_tokens = 295;      // new input after normalization
+        record.input_tokens = 295; // new input after normalization
         record.output_tokens = 286;
         record.cache_read_tokens = 20864;
         record.cache_write_tokens = 0;
         record.total_tokens = 21445;
         let cost = display_cost(&record);
         // No cc:deepseek-v4-flash in config → returns 0 (fallback)
-        assert_eq!(cost, 0.0, "commandcode without cc: model prices should return 0");
+        assert_eq!(
+            cost, 0.0,
+            "commandcode without cc: model prices should return 0"
+        );
     }
 
     #[test]
@@ -1204,9 +1204,8 @@ cache_write = 0.0
         record.total_tokens = 21445;
 
         let cny = display_cost(&record);
-        let usd = 295.0 * 0.14 / 1_000_000.0
-            + 286.0 * 0.28 / 1_000_000.0
-            + 20864.0 * 0.01 / 1_000_000.0;
+        let usd =
+            295.0 * 0.14 / 1_000_000.0 + 286.0 * 0.28 / 1_000_000.0 + 20864.0 * 0.01 / 1_000_000.0;
         let expected = usd * 6.82 / 10.0;
         assert!(
             cny > 0.0,
