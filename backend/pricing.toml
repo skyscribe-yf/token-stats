@@ -21,12 +21,12 @@ opencode_divisor = 6.0
 
 # Ainaba (AI奶爸) 折扣：按时间段分段
 # 5月25日22:30(UTC+8)之前：40倍
-# 5月25日22:30(UTC+8)之后：25倍
+# 5月25日22:30(UTC+8)之后：20倍
 # 分段按 `before` 时间匹配：记录时间 < before 则使用该段 divisor
 # 最后一段不加 `before` 作为兜底（当前费率）
 ainaba_segments = [
     { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
-    { divisor = 25.0 },
+    { divisor = 20.0 },
 ]
 
 # FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.82 / 0.1 = 68.2

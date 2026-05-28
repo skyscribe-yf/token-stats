@@ -30,18 +30,75 @@ inject_env_dropin() {
     local dropin_dir="/etc/systemd/system/${service_instance}.service.d"
     local dropin_file="$dropin_dir/env.conf"
 
+    # Systemd interprets % as specifiers in Environment= lines.
+    # Escape literal % as %% so values like %2B / %2F / %3D are preserved.
+    local escaped_value="${var_value//%/%%}"
+
     sudo mkdir -p "$dropin_dir"
     if [ ! -f "$dropin_file" ]; then
         echo "[Service]" | sudo tee "$dropin_file" >/dev/null
     fi
     # Remove existing line for this variable, then append
     sudo sed -i "/^Environment=\"$var_name=/d" "$dropin_file" 2>/dev/null || true
-    echo "Environment=\"$var_name=$var_value\"" | sudo tee -a "$dropin_file" >/dev/null
+    echo "Environment=\"$var_name=$escaped_value\"" | sudo tee -a "$dropin_file" >/dev/null
 }
 
 clear_env_dropins() {
     local service_instance=$1
     sudo rm -rf "/etc/systemd/system/${service_instance}.service.d"
+}
+
+# Find a non-systemd token-stats-backend process listening on a given port.
+# Returns the PID on stdout, or exits 1 if none found.
+get_rogue_backend_pid() {
+    local port=$1
+    local pid
+
+    # Try ss first, then fall back to lsof
+    pid=$(ss -tlnp 2>/dev/null | grep -E ":$port\b" | grep -oP 'pid=\K[0-9]+' | head -n1)
+    if [ -z "$pid" ] && command -v lsof >/dev/null 2>&1; then
+        pid=$(lsof -t -i TCP:"$port" 2>/dev/null | head -n1)
+    fi
+    [ -z "$pid" ] && return 1
+
+    # Verify it's actually our binary
+    local exe
+    exe=$(readlink -f /proc/"$pid"/exe 2>/dev/null || true)
+    [[ "$exe" == *token-stats-backend* ]] || return 1
+
+    # If systemd actively manages this port and this PID is the service's MainPID,
+    # it's not rogue — it's legitimate.
+    if systemctl is-active --quiet "token-stats@$port" 2>/dev/null; then
+        local main_pid
+        main_pid=$(systemctl show --property=MainPID --value "token-stats@$port" 2>/dev/null || true)
+        if [ "$pid" = "$main_pid" ]; then
+            return 1
+        fi
+    fi
+
+    echo "$pid"
+}
+
+# Kill a rogue backend process gracefully, then forcefully if needed.
+kill_rogue_backend() {
+    local port=$1
+    local pid
+    pid=$(get_rogue_backend_pid "$port" 2>/dev/null || true)
+    [ -z "$pid" ] && return 0
+
+    echo "🛑 Killing rogue backend on port $port (PID $pid)..."
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "   Force-killing PID $pid..."
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "❌ Unable to kill PID $pid — aborting"
+        return 1
+    fi
+    echo "✅ Rogue backend on port $port removed"
 }
 
 # ── 0. Detect active port ─────────────────────────────────────────────
@@ -67,9 +124,20 @@ for p in "$PORT_A" "$PORT_B"; do
     fi
 done
 
+# Detect rogue (non-systemd) backend processes that may hold ports
+for p in "$PORT_A" "$PORT_B"; do
+    rogue_pid=$(get_rogue_backend_pid "$p" 2>/dev/null || true)
+    if [ -n "$rogue_pid" ]; then
+        echo "⚠️  Rogue backend detected on port $p (PID $rogue_pid, not managed by systemd)"
+        if [[ " ${ACTIVE_PORTS[*]} " != *" $p "* ]]; then
+            ACTIVE_PORTS+=("$p")
+        fi
+    fi
+done
+
 if [ ${#ACTIVE_PORTS[@]} -gt 0 ]; then
     CURRENT_PORT="${ACTIVE_PORTS[0]}"
-    echo "✅ Active template instance(s): ${ACTIVE_PORTS[*]}"
+    echo "✅ Active instance(s): ${ACTIVE_PORTS[*]}"
 fi
 
 if [ -z "$CURRENT_PORT" ]; then
@@ -189,12 +257,17 @@ fi
 
 sudo systemctl daemon-reload
 
-# ── 6. Start new instance ─────────────────────────────────────────────
+# ── 6. Free new port from rogue processes ─────────────────────────────
+echo ""
+echo "🔍 Checking for rogue backends on port $NEW_PORT..."
+kill_rogue_backend "$NEW_PORT"
+
+# ── 7. Start new instance ─────────────────────────────────────────────
 echo ""
 echo "🟢 Starting $NEW_INSTANCE..."
 sudo systemctl start "$NEW_INSTANCE"
 
-# ── 7. Health check ───────────────────────────────────────────────────
+# ── 8. Health check ───────────────────────────────────────────────────
 echo "⏳ Health check on port $NEW_PORT (max ${HEALTH_TIMEOUT}s)..."
 if ! health_check "$NEW_PORT"; then
     echo "❌ Health check failed — aborting and cleaning up"
@@ -204,7 +277,7 @@ fi
 echo "✅ New instance is healthy"
 echo ""
 
-# ── 8. Update nginx to point to new port ──────────────────────────────
+# ── 9. Update nginx to point to new port ──────────────────────────────
 echo "🔄 Updating nginx upstream to port $NEW_PORT..."
 sed "s|server 127.0.0.1:[0-9]*;|server 127.0.0.1:$NEW_PORT;|" "$NGINX_CONF_SRC" | sudo tee "$NGINX_CONF_DST" >/dev/null
 sudo ln -sf "$NGINX_CONF_DST" /etc/nginx/sites-enabled/token-stats
@@ -218,7 +291,7 @@ sudo nginx -s reload
 echo "✅ nginx reloaded — traffic now routing to port $NEW_PORT"
 echo ""
 
-# ── 9. Drain and stop old instance(s) ─────────────────────────────────
+# ── 10. Drain and stop old instance(s) ────────────────────────────────
 if [ "$LEGACY_ACTIVE" = true ]; then
     echo "⏳ Draining legacy connections (5s)..."
     sleep 5
@@ -243,14 +316,17 @@ for p in "${ACTIVE_PORTS[@]}"; do
     sudo systemctl stop "$OLD_INSTANCE" 2>/dev/null || true
     sudo systemctl disable "$OLD_INSTANCE" 2>/dev/null || true
     clear_env_dropins "$OLD_INSTANCE"
-    echo "✅ Old instance stopped"
+    echo "✅ Old systemd instance stopped"
+
+    # Also clean up any rogue backend that might still be holding the port
+    kill_rogue_backend "$p"
 done
 echo ""
 
-# ── 10. Enable new instance for boot ──────────────────────────────────
+# ── 11. Enable new instance for boot ──────────────────────────────────
 sudo systemctl enable "$NEW_INSTANCE"
 
-# ── 11. Verify ────────────────────────────────────────────────────────
+# ── 12. Verify ────────────────────────────────────────────────────────
 echo "🧪 Verifying deployment..."
 sleep 1
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/token-stats/ 2>/dev/null || echo "000")
