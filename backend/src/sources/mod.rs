@@ -8,6 +8,7 @@ mod ccswitch;
 mod claude_code;
 mod codex;
 mod kimi_cli;
+mod kimi_code;
 mod opencode;
 mod pi;
 
@@ -20,6 +21,7 @@ pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
 pub use codex::CodexSource;
 pub use kimi_cli::KimiCliSource;
+pub use kimi_code::KimiCodeSource;
 pub use opencode::OpenCodeSource;
 pub use pi::PiSource;
 
@@ -80,7 +82,7 @@ pub(crate) fn parse_iso_timestamp(ts: &str) -> (String, String) {
 /// Used as a fallback when the provider field is missing or generic.
 pub(crate) fn resolve_provider_from_model(model: &str) -> String {
     match model {
-        "kimi-for-coding" | "kimi-k2.6" | "kimi-k2.5" => "kimi".to_string(),
+        "kimi-for-coding" | "kimi-k2" | "kimi-k2.6" | "kimi-k2.5" => "kimi".to_string(),
         "astron-code-latest" => "xunfei".to_string(),
         "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
         "deepseek-v4-pro" | "deepseek-v4-flash" => "deepseek".to_string(),
@@ -117,6 +119,7 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
             Box::new(ClaudeCodeSource),
             Box::new(OpenCodeSource),
             Box::new(KimiCliSource),
+            Box::new(KimiCodeSource),
         ];
         if std::env::var("USE_CC_SWITCH").is_ok() {
             v.push(Box::new(CcSwitchSource));

@@ -130,6 +130,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   "claude-code": "#fbbf24", // amber-400
   codex: "#34d399",       // emerald-400
   "kimi-cli": "#a78bfa",  // violet-400
+  "kimi-code": "#d946ef", // fuchsia-500
   opencode: "#fb923c",    // orange-400
   "xiaomi-mimo-tp": "#f43f5e", // rose-500
 };
@@ -159,6 +160,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   "kimi-cli": "Kimi CLI",
+  "kimi-code": "Kimi Code",
   opencode: "OpenCode",
   "xiaomi-mimo-tp": "Xiaomi MiMo TP",
 };
