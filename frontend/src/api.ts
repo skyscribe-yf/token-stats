@@ -409,10 +409,20 @@ export interface ModelPriceConfig {
   tier_threshold?: number;
 }
 
+export interface AinabaSegment {
+  before?: string;
+  divisor: number;
+}
+
 export interface SpecialPricing {
   xunfei_per_call: number;
   kimi_per_token: number;
+  xiaomi_mimo_tp_per_token: number;
   opencode_divisor: number;
+  ainaba_divisor: number;
+  ainaba_segments: AinabaSegment[];
+  freemodel_divisor: number;
+  commandcode_divisor: number;
 }
 
 export interface PricingConfig {

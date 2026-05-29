@@ -80,7 +80,9 @@ impl Default for PricingConfig {
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
                 kimi_per_token: 199.0 / 2_800_000_000.0,
-                xiaomi_mimo_tp_per_token: 99.0 / 105_222_222.0,
+                // 99 CNY subscription, 268M platform tokens ≈ 16.36M dashboard tokens (~2.44% usage)
+                // effective per-token = 99 * 0.0244 / 16_360_000 ≈ 0.0000001479
+                xiaomi_mimo_tp_per_token: 0.0000001479,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
                 ainaba_segments: Vec::new(),
@@ -426,7 +428,8 @@ fn get_ainaba_divisor(special: &SpecialPricing, record_time: &str) -> f64 {
 ///
 /// Currency conventions by Pi provider (from models.json):
 /// - `deepseek`: cost is in **CNY** (official DeepSeek API)
-/// - All other providers (ainaiba, opencode-go, guancha, xiaomi-mimo, etc.):
+/// - `xiaomi-mimo` / `xiaomi-mimo-tp`: cost is in **CNY** (platform subscription)
+/// - All other providers (ainaiba, opencode-go, guancha, etc.):
 ///   cost is in **USD**
 /// - OpenCode DB records (source="opencode"): cost is in USD
 /// - Codex/Claude-code: no stored cost, computed from tokens using pricing.toml (USD)
@@ -449,9 +452,10 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         return record.total_tokens as f64 * cfg.special.kimi_per_token;
     }
 
-    // 2b. Xiaomi MiMo TP provider with zero stored cost: per-token estimate in CNY
-    //     Similar to Kimi subscription model: 99 元 / 20 亿 Token (2_000_000_000)
-    if record.provider == "xiaomi-mimo-tp" && record.cost == 0.0 {
+    // 2b. Xiaomi MiMo provider with zero stored cost: per-token estimate in CNY
+    //     Similar to Kimi subscription model: 99 元 / 110 亿 Token (platform tokenization)
+    //     Covers both "xiaomi-mimo" (pi direct) and "xiaomi-mimo-tp" (token plan).
+    if (record.provider == "xiaomi-mimo" || record.provider == "xiaomi-mimo-tp") && record.cost == 0.0 {
         return record.total_tokens as f64 * cfg.special.xiaomi_mimo_tp_per_token;
     }
 
@@ -492,6 +496,11 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             .as_deref()
             .unwrap_or(&record.provider);
         if effective_provider == "deepseek" {
+            return record.cost;
+        }
+
+        // 4a2. Xiaomi MiMo Pi provider: cost is in CNY (from platform), display as-is
+        if effective_provider == "xiaomi-mimo" || effective_provider == "xiaomi-mimo-tp" {
             return record.cost;
         }
 
@@ -895,17 +904,47 @@ cache_write = 0.5865
     }
 
     #[test]
-    fn xiaomi_mimo_tp_with_stored_cost_uses_stored_cost() {
+    fn xiaomi_mimo_zero_cost_uses_per_token_estimate() {
         let _guard = pricing_test_guard();
-        // Records with provider="xiaomi-mimo-tp" but cost>0 should use the stored cost path
-        let record = make_record("pi", "xiaomi-mimo-tp", "mimo-v2.5-pro", 1_000_000, 0.05);
+        // xiaomi-mimo records with cost=0 should also use the per-token estimate
+        let record = make_record("pi", "xiaomi-mimo", "mimo-v2.5-pro", 1_000_000, 0.0);
         let cost = display_cost(&record);
-        // cost is in USD, so should be converted to CNY (0.05 * 6.82)
-        let expected = 0.05 * PricingConfig::default().usd_to_cny;
+        let expected = 1_000_000.0 * PricingConfig::default().special.xiaomi_mimo_tp_per_token;
+        assert!(
+            cost > 0.0,
+            "xiaomi-mimo record should have non-zero cost, got {}",
+            cost
+        );
         assert!(
             (cost - expected).abs() < 1e-9,
-            "xiaomi-mimo-tp record with stored cost should use USD→CNY, expected {}, got {}",
+            "expected {}, got {}",
             expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_tp_with_stored_cost_is_cny() {
+        let _guard = pricing_test_guard();
+        // Records with provider="xiaomi-mimo-tp" and cost>0: cost is already in CNY
+        let record = make_record("pi", "xiaomi-mimo-tp", "mimo-v2.5-pro", 1_000_000, 0.05);
+        let cost = display_cost(&record);
+        assert!(
+            (cost - 0.05).abs() < 1e-9,
+            "xiaomi-mimo-tp stored cost is CNY, expected 0.05, got {}",
+            cost
+        );
+    }
+
+    #[test]
+    fn xiaomi_mimo_with_stored_cost_is_cny() {
+        let _guard = pricing_test_guard();
+        // Records with provider="xiaomi-mimo" and cost>0: cost is already in CNY
+        let record = make_record("pi", "xiaomi-mimo", "mimo-v2.5-pro", 38537, 0.039);
+        let cost = display_cost(&record);
+        assert!(
+            (cost - 0.039).abs() < 1e-9,
+            "xiaomi-mimo stored cost is CNY, expected 0.039, got {}",
             cost
         );
     }

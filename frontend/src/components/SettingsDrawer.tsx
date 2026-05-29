@@ -120,8 +120,28 @@ export function SettingsDrawer({
                     {pricingConfig.special.kimi_per_token.toExponential(3)}
                   </li>
                   <li>
+                    Xiaomi MiMo TP: 每 Token ¥
+                    {pricingConfig.special.xiaomi_mimo_tp_per_token.toExponential(3)}
+                  </li>
+                  <li>
                     OpenCode: cost ÷ {pricingConfig.special.opencode_divisor}
                   </li>
+                  {pricingConfig.special.ainaba_segments.length > 0 ? (
+                    <li>
+                      AI奶爸: 分段折扣 (
+                      {pricingConfig.special.ainaba_segments
+                        .map((s) =>
+                          s.before
+                            ? `${s.before.slice(5, 16).replace('T', ' ')}前÷${s.divisor}`
+                            : `当前÷${s.divisor}`
+                        )
+                        .join(' → ')})
+                    </li>
+                  ) : pricingConfig.special.ainaba_divisor > 0 ? (
+                    <li>AI奶爸: cost ÷ {pricingConfig.special.ainaba_divisor}</li>
+                  ) : null}
+                  <li>FreeModel: cost ÷ {pricingConfig.special.freemodel_divisor}</li>
+                  <li>CommandCode: cost ÷ {pricingConfig.special.commandcode_divisor}</li>
                   <li>pi / ccswitch: USD → CNY</li>
                   <li>codex / claude-code: 按模型价格表换算</li>
                 </ul>
