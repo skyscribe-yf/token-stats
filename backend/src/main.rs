@@ -51,10 +51,18 @@ fn init_logging(log_level: &str) {
             Cleanup::KeepLogFiles(20),
         )
         .append()
-        .write_mode(WriteMode::Async),
+        .write_mode(WriteMode::AsyncWith {
+            pool_capa: 1 << 14,       // 16K message pool
+            message_capa: 1 << 16,    // 64K message channel
+            flush_interval: std::time::Duration::from_secs(2),
+        }),
         &FormatConfig::default().with_file(true),
     )
     .expect("Failed to set up flexi_logger tracing");
+
+    // Prevent the log handle from being dropped (which would stop the logger).
+    // Leak is intentional: the logger must outlive the process.
+    std::mem::forget(_log_handle);
 }
 
 #[tokio::main]

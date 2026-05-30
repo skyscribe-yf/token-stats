@@ -131,7 +131,6 @@ export interface ActiveWindow {
   total_requests: number;
   avg_rpm: number;
   peak_rpm: number;
-  buckets: MinuteBucket[];
 }
 
 export interface RpmAnalysis {

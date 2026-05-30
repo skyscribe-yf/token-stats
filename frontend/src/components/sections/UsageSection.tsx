@@ -15,7 +15,7 @@ import {
   Area,
   ReferenceLine,
 } from "recharts";
-import { SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   formatCalls,
   formatNumber,
@@ -144,6 +144,8 @@ export function UsageSection({
   onVendorBreakdownMetricChange,
 }: UsageSectionProps) {
   const [showChartFilter, setShowChartFilter] = useState(false);
+  const [windowPage, setWindowPage] = useState(1);
+  const WINDOW_PAGE_SIZE = 10;
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -216,6 +218,8 @@ export function UsageSection({
 
   const rpmChartData = useMemo(() => {
     if (!rpmData?.all_buckets) return [];
+    // Pre-compute window start set for O(1) lookup instead of O(n*m) .some()
+    const windowStarts = new Set(rpmData.windows.map((w) => w.start));
     return rpmData.all_buckets.map((b) => {
       // Format: "2026-05-17 10:30" → "05-17 10:30"
       const label = b.minute.includes(" ")
@@ -225,7 +229,7 @@ export function UsageSection({
         minute: label,
         requests: b.requests,
         // Mark window boundaries for visual separation
-        isWindowStart: rpmData.windows.some((w) => w.start === b.minute),
+        isWindowStart: windowStarts.has(b.minute),
       };
     });
   }, [rpmData]);
@@ -242,6 +246,22 @@ export function UsageSection({
       peakRpm: w.peak_rpm,
     }));
   }, [rpmData]);
+
+  // Reset window page when data changes
+  const totalWindowPages = Math.ceil(rpmWindowSummaries.length / WINDOW_PAGE_SIZE);
+  useEffect(() => {
+    setWindowPage(1);
+  }, [rpmData]);
+  useEffect(() => {
+    if (windowPage > totalWindowPages && totalWindowPages > 0) {
+      setWindowPage(totalWindowPages);
+    }
+  }, [windowPage, totalWindowPages]);
+
+  const pagedWindowSummaries = useMemo(() => {
+    const start = (windowPage - 1) * WINDOW_PAGE_SIZE;
+    return rpmWindowSummaries.slice(start, start + WINDOW_PAGE_SIZE);
+  }, [rpmWindowSummaries, windowPage]);
 
   const showRatioAxis =
     chartMetrics.has("cacheHitRatio") || chartMetrics.has("cacheHitRatioNoXunfei");
@@ -547,7 +567,33 @@ export function UsageSection({
           </ResponsiveContainer>
           {rpmWindowSummaries.length > 1 && (
             <div className="mt-3">
-              <p className="text-[10px] text-slate-400 font-medium mb-1.5">活跃窗口明细</p>
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-[10px] text-slate-400 font-medium">活跃窗口明细</p>
+                {totalWindowPages > 1 && (
+                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                    <span>
+                      {(windowPage - 1) * WINDOW_PAGE_SIZE + 1}-
+                      {Math.min(windowPage * WINDOW_PAGE_SIZE, rpmWindowSummaries.length)} / {rpmWindowSummaries.length}
+                    </span>
+                    <button
+                      onClick={() => setWindowPage(Math.max(1, windowPage - 1))}
+                      disabled={windowPage <= 1}
+                      className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      title="上一页"
+                    >
+                      <ChevronLeft className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => setWindowPage(Math.min(totalWindowPages, windowPage + 1))}
+                      disabled={windowPage >= totalWindowPages}
+                      className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      title="下一页"
+                    >
+                      <ChevronRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-[10px]">
                   <thead>
@@ -562,7 +608,7 @@ export function UsageSection({
                     </tr>
                   </thead>
                   <tbody>
-                    {rpmWindowSummaries.map((w) => (
+                    {pagedWindowSummaries.map((w) => (
                       <tr key={w.id} className="border-b border-slate-50">
                         <td className="py-1 pr-3 text-slate-400">{w.id}</td>
                         <td className="py-1 pr-3 text-slate-700 font-mono">{w.start}</td>

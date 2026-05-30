@@ -716,7 +716,27 @@ pub fn compute_rpm_analysis(
     // 4. Build the full all_buckets list (filling in zero-request minutes within windows)
     let mut all_buckets: Vec<MinuteBucket> = Vec::new();
     for w in &windows {
-        all_buckets.extend(w.buckets.clone());
+        let start_dt = match parse_minute_key(&w.start) {
+            Some(dt) => dt,
+            None => continue,
+        };
+        let end_dt = match parse_minute_key(&w.end) {
+            Some(dt) => dt,
+            None => continue,
+        };
+        let mut cursor = start_dt;
+        loop {
+            let key = format!("{} {:02}:{:02}", cursor.format("%Y-%m-%d"), cursor.hour(), cursor.minute());
+            let requests = minute_map.get(&key).copied().unwrap_or(0);
+            all_buckets.push(MinuteBucket {
+                minute: key,
+                requests,
+            });
+            if cursor >= end_dt {
+                break;
+            }
+            cursor += chrono::Duration::minutes(1);
+        }
     }
 
     // 5. Compute overall stats
@@ -744,7 +764,7 @@ pub fn compute_rpm_analysis(
 }
 
 /// Build an ActiveWindow from a slice of sorted minute keys that belong together.
-/// Fills in any missing minutes (zero requests) between the first and last key.
+/// Computes window stats without storing per-minute buckets (those live in `all_buckets`).
 fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Option<ActiveWindow> {
     if window_keys.is_empty() {
         return None;
@@ -756,30 +776,15 @@ fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Op
     let start_dt = parse_minute_key(&start)?;
     let end_dt = parse_minute_key(&end)?;
 
-    // Fill in all minutes from start to end (inclusive)
-    let mut buckets: Vec<MinuteBucket> = Vec::new();
-    let mut cursor = start_dt;
-    loop {
-        let key = format!("{} {:02}:{:02}", cursor.format("%Y-%m-%d"), cursor.hour(), cursor.minute());
-        let requests = minute_map.get(&key).copied().unwrap_or(0);
-        buckets.push(MinuteBucket {
-            minute: key,
-            requests,
-        });
-        if cursor >= end_dt {
-            break;
-        }
-        cursor += chrono::Duration::minutes(1);
-    }
-
-    let total_requests: i64 = buckets.iter().map(|b| b.requests).sum();
-    let duration_minutes = buckets.len() as i64;
+    // Compute duration and total requests without materializing every minute bucket
+    let duration_minutes = (end_dt - start_dt).num_minutes() + 1;
+    let total_requests: i64 = window_keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum();
+    let peak_rpm = window_keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).max().unwrap_or(0);
     let avg_rpm = if duration_minutes > 0 {
         total_requests as f64 / duration_minutes as f64
     } else {
         0.0
     };
-    let peak_rpm = buckets.iter().map(|b| b.requests).max().unwrap_or(0);
 
     Some(ActiveWindow {
         start,
@@ -788,7 +793,6 @@ fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Op
         total_requests,
         avg_rpm,
         peak_rpm,
-        buckets,
     })
 }
 

@@ -235,8 +235,6 @@ pub struct ActiveWindow {
     pub avg_rpm: f64,
     /// Peak requests per minute in this window
     pub peak_rpm: i64,
-    /// Minute-by-minute breakdown
-    pub buckets: Vec<MinuteBucket>,
 }
 
 /// Response for RPM analysis endpoint.

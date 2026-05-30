@@ -487,19 +487,15 @@ export default function App() {
   useEffect(() => {
     const load = async () => {
       if (!appliedRange.from || !appliedRange.to) return;
-      if (hasEmptyRequiredSelection) {
-        setRpmData(null);
-        return;
-      }
       try {
         const r = await fetchRpm(
           appliedRange.from,
           appliedRange.to,
-          sourceFilter,
-          vendorFilter,
+          undefined, // no source filter — RPM chart is global
+          undefined, // no vendor filter
           tzOffset,
           undefined, // default gap threshold (5 min)
-          modelFilter
+          undefined  // no model filter
         );
         setRpmData(r);
       } catch {
@@ -510,11 +506,7 @@ export default function App() {
   }, [
     appliedRange.from,
     appliedRange.to,
-    sourceFilter,
-    vendorFilter,
     tzOffset,
-    hasEmptyRequiredSelection,
-    modelFilter,
   ]);
 
   // ─── Alerts ────────────────────────────────────────────────────────────
