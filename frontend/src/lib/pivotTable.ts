@@ -10,7 +10,9 @@ export type SortColumn =
   | "cache_hit_ratio"
   | "output_ratio"
   | "cost"
-  | "avg_cost";
+  | "avg_cost"
+  | "avg_rpm"
+  | "peak_rpm";
 
 export type SortDirection = "asc" | "desc";
 
@@ -24,6 +26,8 @@ export interface PivotSummary {
   cost: number;
   cache_hit_ratio: number;
   output_ratio: number;
+  avg_rpm: number;
+  peak_rpm: number;
 }
 
 export interface PivotModelNode {
@@ -49,6 +53,8 @@ function emptySummary(): PivotSummary {
     cost: 0,
     cache_hit_ratio: 0,
     output_ratio: 0,
+    avg_rpm: 0,
+    peak_rpm: 0,
   };
 }
 
@@ -60,6 +66,17 @@ function accumulateSummary(acc: PivotSummary, sd: SourceDetailStats): void {
   acc.cache_write_tokens += sd.cache_write_tokens;
   acc.total_tokens += sd.total_tokens;
   acc.cost += sd.cost;
+  // Track peak_rpm as the max seen
+  acc.peak_rpm = Math.max(acc.peak_rpm, sd.peak_rpm);
+  // Accumulate avg_rpm weighted by calls for later averaging
+  acc.avg_rpm += sd.avg_rpm * sd.calls;
+}
+
+/// Override RPM on a summary with model-level values from the backend.
+/// Stores avg_rpm as weighted (avg_rpm * calls) so finalizeSummary can divide uniformly.
+function setModelRpm(summary: PivotSummary, avg_rpm: number, peak_rpm: number, calls: number): void {
+  summary.avg_rpm = avg_rpm * calls;
+  summary.peak_rpm = peak_rpm;
 }
 
 function computeCacheHitRatio(summary: PivotSummary): number {
@@ -74,8 +91,14 @@ function computeOutputRatio(summary: PivotSummary): number {
 }
 
 function finalizeSummary(summary: PivotSummary): PivotSummary {
+  // avg_rpm is stored as weighted sum (avg_rpm * calls); divide by total calls
+  // Exception: if setModelRpm was called, avg_rpm is already the final value
+  // We detect this by checking if avg_rpm is already a reasonable per-minute rate
+  // Actually, we always store as weighted sum here, so always divide.
+  const avg_rpm = summary.calls > 0 ? summary.avg_rpm / summary.calls : 0;
   return {
     ...summary,
+    avg_rpm,
     cache_hit_ratio: computeCacheHitRatio(summary),
     output_ratio: computeOutputRatio(summary),
   };
@@ -111,6 +134,10 @@ export function getSortValue(
       return summary.cost;
     case "avg_cost":
       return getAvgCost(summary);
+    case "avg_rpm":
+      return summary.avg_rpm;
+    case "peak_rpm":
+      return summary.peak_rpm;
     default:
       return 0;
   }
@@ -202,6 +229,9 @@ export function buildPivotTree(
       for (const sd of sourceDetails) {
         accumulateSummary(summary, sd);
       }
+      // Override RPM with model-level values from backend
+      // (computed from actual timestamps with active-window boundary detection)
+      setModelRpm(summary, ms.avg_rpm, ms.peak_rpm, ms.calls);
 
       if (hideFreeModels && summary.cost <= 0) continue;
 
@@ -227,6 +257,9 @@ export function buildPivotTree(
       vendorSummary.cache_write_tokens += m.summary.cache_write_tokens;
       vendorSummary.total_tokens += m.summary.total_tokens;
       vendorSummary.cost += m.summary.cost;
+      // Weighted RPM average: sum(avg_rpm * calls), then divide by total calls
+      vendorSummary.avg_rpm += m.summary.avg_rpm * m.summary.calls;
+      vendorSummary.peak_rpm = Math.max(vendorSummary.peak_rpm, m.summary.peak_rpm);
     }
 
     // Sort models
@@ -283,6 +316,8 @@ function sortSourceDetails(
       cost: a.cost,
       cache_hit_ratio: a.cache_hit_ratio,
       output_ratio: a.total_tokens > 0 ? (a.output_tokens / a.total_tokens) * 100 : 0,
+      avg_rpm: a.avg_rpm,
+      peak_rpm: a.peak_rpm,
     };
     const bSummary: PivotSummary = {
       calls: b.calls,
@@ -294,6 +329,8 @@ function sortSourceDetails(
       cost: b.cost,
       cache_hit_ratio: b.cache_hit_ratio,
       output_ratio: b.total_tokens > 0 ? (b.output_tokens / b.total_tokens) * 100 : 0,
+      avg_rpm: b.avg_rpm,
+      peak_rpm: b.peak_rpm,
     };
     return compareValues(
       getSortValue(aSummary, sortColumn),
@@ -375,6 +412,8 @@ export function computePivotSummary(tree: PivotTreeNode[]): PivotSummary | null 
     summary.cache_write_tokens += vendor.summary.cache_write_tokens;
     summary.total_tokens += vendor.summary.total_tokens;
     summary.cost += vendor.summary.cost;
+    summary.avg_rpm += vendor.summary.avg_rpm * vendor.summary.calls;
+    summary.peak_rpm = Math.max(summary.peak_rpm, vendor.summary.peak_rpm);
   }
   return finalizeSummary(summary);
 }

@@ -16,6 +16,8 @@ import {
   formatCost,
   formatPercent,
   formatAvgCost,
+  formatRpm,
+  formatPeakRpm,
   formatTime,
   getSourceColor,
   getSourceLabel,
@@ -357,6 +359,18 @@ export function RequestsSection({
                 >
                   平均成本{sortIndicator("avg_cost")}
                 </th>
+                <th
+                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  onClick={() => handleSort("avg_rpm")}
+                >
+                  平均 RPM{sortIndicator("avg_rpm")}
+                </th>
+                <th
+                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  onClick={() => handleSort("peak_rpm")}
+                >
+                  峰值 RPM{sortIndicator("peak_rpm")}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -439,6 +453,22 @@ export function RequestsSection({
                           vendorSummary.cost,
                           vendorSummary.total_tokens
                         )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                          vendorSummary.avg_rpm > 10
+                            ? "bg-indigo-100 text-indigo-700"
+                            : vendorSummary.avg_rpm > 1
+                              ? "bg-slate-100 text-slate-600"
+                              : "bg-slate-50 text-slate-400"
+                        }`}>
+                          {formatRpm(vendorSummary.avg_rpm)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600">
+                          {formatPeakRpm(vendorSummary.peak_rpm)}
+                        </span>
                       </td>
                     </tr>
 
@@ -536,6 +566,22 @@ export function RequestsSection({
                               <td className="px-3 py-2 text-right text-slate-600">
                                 {formatAvgCost(ms.cost, ms.total_tokens)}
                               </td>
+                              <td className="px-3 py-2 text-right">
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                  ms.avg_rpm > 10
+                                    ? "bg-indigo-100 text-indigo-700"
+                                    : ms.avg_rpm > 1
+                                      ? "bg-slate-100 text-slate-600"
+                                      : "bg-slate-50 text-slate-400"
+                                }`}>
+                                  {formatRpm(ms.avg_rpm)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600">
+                                  {formatPeakRpm(ms.peak_rpm)}
+                                </span>
+                              </td>
                             </tr>
                             {modelExpanded &&
                               !singleSource &&
@@ -611,6 +657,22 @@ export function RequestsSection({
                                   </td>
                                   <td className="px-3 py-2 text-right text-slate-600">
                                     {formatAvgCost(source.cost, source.total_tokens)}
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                      source.avg_rpm > 10
+                                        ? "bg-indigo-100 text-indigo-700"
+                                        : source.avg_rpm > 1
+                                          ? "bg-slate-100 text-slate-600"
+                                          : "bg-slate-50 text-slate-400"
+                                    }`}>
+                                      {formatRpm(source.avg_rpm)}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600">
+                                      {formatPeakRpm(source.peak_rpm)}
+                                    </span>
                                   </td>
                                 </tr>
                               ))}

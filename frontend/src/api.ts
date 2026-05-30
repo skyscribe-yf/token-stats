@@ -47,6 +47,8 @@ export interface SourceDetailStats {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
+  avg_rpm: number;
+  peak_rpm: number;
 }
 
 export interface ModelStats {
@@ -62,6 +64,8 @@ export interface ModelStats {
   cost: number;
   cache_hit_ratio: number;
   source_details: SourceDetailStats[];
+  avg_rpm: number;
+  peak_rpm: number;
 }
 
 export interface SourceStats {
@@ -111,6 +115,32 @@ export interface FilterOptions {
   vendors: string[];
   models: string[];
   sources: string[];
+}
+
+// ─── RPM Analysis ────────────────────────────────────────────────────────────
+
+export interface MinuteBucket {
+  minute: string;
+  requests: number;
+}
+
+export interface ActiveWindow {
+  start: string;
+  end: string;
+  duration_minutes: number;
+  total_requests: number;
+  avg_rpm: number;
+  peak_rpm: number;
+  buckets: MinuteBucket[];
+}
+
+export interface RpmAnalysis {
+  all_buckets: MinuteBucket[];
+  windows: ActiveWindow[];
+  overall_avg_rpm: number;
+  overall_peak_rpm: number;
+  total_active_minutes: number;
+  gap_threshold_minutes: number;
 }
 
 export async function fetchStats(
@@ -274,6 +304,28 @@ export async function fetchQuota(): Promise<QuotaResponse> {
 export async function fetchFilters(): Promise<FilterOptions> {
   const res = await fetch(`${API_BASE}/api/filters`);
   if (!res.ok) throw new Error("Failed to fetch filters");
+  return res.json();
+}
+
+export async function fetchRpm(
+  from?: string,
+  to?: string,
+  source?: string,
+  provider?: string,
+  tzOffset?: number,
+  gapThreshold?: number,
+  model?: string
+): Promise<RpmAnalysis> {
+  const params = new URLSearchParams();
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (source) params.set("source", source);
+  if (provider) params.set("provider", provider);
+  if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
+  if (gapThreshold !== undefined) params.set("gap_threshold", String(gapThreshold));
+  if (model) params.set("model", model);
+  const res = await fetch(`${API_BASE}/api/rpm?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch RPM analysis");
   return res.json();
 }
 

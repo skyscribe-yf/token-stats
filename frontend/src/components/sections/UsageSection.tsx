@@ -11,6 +11,9 @@ import {
   ComposedChart,
   Line,
   Cell,
+  AreaChart,
+  Area,
+  ReferenceLine,
 } from "recharts";
 import { SlidersHorizontal } from "lucide-react";
 import {
@@ -23,7 +26,7 @@ import {
   getSourceLabel,
   getVendorColor,
 } from "../../lib/utils";
-import type { StatsResponse } from "../../api";
+import type { StatsResponse, RpmAnalysis } from "../../api";
 
 const CHART_METRIC_OPTIONS = [
   { key: "cache", label: "缓存", color: "#c084fc" },
@@ -40,6 +43,7 @@ export type VendorBreakdownMetric = "tokens" | "cost";
 interface UsageSectionProps {
   stats: StatsResponse;
   hourlyStats: StatsResponse | null;
+  rpmData: RpmAnalysis | null;
   chartMetrics: ReadonlySet<ChartMetricKey>;
   onChartMetricsChange: (metrics: Set<ChartMetricKey>) => void;
   vendorBreakdownMetric: VendorBreakdownMetric;
@@ -110,9 +114,30 @@ function VendorBreakdownTooltip({
   );
 }
 
+function RpmTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: { value?: number | string; name?: string }[];
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-2 text-xs">
+      <p className="font-semibold text-slate-700 mb-0.5">{label}</p>
+      <p className="text-indigo-600">
+        {Number(payload[0].value ?? 0)} 请求/分钟
+      </p>
+    </div>
+  );
+}
+
 export function UsageSection({
   stats,
   hourlyStats,
+  rpmData,
   chartMetrics,
   onChartMetricsChange,
   vendorBreakdownMetric,
@@ -188,6 +213,35 @@ export function UsageSection({
       return { date: label, calls: d.calls };
     });
   }, [hourlyStats]);
+
+  const rpmChartData = useMemo(() => {
+    if (!rpmData?.all_buckets) return [];
+    return rpmData.all_buckets.map((b) => {
+      // Format: "2026-05-17 10:30" → "05-17 10:30"
+      const label = b.minute.includes(" ")
+        ? `${b.minute.substring(5)}`
+        : b.minute;
+      return {
+        minute: label,
+        requests: b.requests,
+        // Mark window boundaries for visual separation
+        isWindowStart: rpmData.windows.some((w) => w.start === b.minute),
+      };
+    });
+  }, [rpmData]);
+
+  const rpmWindowSummaries = useMemo(() => {
+    if (!rpmData?.windows) return [];
+    return rpmData.windows.map((w, i) => ({
+      id: i + 1,
+      start: w.start.substring(5), // "05-17 10:30"
+      end: w.end.substring(5),
+      duration: w.duration_minutes,
+      total: w.total_requests,
+      avgRpm: w.avg_rpm,
+      peakRpm: w.peak_rpm,
+    }));
+  }, [rpmData]);
 
   const showRatioAxis =
     chartMetrics.has("cacheHitRatio") || chartMetrics.has("cacheHitRatioNoXunfei");
@@ -424,6 +478,111 @@ export function UsageSection({
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* RPM Analysis */}
+      {rpmData && rpmData.all_buckets.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-slate-700">
+              每分钟请求数 (RPM)
+            </h3>
+            <div className="flex items-center gap-3 text-[10px] text-slate-500">
+              <span>平均 <b className="text-slate-700">{rpmData.overall_avg_rpm.toFixed(1)}</b> RPM</span>
+              <span>峰值 <b className="text-rose-600">{rpmData.overall_peak_rpm}</b> RPM</span>
+              <span>活跃 <b className="text-slate-700">{rpmData.total_active_minutes}</b> 分钟</span>
+              <span>活跃窗口 <b className="text-slate-700">{rpmData.windows.length}</b></span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={rpmChartData}>
+              <CartesianGrid strokeDasharray="2 2" stroke="#f1f5f9" />
+              <XAxis
+                dataKey="minute"
+                tick={{ fontSize: 9, fill: "#64748b" }}
+                angle={-45}
+                textAnchor="end"
+                height={60}
+                interval={Math.max(0, Math.floor(rpmChartData.length / 40) - 1)}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: "#64748b" }}
+                width={35}
+                allowDecimals={false}
+              />
+              <Tooltip content={<RpmTooltip />} />
+              {rpmData.overall_avg_rpm > 0 && (
+                <ReferenceLine
+                  y={rpmData.overall_avg_rpm}
+                  stroke="#f59e0b"
+                  strokeDasharray="4 2"
+                  strokeWidth={1}
+                  label={{
+                    value: `平均 ${rpmData.overall_avg_rpm.toFixed(1)}`,
+                    position: "insideTopRight",
+                    fill: "#f59e0b",
+                    fontSize: 10,
+                  }}
+                />
+              )}
+              <Area
+                type="stepAfter"
+                dataKey="requests"
+                name="请求数"
+                stroke="#6366f1"
+                fill="#6366f1"
+                fillOpacity={0.15}
+                strokeWidth={1.5}
+              />
+              {/* Draw window boundary lines */}
+              {rpmData.windows.slice(1).map((w, i) => (
+                <ReferenceLine
+                  key={`window-boundary-${i}`}
+                  x={w.start.substring(5)}
+                  stroke="#94a3b8"
+                  strokeDasharray="2 4"
+                  strokeWidth={1}
+                />
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+          {rpmWindowSummaries.length > 1 && (
+            <div className="mt-3">
+              <p className="text-[10px] text-slate-400 font-medium mb-1.5">活跃窗口明细</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px]">
+                  <thead>
+                    <tr className="text-slate-500 border-b border-slate-100">
+                      <th className="text-left py-1 pr-3 font-medium">#</th>
+                      <th className="text-left py-1 pr-3 font-medium">开始</th>
+                      <th className="text-left py-1 pr-3 font-medium">结束</th>
+                      <th className="text-right py-1 pr-3 font-medium">时长</th>
+                      <th className="text-right py-1 pr-3 font-medium">请求数</th>
+                      <th className="text-right py-1 pr-3 font-medium">平均 RPM</th>
+                      <th className="text-right py-1 font-medium">峰值 RPM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rpmWindowSummaries.map((w) => (
+                      <tr key={w.id} className="border-b border-slate-50">
+                        <td className="py-1 pr-3 text-slate-400">{w.id}</td>
+                        <td className="py-1 pr-3 text-slate-700 font-mono">{w.start}</td>
+                        <td className="py-1 pr-3 text-slate-700 font-mono">{w.end}</td>
+                        <td className="py-1 pr-3 text-right text-slate-600">{w.duration} 分钟</td>
+                        <td className="py-1 pr-3 text-right text-slate-600">{w.total}</td>
+                        <td className="py-1 pr-3 text-right text-indigo-600 font-semibold">{w.avgRpm.toFixed(1)}</td>
+                        <td className="py-1 text-right text-rose-600 font-semibold">{w.peakRpm}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[9px] text-slate-400 mt-1">
+                * 间隔 ≥ {rpmData.gap_threshold_minutes} 分钟无请求时视为窗口边界
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Per-source grid */}
       {stats.by_source.length > 0 && (

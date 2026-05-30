@@ -15,6 +15,7 @@ import {
   fetchAinaibaCredit,
   fetchRefresh,
   fetchPricing,
+  fetchRpm,
   fetchAdvancedModels,
   fetchSubscriptionSettings,
   saveSubscriptionSettings,
@@ -30,6 +31,7 @@ import {
   type RestoreResponse,
   type SubscriptionSettings,
   type OpenCodeQuotaStatus,
+  type RpmAnalysis,
 } from "./api";
 import {
   computeNextBillingDate,
@@ -146,6 +148,7 @@ export default function App() {
   // ─── Data ──────────────────────────────────────────────────────────────
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [hourlyStats, setHourlyStats] = useState<StatsResponse | null>(null);
+  const [rpmData, setRpmData] = useState<RpmAnalysis | null>(null);
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
   const [quota, setQuota] = useState<QuotaResponse | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(true);
@@ -466,6 +469,39 @@ export default function App() {
           modelFilter
         );
         setHourlyStats(s);
+      } catch {
+        /* ignore */
+      }
+    };
+    load();
+  }, [
+    appliedRange.from,
+    appliedRange.to,
+    sourceFilter,
+    vendorFilter,
+    tzOffset,
+    hasEmptyRequiredSelection,
+    modelFilter,
+  ]);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!appliedRange.from || !appliedRange.to) return;
+      if (hasEmptyRequiredSelection) {
+        setRpmData(null);
+        return;
+      }
+      try {
+        const r = await fetchRpm(
+          appliedRange.from,
+          appliedRange.to,
+          sourceFilter,
+          vendorFilter,
+          tzOffset,
+          undefined, // default gap threshold (5 min)
+          modelFilter
+        );
+        setRpmData(r);
       } catch {
         /* ignore */
       }
@@ -923,6 +959,7 @@ export default function App() {
               <UsageSection
                 stats={stats}
                 hourlyStats={hourlyStats}
+                rpmData={rpmData}
                 chartMetrics={chartMetrics}
                 onChartMetricsChange={setChartMetrics}
                 vendorBreakdownMetric={vendorBreakdownMetric}

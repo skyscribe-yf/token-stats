@@ -37,6 +37,18 @@ export function formatPercent(pct: number): string {
   return pct.toFixed(1) + "%";
 }
 
+export function formatRpm(rpm: number): string {
+  if (rpm == null || Number.isNaN(rpm) || rpm === 0) return "-";
+  if (rpm >= 100) return rpm.toFixed(0);
+  if (rpm >= 10) return rpm.toFixed(1);
+  return rpm.toFixed(2);
+}
+
+export function formatPeakRpm(rpm: number): string {
+  if (rpm == null || Number.isNaN(rpm) || rpm === 0) return "-";
+  return String(rpm);
+}
+
 export interface CycleCountdown {
   daysRemaining: number;
   isUrgent: boolean;

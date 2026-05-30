@@ -126,6 +126,12 @@ pub struct SourceDetailStats {
     pub total_tokens: i64,
     pub cost: f64,
     pub cache_hit_ratio: f64,
+    /// Average RPM for this source within the model.
+    #[serde(default)]
+    pub avg_rpm: f64,
+    /// Peak RPM for this source within the model.
+    #[serde(default)]
+    pub peak_rpm: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -142,6 +148,13 @@ pub struct ModelStats {
     pub cost: f64,
     pub cache_hit_ratio: f64,
     pub source_details: Vec<SourceDetailStats>,
+    /// Average requests per minute during active windows for this provider+model.
+    /// Computed using consecutive-request window boundary detection.
+    #[serde(default)]
+    pub avg_rpm: f64,
+    /// Peak requests per minute in any single minute bucket for this provider+model.
+    #[serde(default)]
+    pub peak_rpm: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -196,6 +209,51 @@ pub struct FilterOptions {
     pub vendors: Vec<String>,
     pub models: Vec<String>,
     pub sources: Vec<String>,
+}
+
+/// Minute-level request count for RPM analysis.
+#[derive(Debug, Clone, Serialize)]
+pub struct MinuteBucket {
+    /// Minute timestamp in format "YYYY-MM-DD HH:MM"
+    pub minute: String,
+    /// Number of requests in this minute
+    pub requests: i64,
+}
+
+/// An active request window - consecutive minutes with requests.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveWindow {
+    /// Start minute of the window
+    pub start: String,
+    /// End minute of the window
+    pub end: String,
+    /// Duration in minutes
+    pub duration_minutes: i64,
+    /// Total requests in this window
+    pub total_requests: i64,
+    /// Average requests per minute during the window
+    pub avg_rpm: f64,
+    /// Peak requests per minute in this window
+    pub peak_rpm: i64,
+    /// Minute-by-minute breakdown
+    pub buckets: Vec<MinuteBucket>,
+}
+
+/// Response for RPM analysis endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct RpmAnalysis {
+    /// All minute buckets (including zero-request minutes within windows)
+    pub all_buckets: Vec<MinuteBucket>,
+    /// Detected active windows
+    pub windows: Vec<ActiveWindow>,
+    /// Overall average RPM (total requests / total active minutes)
+    pub overall_avg_rpm: f64,
+    /// Overall peak RPM (max requests in any single minute)
+    pub overall_peak_rpm: i64,
+    /// Total active minutes (minutes with at least 1 request)
+    pub total_active_minutes: i64,
+    /// Gap threshold used for boundary detection (minutes)
+    pub gap_threshold_minutes: i64,
 }
 
 // ─── Test helpers ────────────────────────────────────────────────────────────

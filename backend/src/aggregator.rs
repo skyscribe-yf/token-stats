@@ -392,11 +392,121 @@ fn compute_date_stats(
     result
 }
 
+// ── Per-model RPM from raw timestamps ───────────────────────────────────────
+
+/// Compute (avg_rpm, peak_rpm) from a list of RFC3339 timestamp strings.
+///
+/// Algorithm:
+/// 1. Parse timestamps → round to minute buckets → count per minute.
+/// 2. Sort minute-buckets chronologically.
+/// 3. Detect active windows: a gap of ≥5 min with zero requests = boundary.
+/// 4. Fill zero-request minutes within each window.
+/// 5. avg_rpm = total_requests / total_active_minutes; peak_rpm = max bucket count.
+fn compute_rpm_from_times(times: &[String]) -> (f64, i64) {
+    if times.is_empty() {
+        return (0.0, 0);
+    }
+    const GAP_THRESHOLD: i64 = 5;
+
+    // 1. Count per minute
+    let mut minute_map: HashMap<String, i64> = HashMap::new();
+    for t in times {
+        if let Some(key) = parse_time_to_minute_key(t) {
+            *minute_map.entry(key).or_default() += 1;
+        }
+    }
+
+    if minute_map.is_empty() {
+        return (0.0, 0);
+    }
+
+    // 2. Sort chronologically
+    let mut sorted_keys: Vec<String> = minute_map.keys().cloned().collect();
+    sorted_keys.sort();
+
+    // 3. Detect active windows & count total active minutes + requests
+    let mut total_active_minutes: i64 = 0;
+    let mut total_requests: i64 = 0;
+    let mut window_start_idx: usize = 0;
+
+    for i in 1..sorted_keys.len() {
+        let prev_dt = parse_minute_key(&sorted_keys[i - 1]);
+        let curr_dt = parse_minute_key(&sorted_keys[i]);
+        let gap: i64 = match (prev_dt, curr_dt) {
+            (Some(p), Some(c)) => (c - p).num_minutes(),
+            _ => 1,
+        };
+        if gap > GAP_THRESHOLD {
+            // Close window: count minutes from sorted_keys[window_start_idx] to sorted_keys[i-1]
+            let (mins, reqs) = count_window_minutes_and_requests(
+                &sorted_keys[window_start_idx..i],
+                &minute_map,
+            );
+            total_active_minutes += mins;
+            total_requests += reqs;
+            window_start_idx = i;
+        }
+    }
+    // Close last window
+    let (mins, reqs) = count_window_minutes_and_requests(
+        &sorted_keys[window_start_idx..],
+        &minute_map,
+    );
+    total_active_minutes += mins;
+    total_requests += reqs;
+
+    let avg_rpm = if total_active_minutes > 0 {
+        total_requests as f64 / total_active_minutes as f64
+    } else {
+        0.0
+    };
+    let peak_rpm = minute_map.values().copied().max().unwrap_or(0);
+
+    (avg_rpm, peak_rpm)
+}
+
+/// Parse an RFC3339 timestamp string into a minute key "YYYY-MM-DD HH:MM".
+fn parse_time_to_minute_key(time_str: &str) -> Option<String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_str).ok()?;
+    Some(format!(
+        "{} {:02}:{:02}",
+        dt.format("%Y-%m-%d"),
+        dt.hour(),
+        dt.minute()
+    ))
+}
+
+/// Count the number of minutes (including zero-request fill) and total requests
+/// in a window spanned by the given sorted minute keys.
+fn count_window_minutes_and_requests(
+    keys: &[String],
+    minute_map: &HashMap<String, i64>,
+) -> (i64, i64) {
+    if keys.is_empty() {
+        return (0, 0);
+    }
+    let start_dt = match parse_minute_key(&keys[0]) {
+        Some(dt) => dt,
+        None => return (keys.len() as i64, keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum()),
+    };
+    let end_dt = match parse_minute_key(&keys[keys.len() - 1]) {
+        Some(dt) => dt,
+        None => return (keys.len() as i64, keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum()),
+    };
+    let duration_minutes = (end_dt - start_dt).num_minutes() + 1;
+    let total_requests: i64 = keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum();
+    (duration_minutes, total_requests)
+}
+
 fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
     struct Agg {
         accum: StatAccum,
         source_set: HashSet<String>,
         source_aggs: HashMap<String, StatAccum>,
+        /// Collect timestamps for RPM calculation (provider+model level)
+        times: Vec<String>,
+        /// Collect timestamps per source for RPM calculation
+        source_times: HashMap<String, Vec<String>>,
     }
 
     let mut map: HashMap<(String, String), Agg> = HashMap::new();
@@ -407,6 +517,8 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             accum: StatAccum::default(),
             source_set: HashSet::new(),
             source_aggs: HashMap::new(),
+            times: Vec::new(),
+            source_times: HashMap::new(),
         });
         agg.accum.accumulate(r);
         agg.source_set.insert(r.source.clone());
@@ -414,6 +526,11 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             .entry(r.source.clone())
             .or_default()
             .accumulate(r);
+        agg.times.push(r.time.clone());
+        agg.source_times
+            .entry(r.source.clone())
+            .or_default()
+            .push(r.time.clone());
     }
 
     let mut result: Vec<ModelStats> = map
@@ -421,19 +538,27 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         .map(|((provider, model), agg)| {
             let mut sources: Vec<String> = agg.source_set.into_iter().collect();
             sources.sort();
+            // Compute RPM for this provider+model from its timestamps
+            let (avg_rpm, peak_rpm) = compute_rpm_from_times(&agg.times);
             let mut source_details: Vec<SourceDetailStats> = agg
                 .source_aggs
                 .into_iter()
-                .map(|(source, acc)| SourceDetailStats {
-                    source,
-                    calls: acc.calls,
-                    input_tokens: acc.input_tokens,
-                    output_tokens: acc.output_tokens,
-                    cache_read_tokens: acc.cache_read_tokens,
-                    cache_write_tokens: acc.cache_write_tokens,
-                    total_tokens: acc.total_tokens,
-                    cost: acc.cost,
-                    cache_hit_ratio: acc.cache_hit_ratio(),
+                .map(|(source, acc)| {
+                    let source_times = agg.source_times.get(&source).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let (source_avg_rpm, source_peak_rpm) = compute_rpm_from_times(source_times);
+                    SourceDetailStats {
+                        source,
+                        calls: acc.calls,
+                        input_tokens: acc.input_tokens,
+                        output_tokens: acc.output_tokens,
+                        cache_read_tokens: acc.cache_read_tokens,
+                        cache_write_tokens: acc.cache_write_tokens,
+                        total_tokens: acc.total_tokens,
+                        cost: acc.cost,
+                        cache_hit_ratio: acc.cache_hit_ratio(),
+                        avg_rpm: source_avg_rpm,
+                        peak_rpm: source_peak_rpm,
+                    }
                 })
                 .collect();
             source_details.sort_by_key(|s| std::cmp::Reverse(s.total_tokens));
@@ -450,6 +575,8 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
                 cost: agg.accum.cost,
                 cache_hit_ratio: agg.accum.cache_hit_ratio(),
                 source_details,
+                avg_rpm,
+                peak_rpm,
             }
         })
         .collect();
@@ -482,6 +609,187 @@ fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
 
     result.sort_by_key(|s| std::cmp::Reverse(s.total_tokens));
     result
+}
+
+// ── RPM Analysis ────────────────────────────────────────────────────────────
+
+/// Compute the local minute-bucket key for a record ("YYYY-MM-DD HH:MM").
+fn minute_key_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Option<String> {
+    let local_dt = if let Some(tz) = tz {
+        record.parsed_time().map(|dt| dt.with_timezone(tz).naive_local())
+    } else {
+        record.parsed_time().map(|dt| dt.naive_utc())
+    };
+    local_dt.map(|dt| format!("{} {:02}:{:02}", dt.format("%Y-%m-%d"), dt.hour(), dt.minute()))
+}
+
+/// Parse a minute key back to a chrono NaiveDateTime for arithmetic.
+fn parse_minute_key(key: &str) -> Option<chrono::NaiveDateTime> {
+    // Format: "YYYY-MM-DD HH:MM"
+    chrono::NaiveDateTime::parse_from_str(key, "%Y-%m-%d %H:%M").ok()
+}
+
+/// Compute Requests-Per-Minute analysis with active-window boundary detection.
+///
+/// Algorithm:
+/// 1. Group all filtered records into 1-minute buckets.
+/// 2. Sort buckets chronologically.
+/// 3. Detect "active windows" — consecutive periods where requests occur.
+///    A gap of `gap_threshold_minutes` or more with zero requests marks a boundary.
+///    We also fill in zero-request minutes within a window (between first and last
+///    request) for a complete timeline.
+/// 4. Compute RPM metrics per window and overall.
+pub fn compute_rpm_analysis(
+    records: &[TokenRecord],
+    filters: &FilterCriteria,
+    gap_threshold_minutes: i64,
+) -> RpmAnalysis {
+    let sources = parse_csv_filter(filters.source);
+    let providers = parse_csv_filter(filters.provider);
+    let models = parse_csv_filter(filters.model);
+    let filtered: Vec<&TokenRecord> = records
+        .iter()
+        .filter(|r| record_matches_bound(r, filters.from, filters.to, filters.tz))
+        .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
+        .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
+        .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
+        .collect();
+
+    // 1. Count requests per minute
+    let mut minute_map: HashMap<String, i64> = HashMap::new();
+    for r in &filtered {
+        if let Some(key) = minute_key_for_record(r, filters.tz) {
+            *minute_map.entry(key).or_default() += 1;
+        }
+    }
+
+    if minute_map.is_empty() {
+        return RpmAnalysis {
+            all_buckets: vec![],
+            windows: vec![],
+            overall_avg_rpm: 0.0,
+            overall_peak_rpm: 0,
+            total_active_minutes: 0,
+            gap_threshold_minutes,
+        };
+    }
+
+    // 2. Sort minute keys chronologically
+    let mut sorted_keys: Vec<String> = minute_map.keys().cloned().collect();
+    sorted_keys.sort();
+
+    // 3. Detect active windows using gap threshold
+    let mut windows: Vec<ActiveWindow> = Vec::new();
+    let mut window_start_idx: usize = 0;
+
+    for i in 1..sorted_keys.len() {
+        let prev_dt = parse_minute_key(&sorted_keys[i - 1]);
+        let curr_dt = parse_minute_key(&sorted_keys[i]);
+
+        let gap: i64 = match (prev_dt, curr_dt) {
+            (Some(p), Some(c)) => {
+                let diff = c - p;
+                diff.num_minutes()
+            }
+            _ => {
+                // Fallback: if parsing fails, compare strings
+                if sorted_keys[i] != sorted_keys[i - 1] { 1 } else { 0 }
+            }
+        };
+
+        if gap > gap_threshold_minutes {
+            // Close current window
+            let window_keys = &sorted_keys[window_start_idx..i];
+            if let Some(w) = build_window(window_keys, &minute_map) {
+                windows.push(w);
+            }
+            window_start_idx = i;
+        }
+    }
+
+    // Close last window
+    let window_keys = &sorted_keys[window_start_idx..];
+    if let Some(w) = build_window(window_keys, &minute_map) {
+        windows.push(w);
+    }
+
+    // 4. Build the full all_buckets list (filling in zero-request minutes within windows)
+    let mut all_buckets: Vec<MinuteBucket> = Vec::new();
+    for w in &windows {
+        all_buckets.extend(w.buckets.clone());
+    }
+
+    // 5. Compute overall stats
+    let total_requests: i64 = windows.iter().map(|w| w.total_requests).sum();
+    let total_active_minutes: i64 = windows.iter().map(|w| w.duration_minutes).sum();
+    let overall_avg_rpm = if total_active_minutes > 0 {
+        total_requests as f64 / total_active_minutes as f64
+    } else {
+        0.0
+    };
+    let overall_peak_rpm = windows
+        .iter()
+        .map(|w| w.peak_rpm)
+        .max()
+        .unwrap_or(0);
+
+    RpmAnalysis {
+        all_buckets,
+        windows,
+        overall_avg_rpm,
+        overall_peak_rpm,
+        total_active_minutes,
+        gap_threshold_minutes,
+    }
+}
+
+/// Build an ActiveWindow from a slice of sorted minute keys that belong together.
+/// Fills in any missing minutes (zero requests) between the first and last key.
+fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Option<ActiveWindow> {
+    if window_keys.is_empty() {
+        return None;
+    }
+
+    let start = window_keys[0].clone();
+    let end = window_keys[window_keys.len() - 1].clone();
+
+    let start_dt = parse_minute_key(&start)?;
+    let end_dt = parse_minute_key(&end)?;
+
+    // Fill in all minutes from start to end (inclusive)
+    let mut buckets: Vec<MinuteBucket> = Vec::new();
+    let mut cursor = start_dt;
+    loop {
+        let key = format!("{} {:02}:{:02}", cursor.format("%Y-%m-%d"), cursor.hour(), cursor.minute());
+        let requests = minute_map.get(&key).copied().unwrap_or(0);
+        buckets.push(MinuteBucket {
+            minute: key,
+            requests,
+        });
+        if cursor >= end_dt {
+            break;
+        }
+        cursor += chrono::Duration::minutes(1);
+    }
+
+    let total_requests: i64 = buckets.iter().map(|b| b.requests).sum();
+    let duration_minutes = buckets.len() as i64;
+    let avg_rpm = if duration_minutes > 0 {
+        total_requests as f64 / duration_minutes as f64
+    } else {
+        0.0
+    };
+    let peak_rpm = buckets.iter().map(|b| b.requests).max().unwrap_or(0);
+
+    Some(ActiveWindow {
+        start,
+        end,
+        duration_minutes,
+        total_requests,
+        avg_rpm,
+        peak_rpm,
+        buckets,
+    })
 }
 
 #[cfg(test)]
