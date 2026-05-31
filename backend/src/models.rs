@@ -39,6 +39,14 @@ impl TokenRecord {
         }
     }
 
+    /// Returns true if all token fields are zero (e.g. 429 error response).
+    pub fn is_zero_token(&self) -> bool {
+        self.input_tokens == 0
+            && self.output_tokens == 0
+            && self.cache_read_tokens == 0
+            && self.cache_write_tokens == 0
+    }
+
     pub fn parsed_date(&self) -> Option<NaiveDate> {
         NaiveDate::parse_from_str(&self.date, "%Y-%m-%d").ok()
     }

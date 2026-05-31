@@ -47,6 +47,9 @@ pub struct RequestsQuery {
     pub page: usize,
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// When true, include records with zero tokens (e.g. 429 errors) in results.
+    #[serde(default)]
+    pub show_zero_tokens: Option<bool>,
 }
 
 fn default_page() -> usize {
@@ -93,6 +96,7 @@ pub async fn get_stats(
         provider,
         model,
         tz: tz.as_ref(),
+        exclude_zero_tokens: true,
     };
     let response = aggregator::aggregate_records(&records, &filters, resolution);
     Json(response)
@@ -135,6 +139,7 @@ pub async fn get_rpm(
         provider,
         model,
         tz: tz.as_ref(),
+        exclude_zero_tokens: true,
     };
     let response = aggregator::compute_rpm_analysis(&records, &filters, gap_threshold);
     Json(response)
@@ -151,6 +156,7 @@ pub async fn get_requests(
     let model = query.model.as_deref().filter(|s| !s.is_empty());
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
+    let exclude_zero_tokens = !query.show_zero_tokens.unwrap_or(false);
 
     let filters = aggregator::FilterCriteria {
         from: from.as_ref(),
@@ -159,6 +165,7 @@ pub async fn get_requests(
         provider,
         model,
         tz: tz.as_ref(),
+        exclude_zero_tokens,
     };
     let filtered = aggregator::filter_records(&records, &filters);
     let (page, limit) = validate_pagination(query.page, query.limit);

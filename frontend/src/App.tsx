@@ -97,6 +97,19 @@ function writeLs(key: string, value: string) {
   }
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setDebounced(value), delayMs);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [value, delayMs]);
+  return debounced;
+}
+
 function emptyStatsResponse(): StatsResponse {
   return {
     overall: {
@@ -143,6 +156,7 @@ export default function App() {
   const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [hideFreeModels, setHideFreeModels] = useState(false);
+  const [showZeroTokens, setShowZeroTokens] = useState(false);
   const [page, setPage] = useState(1);
 
   // ─── Data ──────────────────────────────────────────────────────────────
@@ -253,11 +267,14 @@ export default function App() {
     return expandDisplayModels(effectiveSelectedPivotModels).join(",");
   }, [effectiveSelectedPivotModels]);
 
+  const debouncedModelFilter = useDebouncedValue(modelFilter, 300);
+
   // ─── Data loading ─────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     if (!appliedRange.from || !appliedRange.to) return;
     if (hasEmptyRequiredSelection) {
       setStats(emptyStatsResponse());
+      setHourlyStats(null);
       setSliceModelOptions([]);
       setRequests(emptyRequests(1));
       setPage(1);
@@ -274,9 +291,9 @@ export default function App() {
         vendorFilter,
         tzOffset,
         resolution,
-        modelFilter
+        debouncedModelFilter
       );
-      const sliceStatsPromise = modelFilter
+      const sliceStatsPromise = debouncedModelFilter
         ? fetchStats(
             appliedRange.from,
             appliedRange.to,
@@ -286,12 +303,23 @@ export default function App() {
             resolution
           )
         : filteredStatsPromise;
-      const [s, sliceStats, f] = await Promise.all([
+      const hourlyPromise = fetchStats(
+        appliedRange.from,
+        appliedRange.to,
+        sourceFilter,
+        vendorFilter,
+        tzOffset,
+        "1h",
+        debouncedModelFilter
+      ).catch(() => null);
+      const [s, sliceStats, f, h] = await Promise.all([
         filteredStatsPromise,
         sliceStatsPromise,
         fetchFilters(),
+        hourlyPromise,
       ]);
       setStats(s);
+      if (h) setHourlyStats(h);
       setSliceModelOptions(
         getDisplayModelOptions(
           sliceStats.by_model.map((modelStats) => modelStats.model)
@@ -316,7 +344,7 @@ export default function App() {
     vendorFilter,
     tzOffset,
     resolution,
-    modelFilter,
+    debouncedModelFilter,
     hasEmptyRequiredSelection,
   ]);
 
@@ -327,16 +355,16 @@ export default function App() {
       return;
     }
     try {
-      const modelParam = modelFilter;
       const r = await fetchRequests(
         appliedRange.from,
         appliedRange.to,
         vendorFilter,
-        modelParam,
+        debouncedModelFilter,
         sourceFilter,
         page,
         50,
-        tzOffset
+        tzOffset,
+        showZeroTokens
       );
       setRequests(r);
     } catch (e) {
@@ -346,10 +374,11 @@ export default function App() {
     appliedRange.from,
     appliedRange.to,
     vendorFilter,
-    modelFilter,
+    debouncedModelFilter,
     sourceFilter,
     page,
     tzOffset,
+    showZeroTokens,
     hasEmptyRequiredSelection,
   ]);
 
@@ -450,39 +479,6 @@ export default function App() {
       .then(setSubscriptionSettings)
       .catch(() => {});
   }, []);
-
-  useEffect(() => {
-    const load = async () => {
-      if (!appliedRange.from || !appliedRange.to) return;
-      if (hasEmptyRequiredSelection) {
-        setHourlyStats(null);
-        return;
-      }
-      try {
-        const s = await fetchStats(
-          appliedRange.from,
-          appliedRange.to,
-          sourceFilter,
-          vendorFilter,
-          tzOffset,
-          "1h",
-          modelFilter
-        );
-        setHourlyStats(s);
-      } catch {
-        /* ignore */
-      }
-    };
-    load();
-  }, [
-    appliedRange.from,
-    appliedRange.to,
-    sourceFilter,
-    vendorFilter,
-    tzOffset,
-    hasEmptyRequiredSelection,
-    modelFilter,
-  ]);
 
   useEffect(() => {
     const load = async () => {
@@ -973,6 +969,8 @@ export default function App() {
                 stats={stats}
                 requests={requests}
                 hideFreeModels={hideFreeModels}
+                showZeroTokens={showZeroTokens}
+                onShowZeroTokensChange={setShowZeroTokens}
                 page={page}
                 onPageChange={setPage}
                 pivotModelOptions={availableSliceModels}

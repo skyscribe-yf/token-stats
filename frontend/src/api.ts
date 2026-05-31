@@ -172,7 +172,8 @@ export async function fetchRequests(
   source?: string,
   page: number = 1,
   limit: number = 50,
-  tzOffset?: number
+  tzOffset?: number,
+  showZeroTokens?: boolean
 ): Promise<PaginatedRequests> {
   const params = new URLSearchParams();
   if (from) params.set("from", from);
@@ -183,6 +184,7 @@ export async function fetchRequests(
   params.set("page", String(page));
   params.set("limit", String(limit));
   if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
+  if (showZeroTokens !== undefined) params.set("show_zero_tokens", String(showZeroTokens));
   const res = await fetch(`${API_BASE}/api/requests?${params}`);
   if (!res.ok) throw new Error("Failed to fetch requests");
   return res.json();

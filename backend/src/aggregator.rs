@@ -65,6 +65,8 @@ pub struct FilterCriteria<'a> {
     pub provider: Option<&'a str>,
     pub model: Option<&'a str>,
     pub tz: Option<&'a FixedOffset>,
+    /// When true (default), exclude zero-token records (e.g. 429 errors).
+    pub exclude_zero_tokens: bool,
 }
 
 pub fn aggregate_records(
@@ -81,6 +83,7 @@ pub fn aggregate_records(
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
+        .filter(|r| !r.is_zero_token()) // stats always exclude 0-token records
         .collect();
 
     let overall = compute_overall_stats(&filtered);
@@ -114,6 +117,7 @@ pub fn filter_records<'a>(
             let source_ok = sources.is_empty() || sources.contains(&r.source.as_str());
             provider_ok && model_ok && source_ok
         })
+        .filter(|r| !filters.exclude_zero_tokens || !r.is_zero_token())
         .collect();
 
     // Sort by time descending, then source asc, provider asc, model asc
@@ -653,6 +657,7 @@ pub fn compute_rpm_analysis(
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
+        .filter(|r| !r.is_zero_token()) // RPM analysis excludes 0-token records
         .collect();
 
     // 1. Count requests per minute
@@ -849,6 +854,7 @@ mod tests {
                 provider: Some("openai"),
                 model: None,
                 tz: None,
+                exclude_zero_tokens: true,
             },
             Resolution::Day,
         );
@@ -883,6 +889,7 @@ mod tests {
                 provider: None,
                 model: Some("gpt-4"),
                 tz: None,
+                exclude_zero_tokens: true,
             },
             Resolution::Day,
         );
@@ -916,6 +923,7 @@ mod tests {
                 provider: None,
                 model: Some("gpt-4,claude-3"),
                 tz: None,
+                exclude_zero_tokens: true,
             },
             Resolution::Day,
         );
@@ -949,6 +957,7 @@ mod tests {
                 provider: None,
                 model: None,
                 tz: None,
+                exclude_zero_tokens: true,
             },
             Resolution::Day,
         );
@@ -977,6 +986,7 @@ mod tests {
                 provider: None,
                 model: None,
                 tz: Some(&tz),
+                exclude_zero_tokens: true,
             },
         );
 

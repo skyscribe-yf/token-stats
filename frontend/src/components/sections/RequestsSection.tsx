@@ -38,6 +38,8 @@ interface RequestsSectionProps {
   stats: StatsResponse;
   requests: PaginatedRequests | null;
   hideFreeModels: boolean;
+  showZeroTokens: boolean;
+  onShowZeroTokensChange: (v: boolean) => void;
   page: number;
   onPageChange: (p: number) => void;
 
@@ -53,6 +55,8 @@ export function RequestsSection({
   stats,
   requests,
   hideFreeModels,
+  showZeroTokens,
+  onShowZeroTokensChange,
   page,
   onPageChange,
   pivotModelOptions,
@@ -765,6 +769,17 @@ export function RequestsSection({
           <span className="text-[11px] text-slate-400 font-normal ml-1">
             ({requests ? formatNumber(requests.total) + " 条" : "…"})
           </span>
+          <div className="ml-auto flex items-center gap-1.5" onClick={(e) => e.preventDefault()}>
+            <label className="flex items-center gap-1 text-[10px] text-slate-400 font-normal cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showZeroTokens}
+                onChange={(e) => onShowZeroTokensChange(e.target.checked)}
+                className="w-3 h-3 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              显示空请求
+            </label>
+          </div>
         </summary>
         <div className="mt-1.5 bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
           <table className="w-full text-xs">

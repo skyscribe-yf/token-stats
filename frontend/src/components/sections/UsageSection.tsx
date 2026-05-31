@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import {
   BarChart,
   Bar,
@@ -134,7 +134,7 @@ function RpmTooltip({
   );
 }
 
-export function UsageSection({
+export const UsageSection = React.memo(function UsageSection({
   stats,
   hourlyStats,
   rpmData,
@@ -673,7 +673,7 @@ export function UsageSection({
       )}
     </section>
   );
-}
+});
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
