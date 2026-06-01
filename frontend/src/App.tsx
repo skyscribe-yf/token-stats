@@ -16,6 +16,7 @@ import {
   fetchRefresh,
   fetchPricing,
   fetchRpm,
+  fetchTps,
   fetchAdvancedModels,
   fetchSubscriptionSettings,
   saveSubscriptionSettings,
@@ -32,6 +33,7 @@ import {
   type SubscriptionSettings,
   type OpenCodeQuotaStatus,
   type RpmAnalysis,
+  type TpsAnalysis,
 } from "./api";
 import {
   computeNextBillingDate,
@@ -64,6 +66,7 @@ import {
 } from "./components/sections/UsageSection";
 import { QuotasSection } from "./components/sections/QuotasSection";
 import { RequestsSection } from "./components/sections/RequestsSection";
+import { TpsChart } from "./components/TpsChart";
 
 interface AlertItem {
   id: string;
@@ -163,6 +166,7 @@ export default function App() {
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [hourlyStats, setHourlyStats] = useState<StatsResponse | null>(null);
   const [rpmData, setRpmData] = useState<RpmAnalysis | null>(null);
+  const [tpsData, setTpsData] = useState<TpsAnalysis | null>(null);
   const [requests, setRequests] = useState<PaginatedRequests | null>(null);
   const [quota, setQuota] = useState<QuotaResponse | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(true);
@@ -494,6 +498,29 @@ export default function App() {
           undefined  // no model filter
         );
         setRpmData(r);
+      } catch {
+        /* ignore */
+      }
+    };
+    load();
+  }, [
+    appliedRange.from,
+    appliedRange.to,
+    tzOffset,
+  ]);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!appliedRange.from || !appliedRange.to) return;
+      try {
+        const r = await fetchTps(
+          appliedRange.from,
+          appliedRange.to,
+          undefined,
+          undefined,
+          tzOffset
+        );
+        setTpsData(r);
       } catch {
         /* ignore */
       }
@@ -952,6 +979,11 @@ export default function App() {
                 onChartMetricsChange={setChartMetrics}
                 vendorBreakdownMetric={vendorBreakdownMetric}
                 onVendorBreakdownMetricChange={setVendorBreakdownMetric}
+              />
+
+              <TpsChart
+                tpsData={tpsData}
+                loading={loading}
               />
 
               <QuotasSection

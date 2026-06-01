@@ -22,6 +22,8 @@ export interface VendorStats {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
+  avg_ttft_ms: number;
+  avg_tps: number;
 }
 
 export interface DateStats {
@@ -49,6 +51,8 @@ export interface SourceDetailStats {
   cache_hit_ratio: number;
   avg_rpm: number;
   peak_rpm: number;
+  avg_ttft_ms: number;
+  avg_tps: number;
 }
 
 export interface ModelStats {
@@ -66,6 +70,8 @@ export interface ModelStats {
   source_details: SourceDetailStats[];
   avg_rpm: number;
   peak_rpm: number;
+  avg_ttft_ms: number;
+  avg_tps: number;
 }
 
 export interface SourceStats {
@@ -101,6 +107,8 @@ export interface DetailedRequest {
   total_tokens: number;
   cost: number;
   cache_hit_ratio: number;
+  ttft_ms: number | null;
+  tps: number | null;
 }
 
 export interface PaginatedRequests {
@@ -327,6 +335,46 @@ export async function fetchRpm(
   if (model) params.set("model", model);
   const res = await fetch(`${API_BASE}/api/rpm?${params}`);
   if (!res.ok) throw new Error("Failed to fetch RPM analysis");
+  return res.json();
+}
+
+// ─── TPS Time-Series Analysis ───────────────────────────────────────────────
+
+export interface TpsDataPoint {
+  time: string;
+  tps: number;
+}
+
+export interface TpsModelSeries {
+  model: string;
+  provider: string;
+  data_points: TpsDataPoint[];
+}
+
+export interface TpsAnalysis {
+  models: TpsModelSeries[];
+  available_models: string[];
+}
+
+export async function fetchTps(
+  from?: string,
+  to?: string,
+  source?: string,
+  provider?: string,
+  tzOffset?: number,
+  model?: string,
+  models?: string
+): Promise<TpsAnalysis> {
+  const params = new URLSearchParams();
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (source) params.set("source", source);
+  if (provider) params.set("provider", provider);
+  if (tzOffset !== undefined) params.set("tz_offset", String(tzOffset));
+  if (model) params.set("model", model);
+  if (models) params.set("models", models);
+  const res = await fetch(`${API_BASE}/api/tps?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch TPS analysis");
   return res.json();
 }
 

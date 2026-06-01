@@ -224,6 +224,8 @@ impl PiSource {
                     cache_write_tokens: tokens.cache_write.unwrap_or(0),
                     total_tokens,
                     cost: exit_data.cost.unwrap_or(0.0),
+                    ttft_ms: None,
+                    tps: None,
                 });
             }
         }

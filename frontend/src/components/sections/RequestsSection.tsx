@@ -18,6 +18,8 @@ import {
   formatAvgCost,
   formatRpm,
   formatPeakRpm,
+  formatTtft,
+  formatTps,
   formatTime,
   getSourceColor,
   getSourceLabel,
@@ -375,6 +377,18 @@ export function RequestsSection({
                 >
                   峰值 RPM{sortIndicator("peak_rpm")}
                 </th>
+                <th
+                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  onClick={() => handleSort("avg_ttft_ms")}
+                >
+                  平均 TTFT{sortIndicator("avg_ttft_ms")}
+                </th>
+                <th
+                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
+                  onClick={() => handleSort("avg_tps")}
+                >
+                  平均 TPS{sortIndicator("avg_tps")}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -472,6 +486,28 @@ export function RequestsSection({
                       <td className="px-3 py-2 text-right">
                         <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600">
                           {formatPeakRpm(vendorSummary.peak_rpm)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                          vendorSummary.avg_ttft_ms > 0
+                            ? vendorSummary.avg_ttft_ms > 1000
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-50 text-slate-400"
+                        }`}>
+                          {formatTtft(vendorSummary.avg_ttft_ms)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                          vendorSummary.avg_tps > 0
+                            ? vendorSummary.avg_tps > 50
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-100 text-slate-600"
+                            : "bg-slate-50 text-slate-400"
+                        }`}>
+                          {formatTps(vendorSummary.avg_tps)}
                         </span>
                       </td>
                     </tr>
@@ -586,6 +622,28 @@ export function RequestsSection({
                                   {formatPeakRpm(ms.peak_rpm)}
                                 </span>
                               </td>
+                              <td className="px-3 py-2 text-right">
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                  ms.avg_ttft_ms > 0
+                                    ? ms.avg_ttft_ms > 1000
+                                      ? "bg-amber-100 text-amber-700"
+                                      : "bg-emerald-100 text-emerald-700"
+                                    : "bg-slate-50 text-slate-400"
+                                }`}>
+                                  {formatTtft(ms.avg_ttft_ms)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                  ms.avg_tps > 0
+                                    ? ms.avg_tps > 50
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : "bg-slate-100 text-slate-600"
+                                    : "bg-slate-50 text-slate-400"
+                                }`}>
+                                  {formatTps(ms.avg_tps)}
+                                </span>
+                              </td>
                             </tr>
                             {modelExpanded &&
                               !singleSource &&
@@ -678,6 +736,28 @@ export function RequestsSection({
                                       {formatPeakRpm(source.peak_rpm)}
                                     </span>
                                   </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                      source.avg_ttft_ms > 0
+                                        ? source.avg_ttft_ms > 1000
+                                          ? "bg-amber-100 text-amber-700"
+                                          : "bg-emerald-100 text-emerald-700"
+                                        : "bg-slate-50 text-slate-400"
+                                    }`}>
+                                      {formatTtft(source.avg_ttft_ms)}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                      source.avg_tps > 0
+                                        ? source.avg_tps > 50
+                                          ? "bg-emerald-100 text-emerald-700"
+                                          : "bg-slate-100 text-slate-600"
+                                        : "bg-slate-50 text-slate-400"
+                                    }`}>
+                                      {formatTps(source.avg_tps)}
+                                    </span>
+                                  </td>
                                 </tr>
                               ))}
                           </Fragment>
@@ -742,6 +822,18 @@ export function RequestsSection({
                   <td className="px-3 py-2 text-right font-bold text-slate-800">
                     {formatAvgCost(pivotSummary.cost, pivotSummary.total_tokens)}
                   </td>
+                  <td className="px-3 py-2 text-right text-slate-400 text-[10px]">
+                    {formatRpm(pivotSummary.avg_rpm)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-400 text-[10px]">
+                    {formatPeakRpm(pivotSummary.peak_rpm)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-400 text-[10px]">
+                    {formatTtft(pivotSummary.avg_ttft_ms)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-400 text-[10px]">
+                    {formatTps(pivotSummary.avg_tps)}
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -796,6 +888,8 @@ export function RequestsSection({
                 <th className="px-3 py-2 text-right font-medium">缓存命中</th>
                 <th className="px-3 py-2 text-right font-medium">输出比</th>
                 <th className="px-3 py-2 text-right font-medium">费用</th>
+                <th className="px-3 py-2 text-right font-medium">TTFT</th>
+                <th className="px-3 py-2 text-right font-medium">TPS</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -873,6 +967,24 @@ export function RequestsSection({
                   </td>
                   <td className="px-3 py-2 text-right text-slate-600">
                     {formatCost(r.cost, r.source)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-600">
+                    {r.ttft_ms != null ? (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">
+                        {Math.round(r.ttft_ms)}ms
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-600">
+                    {r.tps != null ? (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">
+                        {r.tps.toFixed(1)} t/s
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

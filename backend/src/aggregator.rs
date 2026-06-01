@@ -218,6 +218,8 @@ pub fn paginate_requests(
                 total_tokens: r.total_tokens,
                 cost: pricing::display_cost(r),
                 cache_hit_ratio: r.cache_hit_ratio(),
+                ttft_ms: r.ttft_ms,
+                tps: r.tps,
             }
         })
         .collect();
@@ -263,23 +265,45 @@ fn compute_overall_stats(records: &[&TokenRecord]) -> AggregatedStats {
 
 fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
     let mut map: HashMap<String, StatAccum> = HashMap::new();
+    let mut ttft_map: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut tps_map: HashMap<String, Vec<f64>> = HashMap::new();
 
     for r in records {
         map.entry(r.provider.clone()).or_default().accumulate(r);
+        if let Some(ttft) = r.ttft_ms {
+            ttft_map.entry(r.provider.clone()).or_default().push(ttft);
+        }
+        if let Some(tps) = r.tps {
+            tps_map.entry(r.provider.clone()).or_default().push(tps);
+        }
     }
 
     let mut result: Vec<VendorStats> = map
         .into_iter()
-        .map(|(provider, acc)| VendorStats {
-            provider,
-            calls: acc.calls,
-            input_tokens: acc.input_tokens,
-            output_tokens: acc.output_tokens,
-            cache_read_tokens: acc.cache_read_tokens,
-            cache_write_tokens: acc.cache_write_tokens,
-            total_tokens: acc.total_tokens,
-            cost: acc.cost,
-            cache_hit_ratio: acc.cache_hit_ratio(),
+        .map(|(provider, acc)| {
+            let avg_ttft_ms = ttft_map
+                .get(&provider)
+                .filter(|v| !v.is_empty())
+                .map(|v| v.iter().sum::<f64>() / v.len() as f64)
+                .unwrap_or(0.0);
+            let avg_tps = tps_map
+                .get(&provider)
+                .filter(|v| !v.is_empty())
+                .map(|v| v.iter().sum::<f64>() / v.len() as f64)
+                .unwrap_or(0.0);
+            VendorStats {
+                provider,
+                calls: acc.calls,
+                input_tokens: acc.input_tokens,
+                output_tokens: acc.output_tokens,
+                cache_read_tokens: acc.cache_read_tokens,
+                cache_write_tokens: acc.cache_write_tokens,
+                total_tokens: acc.total_tokens,
+                cost: acc.cost,
+                cache_hit_ratio: acc.cache_hit_ratio(),
+                avg_ttft_ms,
+                avg_tps,
+            }
         })
         .collect();
 
@@ -469,7 +493,7 @@ fn compute_rpm_from_times(times: &[String]) -> (f64, i64) {
     (avg_rpm, peak_rpm)
 }
 
-/// Parse an RFC3339 timestamp string into a minute key "YYYY-MM-DD HH:MM".
+/// Parse an RFC3339 timestamp string into a minute key "YYYY-MM-DD HH:MM" in UTC.
 fn parse_time_to_minute_key(time_str: &str) -> Option<String> {
     let dt = chrono::DateTime::parse_from_rfc3339(time_str).ok()?;
     Some(format!(
@@ -477,6 +501,22 @@ fn parse_time_to_minute_key(time_str: &str) -> Option<String> {
         dt.format("%Y-%m-%d"),
         dt.hour(),
         dt.minute()
+    ))
+}
+
+/// Parse an RFC3339 timestamp string into a minute key "YYYY-MM-DD HH:MM" in local timezone.
+fn parse_time_to_minute_key_with_tz(time_str: &str, tz: Option<&FixedOffset>) -> Option<String> {
+    let dt = chrono::DateTime::parse_from_rfc3339(time_str).ok()?;
+    let local_dt = if let Some(tz) = tz {
+        dt.with_timezone(tz)
+    } else {
+        dt.into()
+    };
+    Some(format!(
+        "{} {:02}:{:02}",
+        local_dt.format("%Y-%m-%d"),
+        local_dt.hour(),
+        local_dt.minute()
     ))
 }
 
@@ -511,6 +551,14 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         times: Vec<String>,
         /// Collect timestamps per source for RPM calculation
         source_times: HashMap<String, Vec<String>>,
+        /// Collect TTFT values for averaging
+        ttft_values: Vec<f64>,
+        /// Collect TPS values for averaging
+        tps_values: Vec<f64>,
+        /// Collect TTFT values per source
+        source_ttft: HashMap<String, Vec<f64>>,
+        /// Collect TPS values per source
+        source_tps: HashMap<String, Vec<f64>>,
     }
 
     let mut map: HashMap<(String, String), Agg> = HashMap::new();
@@ -523,6 +571,10 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             source_aggs: HashMap::new(),
             times: Vec::new(),
             source_times: HashMap::new(),
+            ttft_values: Vec::new(),
+            tps_values: Vec::new(),
+            source_ttft: HashMap::new(),
+            source_tps: HashMap::new(),
         });
         agg.accum.accumulate(r);
         agg.source_set.insert(r.source.clone());
@@ -535,6 +587,20 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             .entry(r.source.clone())
             .or_default()
             .push(r.time.clone());
+        if let Some(ttft) = r.ttft_ms {
+            agg.ttft_values.push(ttft);
+            agg.source_ttft
+                .entry(r.source.clone())
+                .or_default()
+                .push(ttft);
+        }
+        if let Some(tps) = r.tps {
+            agg.tps_values.push(tps);
+            agg.source_tps
+                .entry(r.source.clone())
+                .or_default()
+                .push(tps);
+        }
     }
 
     let mut result: Vec<ModelStats> = map
@@ -544,12 +610,33 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             sources.sort();
             // Compute RPM for this provider+model from its timestamps
             let (avg_rpm, peak_rpm) = compute_rpm_from_times(&agg.times);
+            // Compute average TTFT and TPS
+            let avg_ttft_ms = if agg.ttft_values.is_empty() {
+                0.0
+            } else {
+                agg.ttft_values.iter().sum::<f64>() / agg.ttft_values.len() as f64
+            };
+            let avg_tps = if agg.tps_values.is_empty() {
+                0.0
+            } else {
+                agg.tps_values.iter().sum::<f64>() / agg.tps_values.len() as f64
+            };
             let mut source_details: Vec<SourceDetailStats> = agg
                 .source_aggs
                 .into_iter()
                 .map(|(source, acc)| {
                     let source_times = agg.source_times.get(&source).map(|v| v.as_slice()).unwrap_or(&[]);
                     let (source_avg_rpm, source_peak_rpm) = compute_rpm_from_times(source_times);
+                    let source_ttft_vals = agg.source_ttft.get(&source);
+                    let source_tps_vals = agg.source_tps.get(&source);
+                    let source_avg_ttft = source_ttft_vals
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.iter().sum::<f64>() / v.len() as f64)
+                        .unwrap_or(0.0);
+                    let source_avg_tps = source_tps_vals
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.iter().sum::<f64>() / v.len() as f64)
+                        .unwrap_or(0.0);
                     SourceDetailStats {
                         source,
                         calls: acc.calls,
@@ -562,6 +649,8 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
                         cache_hit_ratio: acc.cache_hit_ratio(),
                         avg_rpm: source_avg_rpm,
                         peak_rpm: source_peak_rpm,
+                        avg_ttft_ms: source_avg_ttft,
+                        avg_tps: source_avg_tps,
                     }
                 })
                 .collect();
@@ -581,6 +670,8 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
                 source_details,
                 avg_rpm,
                 peak_rpm,
+                avg_ttft_ms,
+                avg_tps,
             }
         })
         .collect();
@@ -801,6 +892,103 @@ fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Op
     })
 }
 
+// ── TPS Time-Series Analysis ────────────────────────────────────────────────
+
+/// Compute 5-minute rolling average TPS for each model.
+pub fn compute_tps_analysis(
+    records: &[TokenRecord],
+    filters: &FilterCriteria,
+    models_filter: Option<&str>,
+) -> TpsAnalysis {
+    let filtered = filter_records(records, filters);
+    
+    // Parse model filter
+    let model_set: HashSet<&str> = models_filter
+        .map(|s| s.split(',').filter(|x| !x.is_empty()).collect())
+        .unwrap_or_default();
+    
+    // Group records by (provider, model) and collect TPS data points
+    let mut model_data: HashMap<(String, String), Vec<(String, f64)>> = HashMap::new();
+    let mut all_models: HashSet<String> = HashSet::new();
+    
+    for r in &filtered {
+        let model_key = format!("{}/{}", r.provider, r.model);
+        all_models.insert(model_key.clone());
+        
+        // Apply model filter if specified
+        if !model_set.is_empty() && !model_set.contains(model_key.as_str()) {
+            continue;
+        }
+        
+        if let Some(tps) = r.tps {
+            if tps > 0.0 {
+                // Round time to minute bucket
+                if let Some(minute_key) = parse_time_to_minute_key_with_tz(&r.time, filters.tz) {
+                    model_data
+                        .entry((r.provider.clone(), r.model.clone()))
+                        .or_default()
+                        .push((minute_key, tps));
+                }
+            }
+        }
+    }
+    
+    // Compute 5-minute rolling average for each model
+    let mut models: Vec<TpsModelSeries> = model_data
+        .into_iter()
+        .map(|((provider, model), mut points)| {
+            // Sort by time
+            points.sort_by(|a, b| a.0.cmp(&b.0));
+            
+            // Group by minute and average TPS per minute
+            let mut minute_tps: HashMap<String, Vec<f64>> = HashMap::new();
+            for (minute, tps) in points {
+                minute_tps.entry(minute).or_default().push(tps);
+            }
+            
+            // Sort minutes and compute averages
+            let mut sorted_minutes: Vec<(String, f64)> = minute_tps
+                .into_iter()
+                .map(|(m, tps_vals)| {
+                    let avg = tps_vals.iter().sum::<f64>() / tps_vals.len() as f64;
+                    (m, avg)
+                })
+                .collect();
+            sorted_minutes.sort_by(|a, b| a.0.cmp(&b.0));
+            
+            // Compute 5-minute rolling average
+            let window_size = 5;
+            let data_points: Vec<TpsDataPoint> = sorted_minutes
+                .windows(window_size)
+                .map(|window| {
+                    let avg_tps = window.iter().map(|(_, t)| t).sum::<f64>() / window.len() as f64;
+                    TpsDataPoint {
+                        time: window.last().unwrap().0.clone(),
+                        tps: (avg_tps * 100.0).round() / 100.0,
+                    }
+                })
+                .collect();
+            
+            TpsModelSeries {
+                model,
+                provider,
+                data_points,
+            }
+        })
+        .collect();
+    
+    // Sort by model name
+    models.sort_by(|a, b| a.model.cmp(&b.model));
+    
+    let mut available_models: Vec<String> = all_models.into_iter().collect();
+    available_models.sort();
+    
+    TpsAnalysis {
+        models,
+        available_models,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -827,6 +1015,8 @@ mod tests {
             cache_write_tokens: 0,
             total_tokens,
             cost: 0.0,
+            ttft_ms: None,
+            tps: None,
         }
     }
 

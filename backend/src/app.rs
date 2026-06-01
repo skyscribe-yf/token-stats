@@ -123,6 +123,7 @@ pub fn build_router(state: AppState) -> Router {
     let api_routes = Router::new()
         .route("/api/stats", get(routes::get_stats))
         .route("/api/rpm", get(routes::get_rpm))
+        .route("/api/tps", get(routes::get_tps))
         .route("/api/requests", get(routes::get_requests))
         .route("/api/filters", get(routes::get_filters))
         .route("/api/quota", get(routes::get_quota))

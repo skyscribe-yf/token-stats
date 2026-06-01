@@ -210,6 +210,8 @@ providers = ["freemodel", "FreeModel"]
             cache_write_tokens: 0,
             total_tokens: 150,
             cost: 0.0,
+            ttft_ms: None,
+            tps: None,
         }
     }
 }

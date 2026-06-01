@@ -274,6 +274,8 @@ mod tests {
             cache_write_tokens: 0,
             total_tokens: 42309, // 21159 + 286 + 20864
             cost: 0.0,
+            ttft_ms: None,
+            tps: None,
         };
 
         // Apply normalization (as load_all_sources does)
@@ -302,6 +304,8 @@ mod tests {
             cache_write_tokens: 0,
             total_tokens: 17000,
             cost: 0.0,
+            ttft_ms: None,
+            tps: None,
         };
         assert_eq!(normal.input_tokens, 10000);
         assert_eq!(normal.total_tokens, 17000);

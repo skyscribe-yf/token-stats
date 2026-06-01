@@ -157,6 +157,8 @@ impl ClaudeCodeSource {
                             + cache_read_tokens
                             + cache_write_tokens,
                         cost: 0.0,
+                        ttft_ms: None,
+                        tps: None,
                     });
                 }
             }

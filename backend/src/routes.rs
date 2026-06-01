@@ -145,6 +145,47 @@ pub async fn get_rpm(
     Json(response)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TpsQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub source: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub tz_offset: Option<i32>,
+    /// Comma-separated list of models to include (e.g. "astron-code-latest,deepseek-v4-flash")
+    pub models: Option<String>,
+}
+
+pub async fn get_tps(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TpsQuery>,
+) -> impl IntoResponse {
+    let records = state.records.read().await;
+    let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
+    let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
+    let source = query.source.as_deref().filter(|s| !s.is_empty());
+    let provider = query.provider.as_deref().filter(|s| !s.is_empty());
+    let model = query.model.as_deref().filter(|s| !s.is_empty());
+    let tz = query.tz_offset.map(tz_offset_to_fixed);
+
+    let filters = aggregator::FilterCriteria {
+        from: from.as_ref(),
+        to: to.as_ref(),
+        source,
+        provider,
+        model,
+        tz: tz.as_ref(),
+        exclude_zero_tokens: true,
+    };
+    let response = aggregator::compute_tps_analysis(
+        &records,
+        &filters,
+        query.models.as_deref(),
+    );
+    Json(response)
+}
+
 pub async fn get_requests(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RequestsQuery>,

@@ -49,6 +49,17 @@ export function formatPeakRpm(rpm: number): string {
   return String(rpm);
 }
 
+export function formatTtft(ms: number): string {
+  if (ms == null || Number.isNaN(ms) || ms === 0) return "-";
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + "s";
+  return Math.round(ms) + "ms";
+}
+
+export function formatTps(tps: number): string {
+  if (tps == null || Number.isNaN(tps) || tps === 0) return "-";
+  return tps.toFixed(1);
+}
+
 export interface CycleCountdown {
   daysRemaining: number;
   isUrgent: boolean;

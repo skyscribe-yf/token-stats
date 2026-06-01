@@ -27,6 +27,10 @@ pub struct TokenRecord {
     #[serde(rename = "totalTokens")]
     pub total_tokens: i64,
     pub cost: f64,
+    #[serde(rename = "ttftMs", default)]
+    pub ttft_ms: Option<f64>,
+    #[serde(rename = "tps", default)]
+    pub tps: Option<f64>,
 }
 
 impl TokenRecord {
@@ -106,6 +110,12 @@ pub struct VendorStats {
     pub total_tokens: i64,
     pub cost: f64,
     pub cache_hit_ratio: f64,
+    /// Average time-to-first-token in milliseconds.
+    #[serde(default)]
+    pub avg_ttft_ms: f64,
+    /// Average tokens per second.
+    #[serde(default)]
+    pub avg_tps: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -140,6 +150,12 @@ pub struct SourceDetailStats {
     /// Peak RPM for this source within the model.
     #[serde(default)]
     pub peak_rpm: i64,
+    /// Average time-to-first-token in milliseconds for this source.
+    #[serde(default)]
+    pub avg_ttft_ms: f64,
+    /// Average tokens per second for this source.
+    #[serde(default)]
+    pub avg_tps: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -163,6 +179,12 @@ pub struct ModelStats {
     /// Peak requests per minute in any single minute bucket for this provider+model.
     #[serde(default)]
     pub peak_rpm: i64,
+    /// Average time-to-first-token in milliseconds.
+    #[serde(default)]
+    pub avg_ttft_ms: f64,
+    /// Average tokens per second.
+    #[serde(default)]
+    pub avg_tps: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -192,6 +214,8 @@ pub struct DetailedRequest {
     pub total_tokens: i64,
     pub cost: f64,
     pub cache_hit_ratio: f64,
+    pub ttft_ms: Option<f64>,
+    pub tps: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,6 +286,31 @@ pub struct RpmAnalysis {
     pub gap_threshold_minutes: i64,
 }
 
+/// A single TPS data point for time-series chart.
+#[derive(Debug, Clone, Serialize)]
+pub struct TpsDataPoint {
+    /// Timestamp in format "YYYY-MM-DD HH:MM"
+    pub time: String,
+    /// 5-minute rolling average TPS
+    pub tps: f64,
+}
+
+/// TPS time-series for a single model.
+#[derive(Debug, Clone, Serialize)]
+pub struct TpsModelSeries {
+    pub model: String,
+    pub provider: String,
+    pub data_points: Vec<TpsDataPoint>,
+}
+
+/// Response for TPS analysis endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct TpsAnalysis {
+    pub models: Vec<TpsModelSeries>,
+    /// All available model names for filtering UI
+    pub available_models: Vec<String>,
+}
+
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -289,6 +338,8 @@ impl TokenRecord {
             cache_write_tokens: 0,
             total_tokens,
             cost: 0.0,
+            ttft_ms: None,
+            tps: None,
         }
     }
 }

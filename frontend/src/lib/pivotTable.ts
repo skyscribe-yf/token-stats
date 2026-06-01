@@ -12,7 +12,9 @@ export type SortColumn =
   | "cost"
   | "avg_cost"
   | "avg_rpm"
-  | "peak_rpm";
+  | "peak_rpm"
+  | "avg_ttft_ms"
+  | "avg_tps";
 
 export type SortDirection = "asc" | "desc";
 
@@ -28,6 +30,8 @@ export interface PivotSummary {
   output_ratio: number;
   avg_rpm: number;
   peak_rpm: number;
+  avg_ttft_ms: number;
+  avg_tps: number;
 }
 
 export interface PivotModelNode {
@@ -55,6 +59,8 @@ function emptySummary(): PivotSummary {
     output_ratio: 0,
     avg_rpm: 0,
     peak_rpm: 0,
+    avg_ttft_ms: 0,
+    avg_tps: 0,
   };
 }
 
@@ -70,6 +76,9 @@ function accumulateSummary(acc: PivotSummary, sd: SourceDetailStats): void {
   acc.peak_rpm = Math.max(acc.peak_rpm, sd.peak_rpm);
   // Accumulate avg_rpm weighted by calls for later averaging
   acc.avg_rpm += sd.avg_rpm * sd.calls;
+  // Accumulate ttft and tps weighted by calls for later averaging
+  acc.avg_ttft_ms += sd.avg_ttft_ms * sd.calls;
+  acc.avg_tps += sd.avg_tps * sd.calls;
 }
 
 /// Override RPM on a summary with model-level values from the backend.
@@ -77,6 +86,11 @@ function accumulateSummary(acc: PivotSummary, sd: SourceDetailStats): void {
 function setModelRpm(summary: PivotSummary, avg_rpm: number, peak_rpm: number, calls: number): void {
   summary.avg_rpm = avg_rpm * calls;
   summary.peak_rpm = peak_rpm;
+}
+
+function setModelTtftTps(summary: PivotSummary, avg_ttft_ms: number, avg_tps: number, calls: number): void {
+  summary.avg_ttft_ms = avg_ttft_ms * calls;
+  summary.avg_tps = avg_tps * calls;
 }
 
 function computeCacheHitRatio(summary: PivotSummary): number {
@@ -96,9 +110,13 @@ function finalizeSummary(summary: PivotSummary): PivotSummary {
   // We detect this by checking if avg_rpm is already a reasonable per-minute rate
   // Actually, we always store as weighted sum here, so always divide.
   const avg_rpm = summary.calls > 0 ? summary.avg_rpm / summary.calls : 0;
+  const avg_ttft_ms = summary.calls > 0 ? summary.avg_ttft_ms / summary.calls : 0;
+  const avg_tps = summary.calls > 0 ? summary.avg_tps / summary.calls : 0;
   return {
     ...summary,
     avg_rpm,
+    avg_ttft_ms,
+    avg_tps,
     cache_hit_ratio: computeCacheHitRatio(summary),
     output_ratio: computeOutputRatio(summary),
   };
@@ -138,6 +156,10 @@ export function getSortValue(
       return summary.avg_rpm;
     case "peak_rpm":
       return summary.peak_rpm;
+    case "avg_ttft_ms":
+      return summary.avg_ttft_ms;
+    case "avg_tps":
+      return summary.avg_tps;
     default:
       return 0;
   }
@@ -232,6 +254,8 @@ export function buildPivotTree(
       // Override RPM with model-level values from backend
       // (computed from actual timestamps with active-window boundary detection)
       setModelRpm(summary, ms.avg_rpm, ms.peak_rpm, ms.calls);
+      // Override TTFT and TPS with model-level values from backend
+      setModelTtftTps(summary, ms.avg_ttft_ms, ms.avg_tps, ms.calls);
 
       if (hideFreeModels && summary.cost <= 0) continue;
 
@@ -318,6 +342,8 @@ function sortSourceDetails(
       output_ratio: a.total_tokens > 0 ? (a.output_tokens / a.total_tokens) * 100 : 0,
       avg_rpm: a.avg_rpm,
       peak_rpm: a.peak_rpm,
+      avg_ttft_ms: a.avg_ttft_ms ?? 0,
+      avg_tps: a.avg_tps ?? 0,
     };
     const bSummary: PivotSummary = {
       calls: b.calls,
@@ -331,6 +357,8 @@ function sortSourceDetails(
       output_ratio: b.total_tokens > 0 ? (b.output_tokens / b.total_tokens) * 100 : 0,
       avg_rpm: b.avg_rpm,
       peak_rpm: b.peak_rpm,
+      avg_ttft_ms: b.avg_ttft_ms ?? 0,
+      avg_tps: b.avg_tps ?? 0,
     };
     return compareValues(
       getSortValue(aSummary, sortColumn),
@@ -414,6 +442,8 @@ export function computePivotSummary(tree: PivotTreeNode[]): PivotSummary | null 
     summary.cost += vendor.summary.cost;
     summary.avg_rpm += vendor.summary.avg_rpm * vendor.summary.calls;
     summary.peak_rpm = Math.max(summary.peak_rpm, vendor.summary.peak_rpm);
+    summary.avg_ttft_ms += vendor.summary.avg_ttft_ms * vendor.summary.calls;
+    summary.avg_tps += vendor.summary.avg_tps * vendor.summary.calls;
   }
   return finalizeSummary(summary);
 }

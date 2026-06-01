@@ -177,6 +177,8 @@ impl OpenCodeSource {
             cache_write_tokens,
             total_tokens,
             cost,
+            ttft_ms: None,
+            tps: None,
         })
     }
 }

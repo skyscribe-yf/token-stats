@@ -143,6 +143,8 @@ impl KimiCodeSource {
                     cache_write_tokens: cache_creation,
                     total_tokens: total,
                     cost: 0.0,
+                    ttft_ms: None,
+                    tps: None,
                 });
             }
         }

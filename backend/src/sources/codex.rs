@@ -149,6 +149,8 @@ impl CodexSource {
                         cache_write_tokens: 0,
                         total_tokens: effective_input + output_tokens + cached_input_tokens,
                         cost: 0.0,
+                        ttft_ms: None,
+                        tps: None,
                     });
                 }
             }

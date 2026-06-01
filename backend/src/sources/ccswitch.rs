@@ -232,6 +232,8 @@ impl CcSwitchSource {
                             + effective_cache_read
                             + cache_creation_tokens,
                         cost,
+                        ttft_ms: None,
+                        tps: None,
                     });
                 }
             }

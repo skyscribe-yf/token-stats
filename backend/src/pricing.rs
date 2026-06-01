@@ -634,6 +634,8 @@ mod tests {
             cache_write_tokens: 0,
             total_tokens,
             cost,
+            ttft_ms: None,
+            tps: None,
         }
     }
 
