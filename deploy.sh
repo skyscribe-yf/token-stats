@@ -282,6 +282,11 @@ echo "🔄 Updating nginx upstream to port $NEW_PORT..."
 sed "s|server 127.0.0.1:[0-9]*;|server 127.0.0.1:$NEW_PORT;|" "$NGINX_CONF_SRC" | sudo tee "$NGINX_CONF_DST" >/dev/null
 sudo ln -sf "$NGINX_CONF_DST" /etc/nginx/sites-enabled/token-stats
 
+# Ensure token-stats is the default site (remove competing default)
+if [ -L /etc/nginx/sites-enabled/default ]; then
+    sudo rm -f /etc/nginx/sites-enabled/default
+fi
+
 echo "🧪 Testing nginx configuration..."
 sudo nginx -t
 echo "✅ nginx config valid"
