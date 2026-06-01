@@ -61,15 +61,15 @@ export function Sidebar({
       {/* Mobile overlay */}
       {open && (
         <div
-          className="lg:hidden fixed inset-0 z-30 bg-black/30"
+          className="lg:hidden fixed inset-0 z-20 bg-black/30"
           onClick={onClose}
           aria-hidden
         />
       )}
 
       <aside
-        className={`w-52 shrink-0 bg-white border-r border-slate-200 flex flex-col h-[calc(100vh-2.75rem)] sticky top-11 z-30 transition-transform ${
-          open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+        className={`w-52 shrink-0 bg-white border-r border-slate-200 flex flex-col h-[calc(100vh-2.75rem)] sticky top-11 z-30 transition-transform pointer-events-none lg:pointer-events-auto ${
+          open ? "translate-x-0 pointer-events-auto" : "-translate-x-full lg:translate-x-0"
         } lg:translate-x-0 max-lg:fixed max-lg:top-11 max-lg:left-0`}
       >
         <div className="lg:hidden flex items-center justify-end px-3 py-1 border-b border-slate-100">

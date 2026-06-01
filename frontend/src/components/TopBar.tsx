@@ -50,7 +50,7 @@ export function TopBar({
 
       <nav
         aria-label="Section navigation"
-        className="absolute left-1/2 -translate-x-1/2"
+        className="absolute left-1/2 -translate-x-1/2 max-sm:hidden"
       >
         <div className="inline-flex items-center bg-slate-100 rounded-lg p-0.5 gap-0.5">
           {SECTIONS.map((s) => (
@@ -70,6 +70,26 @@ export function TopBar({
       </nav>
 
       <div className="ml-auto flex items-center gap-2 shrink-0">
+        {/* Mobile section nav - compact inline tabs */}
+        <nav
+          aria-label="Section navigation (mobile)"
+          className="sm:hidden flex items-center gap-0.5"
+        >
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => onSectionSelect(s.id)}
+              className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
+                activeSection === s.id
+                ? "bg-primary-50 text-primary-700"
+                : "text-slate-400 hover:text-slate-600"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </nav>
+
         <span className="hidden sm:inline text-xs text-slate-400 tabular-nums">
           Updated {lastUpdatedAt ? formatTime(lastUpdatedAt.toISOString()).slice(11, 19) : "—"}
         </span>

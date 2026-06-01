@@ -38,7 +38,15 @@ export function SettingsDrawer({
   if (!open) return null;
 
   return (
-    <aside className="w-52 shrink-0 bg-white border-r border-slate-200 flex flex-col h-[calc(100vh-2.75rem)] sticky top-11 z-30">
+    <>
+      {/* Mobile overlay */}
+      <div
+        className="lg:hidden fixed inset-0 z-20 bg-black/30"
+        onClick={onClose}
+        aria-hidden
+      />
+
+      <aside className="w-52 shrink-0 bg-white border-r border-slate-200 flex flex-col h-[calc(100vh-2.75rem)] sticky top-11 z-30 max-lg:fixed max-lg:top-11 max-lg:left-0 max-lg:translate-x-0">
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-100">
         <h2 className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
           <span>设置</span>
@@ -264,5 +272,6 @@ export function SettingsDrawer({
         </section>
       </div>
     </aside>
+    </>
   );
 }
