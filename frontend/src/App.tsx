@@ -400,9 +400,25 @@ export default function App() {
     const interval = setInterval(() => {
       void loadData();
       void loadRequests();
+      if (appliedRange.from && appliedRange.to) {
+        void fetchRpm(
+          appliedRange.from,
+          appliedRange.to,
+          undefined,
+          undefined,
+          tzOffset
+        ).then(setRpmData).catch(() => {});
+        void fetchTps(
+          appliedRange.from,
+          appliedRange.to,
+          undefined,
+          undefined,
+          tzOffset
+        ).then(setTpsData).catch(() => {});
+      }
     }, 30000);
     return () => clearInterval(interval);
-  }, [loadData, loadRequests]);
+  }, [loadData, loadRequests, appliedRange.from, appliedRange.to, tzOffset]);
 
   useEffect(() => {
     const load = async () => {
@@ -458,6 +474,22 @@ export default function App() {
         await fetchRefresh();
         void loadData();
         void loadRequests();
+        if (appliedRange.from && appliedRange.to) {
+          void fetchRpm(
+            appliedRange.from,
+            appliedRange.to,
+            undefined,
+            undefined,
+            tzOffset
+          ).then(setRpmData).catch(() => {});
+          void fetchTps(
+            appliedRange.from,
+            appliedRange.to,
+            undefined,
+            undefined,
+            tzOffset
+          ).then(setTpsData).catch(() => {});
+        }
       } catch {
         /* best effort */
       }
@@ -850,7 +882,23 @@ export default function App() {
   const handleManualRefresh = useCallback(() => {
     void loadData();
     void loadRequests();
-  }, [loadData, loadRequests]);
+    if (appliedRange.from && appliedRange.to) {
+      void fetchRpm(
+        appliedRange.from,
+        appliedRange.to,
+        undefined,
+        undefined,
+        tzOffset
+      ).then(setRpmData).catch(() => {});
+      void fetchTps(
+        appliedRange.from,
+        appliedRange.to,
+        undefined,
+        undefined,
+        tzOffset
+      ).then(setTpsData).catch(() => {});
+    }
+  }, [loadData, loadRequests, appliedRange.from, appliedRange.to, tzOffset]);
 
   const handleSaveSubscriptionSettings = useCallback(async () => {
     if (!subscriptionSettings) return;

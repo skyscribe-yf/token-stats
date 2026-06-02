@@ -243,38 +243,99 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
             }}
           />
           <Tooltip
-            contentStyle={{
-              fontSize: 11,
-              borderRadius: 8,
-              border: "1px solid #e2e8f0",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+            content={({ active, payload, label }) => {
+              if (!active || !payload || payload.length === 0) return null;
+              const filtered = payload.filter(
+                (p) => !String(p.name).endsWith("__dotted")
+              );
+              if (filtered.length === 0) return null;
+              const s = String(label);
+              const displayLabel = s.length >= 16 ? s.substring(5) : s;
+              return (
+                <div
+                  style={{
+                    fontSize: 11,
+                    borderRadius: 8,
+                    border: "1px solid #e2e8f0",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+                    background: "#fff",
+                    padding: "8px 12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      marginBottom: 4,
+                      color: "#334155",
+                    }}
+                  >
+                    {displayLabel}
+                  </div>
+                  {filtered.map((entry, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        marginTop: 2,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          background: entry.color,
+                          display: "inline-block",
+                        }}
+                      />
+                      <span style={{ color: "#64748b" }}>
+                        {String(entry.name).split("/").pop()}:
+                      </span>
+                      <span style={{ fontWeight: 500, color: "#334155" }}>
+                        {Number(entry.value).toFixed(1)} TPS
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
             }}
-            labelFormatter={(v) => {
-              const s = String(v);
-              if (s.length >= 16) return s.substring(5);
-              return s;
-            }}
-            formatter={(value, name) => [
-              `${Number(value).toFixed(1)} TPS`,
-              String(name).split("/").pop(),
-            ]}
           />
           <Legend
             wrapperStyle={{ fontSize: 10 }}
             formatter={(value: string) => value.split("/").pop()}
           />
           {Array.from(modelColorMap.entries()).map(([model, color]) => (
-            <Line
-              key={model}
-              type="monotone"
-              dataKey={model}
-              name={model}
-              stroke={color}
-              strokeWidth={1.5}
-              dot={false}
-              connectNulls={false}
-              animationDuration={300}
-            />
+            <>
+              {/* Dotted background line: connects across gaps */}
+              <Line
+                key={`${model}__dotted`}
+                type="monotone"
+                dataKey={model}
+                name={`${model}__dotted`}
+                stroke={color}
+                strokeWidth={1.5}
+                strokeDasharray="3 3"
+                strokeOpacity={0.5}
+                dot={false}
+                connectNulls={true}
+                legendType="none"
+                animationDuration={300}
+              />
+              {/* Solid foreground line: actual data segments */}
+              <Line
+                key={model}
+                type="monotone"
+                dataKey={model}
+                name={model}
+                stroke={color}
+                strokeWidth={1.5}
+                dot={false}
+                connectNulls={false}
+                animationDuration={300}
+              />
+            </>
           ))}
         </LineChart>
       </ResponsiveContainer>
