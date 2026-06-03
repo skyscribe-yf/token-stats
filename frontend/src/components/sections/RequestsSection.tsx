@@ -1,4 +1,4 @@
-import { useMemo, useState, Fragment, useEffect } from "react";
+import { useMemo, useState, useCallback, Fragment, useEffect } from "react";
 import {
   ChevronDown,
   ChevronRight as ChevronRightIcon,
@@ -33,8 +33,43 @@ import {
   type SortDirection,
 } from "../../lib/pivotTable";
 import { toggleInSet } from "../../lib/timeRange";
+import { useResizableColumns } from "../../lib/resizableColumns";
 import { saveAdvancedModels } from "../../api";
 import type { StatsResponse, PaginatedRequests } from "../../api";
+
+const PIVOT_COLUMN_KEYS = [
+  "name",
+  "calls",
+  "input",
+  "output",
+  "cache",
+  "total",
+  "cacheHit",
+  "outputRatio",
+  "cost",
+  "avgCost",
+  "avgRpm",
+  "peakRpm",
+  "avgTtft",
+  "avgTps",
+] as const;
+
+const PIVOT_DEFAULT_WIDTHS: Record<string, number> = {
+  name: 220,
+  calls: 72,
+  input: 88,
+  output: 88,
+  cache: 88,
+  total: 92,
+  cacheHit: 76,
+  outputRatio: 72,
+  cost: 80,
+  avgCost: 84,
+  avgRpm: 80,
+  peakRpm: 80,
+  avgTtft: 80,
+  avgTps: 80,
+};
 
 interface RequestsSectionProps {
   stats: StatsResponse;
@@ -128,6 +163,50 @@ export function RequestsSection({
     if (sortColumn !== column) return null;
     return sortDirection === "desc" ? " ▼" : " ▲";
   };
+
+  const { widths: pivotWidths, getHandleProps: getPivotHandleProps } =
+    useResizableColumns({
+      storageKey: "token-stats:pivot-col-widths",
+      defaultWidths: PIVOT_DEFAULT_WIDTHS,
+    });
+
+  const pivotH = useCallback(
+    (
+      key: (typeof PIVOT_COLUMN_KEYS)[number],
+      label: string,
+      align: "left" | "right" = "left",
+      sortCol?: SortColumn
+    ): React.ReactNode => {
+      const alignCls = { left: "text-left", right: "text-right", center: "text-center" }[align];
+      const handleProps = getPivotHandleProps(key);
+      const w = pivotWidths[key];
+      const style: React.CSSProperties = w
+        ? { width: `${w}px`, minWidth: `${w}px` }
+        : {};
+      return (
+        <th
+          key={key}
+          className={`px-3 py-2 font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none relative group ${alignCls}`}
+          style={style}
+          onClick={sortCol ? () => handleSort(sortCol) : undefined}
+        >
+          <span className="inline-flex items-center gap-0.5 whitespace-nowrap">
+            <span>{label}</span>
+            {sortCol && (
+              <span className="text-slate-400">{sortIndicator(sortCol)}</span>
+            )}
+          </span>
+          <span
+            aria-hidden
+            onMouseDown={handleProps.onMouseDown}
+            onClick={handleProps.onClick}
+            className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize opacity-0 group-hover:opacity-100 hover:bg-primary-400/60 active:bg-primary-500 transition-opacity z-10"
+          />
+        </th>
+      );
+    },
+    [pivotWidths, getPivotHandleProps, sortColumn, sortDirection]
+  );
 
   return (
     <section id="section-requests" className="space-y-3 scroll-mt-32">
@@ -302,93 +381,23 @@ export function RequestsSection({
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="w-full text-xs" style={{ tableLayout: "auto" }}>
             <thead>
               <tr className="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wider">
-                <th
-                  className="px-3 py-2 text-left font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("name")}
-                >
-                  供应商 / 模型 / 工具{sortIndicator("name")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("calls")}
-                >
-                  调用次数{sortIndicator("calls")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("input_tokens")}
-                >
-                  输入{sortIndicator("input_tokens")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("output_tokens")}
-                >
-                  输出{sortIndicator("output_tokens")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("cache")}
-                >
-                  缓存{sortIndicator("cache")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("total_tokens")}
-                >
-                  合计{sortIndicator("total_tokens")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("cache_hit_ratio")}
-                >
-                  缓存命中{sortIndicator("cache_hit_ratio")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("output_ratio")}
-                >
-                  输出比{sortIndicator("output_ratio")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("cost")}
-                >
-                  费用{sortIndicator("cost")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("avg_cost")}
-                >
-                  平均成本{sortIndicator("avg_cost")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("avg_rpm")}
-                >
-                  平均 RPM{sortIndicator("avg_rpm")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("peak_rpm")}
-                >
-                  峰值 RPM{sortIndicator("peak_rpm")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("avg_ttft_ms")}
-                >
-                  平均 TTFT{sortIndicator("avg_ttft_ms")}
-                </th>
-                <th
-                  className="px-3 py-2 text-right font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                  onClick={() => handleSort("avg_tps")}
-                >
-                  平均 TPS{sortIndicator("avg_tps")}
-                </th>
+                {pivotH("name", "供应商 / 模型 / 工具", "left", "name")}
+                {pivotH("calls", "调用次数", "right", "calls")}
+                {pivotH("input", "输入", "right", "input_tokens")}
+                {pivotH("output", "输出", "right", "output_tokens")}
+                {pivotH("cache", "缓存", "right", "cache")}
+                {pivotH("total", "合计", "right", "total_tokens")}
+                {pivotH("cacheHit", "缓存命中", "right", "cache_hit_ratio")}
+                {pivotH("outputRatio", "输出比", "right", "output_ratio")}
+                {pivotH("cost", "费用", "right", "cost")}
+                {pivotH("avgCost", "平均成本(/百万)", "right", "avg_cost")}
+                {pivotH("avgRpm", "平均 RPM", "right", "avg_rpm")}
+                {pivotH("peakRpm", "峰值 RPM", "right", "peak_rpm")}
+                {pivotH("avgTtft", "平均 TTFT", "right", "avg_ttft_ms")}
+                {pivotH("avgTps", "平均 TPS", "right", "avg_tps")}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

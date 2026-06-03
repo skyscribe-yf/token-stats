@@ -119,6 +119,7 @@ cache_hit_ratio = cache_read_tokens / (input_tokens + cache_read_tokens) × 100%
 
 **Important normalization:**
 - **Codex (OpenAI API)**: `input_tokens` INCLUDES `cache_read_tokens` in the raw data. The parser subtracts: `effective_input = input_tokens - cache_read_tokens`.
+- **Qoder CLI (OpenAI convention)**: `input_tokens` INCLUDES `cache_read_input_tokens` in the raw data. The parser subtracts: `effective_input = input_tokens - cache_read_tokens`.
 - **Claude Code (Anthropic API)**: `input_tokens` already excludes cache tokens. No normalization needed.
 - **Kimi CLI**: `input_tokens` already excludes cache tokens. No normalization needed.
 - This ensures consistent cache hit ratio calculation across all sources.

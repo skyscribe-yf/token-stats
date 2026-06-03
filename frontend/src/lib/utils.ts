@@ -21,15 +21,14 @@ export function formatCost(cost: number, source?: string): string {
   return "¥" + cost.toFixed(2);
 }
 
-/** Format average cost per million tokens (元/百万Token).
- *  Formula: costCny / (totalTokens / 1_000_000) */
+/** Format average cost per million tokens — returns only the numeric value.
+ *  The unit label (¥/百万) is expected to be rendered in the table header. */
 export function formatAvgCost(costCny: number, totalTokens: number): string {
   if (costCny == null || Number.isNaN(costCny)) return "-";
   if (totalTokens == null || totalTokens <= 0) return "N/A";
-  if (costCny === 0) return "¥0.00/百万";
   const avgCost = costCny / (totalTokens / 1_000_000);
-  if (avgCost < 0.01) return "<¥0.01/百万";
-  return "¥" + avgCost.toFixed(2) + "/百万";
+  if (avgCost < 0.01) return "<0.01";
+  return avgCost.toFixed(2);
 }
 
 export function formatPercent(pct: number): string {
@@ -156,6 +155,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   "kimi-code": "#d946ef", // fuchsia-500
   opencode: "#fb923c",    // orange-400
   "xiaomi-mimo-tp": "#f43f5e", // rose-500
+  qoder: "#14b8a6",       // teal-500
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -172,6 +172,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   anthropic: "#6366f1",    // indigo-500
   openai: "#06b6d4",       // cyan-500
   commandcode: "#f472b6",  // pink-400
+  qoder: "#14b8a6",       // teal-500
 };
 
 export function getVendorColor(vendor: string): string {
@@ -186,6 +187,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   "kimi-code": "Kimi Code",
   opencode: "OpenCode",
   "xiaomi-mimo-tp": "Xiaomi MiMo TP",
+  qoder: "Qoder",
 };
 
 export function getSourceColor(source: string): string {

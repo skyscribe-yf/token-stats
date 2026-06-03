@@ -291,7 +291,7 @@ pub struct RpmAnalysis {
 pub struct TpsDataPoint {
     /// Timestamp in format "YYYY-MM-DD HH:MM"
     pub time: String,
-    /// 5-minute rolling average TPS
+    /// Active-period TPS within a 5-minute rolling window
     pub tps: f64,
 }
 

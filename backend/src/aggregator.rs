@@ -1,7 +1,7 @@
 use crate::models::*;
 use crate::pricing;
 use crate::time::TimeBound;
-use chrono::{FixedOffset, Timelike, Utc};
+use chrono::{Duration, FixedOffset, Timelike, Utc};
 use std::collections::{HashMap, HashSet};
 
 // ── Shared accumulation helper ───────────────────────────────────────────────
@@ -508,22 +508,6 @@ fn parse_time_to_minute_key(time_str: &str) -> Option<String> {
     ))
 }
 
-/// Parse an RFC3339 timestamp string into a minute key "YYYY-MM-DD HH:MM" in local timezone.
-fn parse_time_to_minute_key_with_tz(time_str: &str, tz: Option<&FixedOffset>) -> Option<String> {
-    let dt = chrono::DateTime::parse_from_rfc3339(time_str).ok()?;
-    let local_dt = if let Some(tz) = tz {
-        dt.with_timezone(tz)
-    } else {
-        dt.into()
-    };
-    Some(format!(
-        "{} {:02}:{:02}",
-        local_dt.format("%Y-%m-%d"),
-        local_dt.hour(),
-        local_dt.minute()
-    ))
-}
-
 /// Count the number of minutes (including zero-request fill) and total requests
 /// in a window spanned by the given sorted minute keys.
 fn count_window_minutes_and_requests(
@@ -903,89 +887,165 @@ fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Op
 // ── TPS Time-Series Analysis ────────────────────────────────────────────────
 
 /// Compute 5-minute rolling average TPS for each model.
+///
+/// Uses wall-clock-aware token distribution: each request's tokens are spread
+/// across the minute buckets it spans (start_time → end_time), proportional to
+/// the overlap. This correctly accounts for parallel requests — two simultaneous
+/// 50 TPS requests produce 100 TPS of system throughput.
 pub fn compute_tps_analysis(
     records: &[TokenRecord],
     filters: &FilterCriteria,
     models_filter: Option<&str>,
 ) -> TpsAnalysis {
     let filtered = filter_records(records, filters);
-    
-    // Parse model filter
+
     let model_set: HashSet<&str> = models_filter
         .map(|s| s.split(',').filter(|x| !x.is_empty()).collect())
         .unwrap_or_default();
-    
-    // Group records by (provider, model) and collect (minute_key, output_tokens, duration_secs)
-    // Weighted TPS: avg = sum(output_tokens) / sum(output_tokens_i / tps_i)
-    let mut model_data: HashMap<(String, String), Vec<(String, i64, f64)>> = HashMap::new();
+
+    // Track each request's active intervals within minute buckets so we can
+    // compute merged active seconds (handling concurrent requests correctly).
+    // minute_buckets[model_key][minute_key] = { tokens, intervals (start_sec, end_sec within the minute) }
+    struct MinuteBucket {
+        tokens: f64,
+        intervals: Vec<(f64, f64)>,
+    }
+    let mut minute_buckets: HashMap<(String, String), HashMap<String, MinuteBucket>> =
+        HashMap::new();
     let mut all_models: HashSet<String> = HashSet::new();
-    
+
     for r in &filtered {
         let model_key = format!("{}/{}", r.provider, r.model);
         all_models.insert(model_key.clone());
-        
-        // Apply model filter if specified
+
         if !model_set.is_empty() && !model_set.contains(model_key.as_str()) {
             continue;
         }
-        
+
         if let Some(tps) = r.tps {
             if tps > 0.0 && r.output_tokens > 0 {
-                // Compute actual processing duration for this request
                 let duration_secs = r.output_tokens as f64 / tps;
-                // Round time to minute bucket
-                if let Some(minute_key) = parse_time_to_minute_key_with_tz(&r.time, filters.tz) {
-                    model_data
-                        .entry((r.provider.clone(), r.model.clone()))
-                        .or_default()
-                        .push((minute_key, r.output_tokens, duration_secs));
+
+                if let Ok(start_utc) = chrono::DateTime::parse_from_rfc3339(&r.time) {
+                    let start_local = if let Some(tz) = filters.tz {
+                        start_utc.with_timezone(tz)
+                    } else {
+                        start_utc.naive_utc().and_utc().fixed_offset()
+                    };
+                    let end_local = start_local
+                        + Duration::try_milliseconds(
+                            (duration_secs * 1000.0).ceil() as i64,
+                        )
+                        .unwrap_or(Duration::default());
+
+                    let entry_key = (r.provider.clone(), r.model.clone());
+                    let buckets = minute_buckets.entry(entry_key).or_default();
+
+                    let mut cursor = start_local
+                        .with_second(0)
+                        .and_then(|d| d.with_nanosecond(0))
+                        .unwrap_or(start_local);
+
+                    while cursor < end_local {
+                        let bucket_end = (cursor
+                            + Duration::try_seconds(60).unwrap_or(Duration::default()))
+                        .min(end_local);
+                        let effective_start = cursor.max(start_local);
+                        let overlap_secs =
+                            (bucket_end - effective_start).num_milliseconds() as f64 / 1000.0;
+
+                        if overlap_secs > 0.0 {
+                            let minute_key = format!(
+                                "{} {:02}:{:02}",
+                                cursor.format("%Y-%m-%d"),
+                                cursor.hour(),
+                                cursor.minute()
+                            );
+                            let sec_start =
+                                (effective_start - cursor).num_milliseconds() as f64 / 1000.0;
+                            let sec_end =
+                                (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
+                            let bucket = buckets.entry(minute_key).or_insert_with(|| {
+                                MinuteBucket {
+                                    tokens: 0.0,
+                                    intervals: Vec::new(),
+                                }
+                            });
+                            bucket.tokens += tps * overlap_secs;
+                            bucket.intervals.push((sec_start, sec_end));
+                        }
+
+                        cursor += Duration::try_seconds(60).unwrap_or(Duration::default());
+                    }
                 }
             }
         }
     }
-    
-    // Compute 5-minute rolling weighted-average TPS for each model
-    let mut models: Vec<TpsModelSeries> = model_data
+
+    // Compute 5-minute rolling active-period TPS for each model.
+    // Merge overlapping intervals within each minute bucket to get the true
+    // active generation time, then divide tokens by active seconds (not
+    // wall-clock seconds) so idle gaps between requests don't dilute the rate.
+    let mut models: Vec<TpsModelSeries> = minute_buckets
         .into_iter()
-        .map(|((provider, model), mut points)| {
-            // Sort by time
-            points.sort_by(|a, b| a.0.cmp(&b.0));
-            
-            // Group by minute, summing output_tokens and duration_secs
-            let mut minute_data: HashMap<String, (i64, f64)> = HashMap::new();
-            for (minute, out_tokens, dur_secs) in points {
-                let entry = minute_data.entry(minute).or_default();
-                entry.0 += out_tokens;
-                entry.1 += dur_secs;
-            }
-            
-            // Sort minutes and compute per-minute weighted TPS
-            let mut sorted_minutes: Vec<(String, i64, f64)> = minute_data
+        .map(|((provider, model), bucket_map)| {
+            // Merge intervals per bucket to compute active seconds
+            let mut resolved: Vec<(String, f64, f64)> = bucket_map
                 .into_iter()
-                .map(|(m, (out_tokens, dur_secs))| (m, out_tokens, dur_secs))
+                .map(|(minute_key, bucket)| {
+                    let mut intervals = bucket.intervals;
+                    intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                    let mut merged: Vec<(f64, f64)> = Vec::new();
+                    for (start, end) in intervals {
+                        if let Some(last) = merged.last_mut() {
+                            if start <= last.1 {
+                                last.1 = last.1.max(end);
+                                continue;
+                            }
+                        }
+                        merged.push((start, end));
+                    }
+                    let active_secs: f64 =
+                        merged.iter().map(|(s, e)| (e - s).max(0.0)).sum();
+                    (minute_key, bucket.tokens, active_secs)
+                })
                 .collect();
-            sorted_minutes.sort_by(|a, b| a.0.cmp(&b.0));
-            
-            // Compute 5-minute rolling weighted average:
-            // sum all output_tokens in window / sum all duration_secs in window
-            let window_size = 5;
-            let data_points: Vec<TpsDataPoint> = sorted_minutes
-                .windows(window_size)
-                .map(|window| {
-                    let total_out: i64 = window.iter().map(|(_, t, _)| t).sum();
-                    let total_dur: f64 = window.iter().map(|(_, _, d)| d).sum();
-                    let avg_tps = if total_dur > 0.0 {
-                        total_out as f64 / total_dur
+            resolved.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let data_points: Vec<TpsDataPoint> = resolved
+                .iter()
+                .enumerate()
+                .map(|(i, (time_key, _, _))| {
+                    let end_dt = parse_minute_key(time_key).unwrap();
+                    let start_dt = end_dt - Duration::minutes(4);
+
+                    let in_window: Vec<&(String, f64, f64)> = resolved[..=i]
+                        .iter()
+                        .filter(|(t, _, _)| {
+                            parse_minute_key(t)
+                                .is_some_and(|dt| dt >= start_dt && dt <= end_dt)
+                        })
+                        .collect();
+
+                    let window_tokens: f64 =
+                        in_window.iter().map(|(_, tokens, _)| tokens).sum();
+                    let window_active_secs: f64 = in_window
+                        .iter()
+                        .map(|(_, _, active_secs)| active_secs)
+                        .sum::<f64>();
+
+                    let avg_tps = if window_active_secs > 0.0 {
+                        window_tokens / window_active_secs
                     } else {
                         0.0
                     };
                     TpsDataPoint {
-                        time: window.last().unwrap().0.clone(),
+                        time: time_key.clone(),
                         tps: (avg_tps * 100.0).round() / 100.0,
                     }
                 })
                 .collect();
-            
+
             TpsModelSeries {
                 model,
                 provider,
@@ -993,13 +1053,12 @@ pub fn compute_tps_analysis(
             }
         })
         .collect();
-    
-    // Sort by model name
+
     models.sort_by(|a, b| a.model.cmp(&b.model));
-    
+
     let mut available_models: Vec<String> = all_models.into_iter().collect();
     available_models.sort();
-    
+
     TpsAnalysis {
         models,
         available_models,
@@ -1199,6 +1258,154 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].model, "inside");
+    }
+
+    fn tps_record(
+        provider: &str,
+        model: &str,
+        time: &str,
+        output_tokens: i64,
+        tps: f64,
+    ) -> TokenRecord {
+        TokenRecord {
+            date: time[..10].to_string(),
+            time: time.to_string(),
+            api_key_prefix: "test".to_string(),
+            provider: provider.to_string(),
+            original_provider: None,
+            model: model.to_string(),
+            source: "pi".to_string(),
+            input_tokens: 1000,
+            output_tokens,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens: 1000 + output_tokens,
+            cost: 0.0,
+            ttft_ms: None,
+            tps: Some(tps),
+        }
+    }
+
+    #[test]
+    fn tps_rolling_window_handles_sparse_data_without_inflation() {
+        // Five short requests at 100 TPS, each completing within one minute,
+        // spread across 30 minutes with large gaps:
+        //   10:00, 10:01, 10:15, 10:16, 10:30
+        //
+        // Each generates 1200 tokens at 100 TPS (12 seconds), fitting in one
+        // minute bucket. With active-period TPS, each data point reflects
+        // the true generation speed: 1200/12 = 100 TPS, regardless of idle
+        // gaps between requests.
+        let records = vec![
+            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:00:00Z", 1200, 100.0),
+            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:01:00Z", 1200, 100.0),
+            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:15:00Z", 1200, 100.0),
+            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:16:00Z", 1200, 100.0),
+            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:30:00Z", 1200, 100.0),
+        ];
+
+        let filters = FilterCriteria {
+            from: None,
+            to: None,
+            source: None,
+            provider: None,
+            model: None,
+            tz: None,
+            exclude_zero_tokens: true,
+        };
+
+        let result = compute_tps_analysis(&records, &filters, None);
+
+        assert_eq!(result.models.len(), 1);
+        let series = &result.models[0];
+        assert_eq!(series.provider, "xunfei");
+
+        // Each data point should reflect the true per-request generation speed
+        // (100 TPS). Two adjacent requests in the same 5-min window yield
+        // 2400 tokens / 24 active seconds = 100 TPS as well.
+        for dp in &series.data_points {
+            assert!(
+                (dp.tps - 100.0).abs() < 1.0,
+                "TPS at {} should be ~100, got {}",
+                dp.time,
+                dp.tps
+            );
+        }
+
+        // The last data point at 10:30 is isolated (no other request in its
+        // 5-minute window), so it shows exactly 1200/12 = 100 TPS.
+        let last = series.data_points.last().unwrap();
+        assert_eq!(last.time, "2026-06-01 10:30");
+        assert_eq!(last.tps, 100.0);
+    }
+
+    #[test]
+    fn tps_rolling_window_consecutive_requests_within_window() {
+        // Five requests at 50 TPS, each generating 3000 tokens (60 seconds),
+        // all within a 5-minute span. Each request spans one minute bucket.
+        let records = vec![
+            tps_record("openai", "gpt-5.5", "2026-06-01T14:00:00Z", 3000, 50.0),
+            tps_record("openai", "gpt-5.5", "2026-06-01T14:01:00Z", 3000, 50.0),
+            tps_record("openai", "gpt-5.5", "2026-06-01T14:02:00Z", 3000, 50.0),
+            tps_record("openai", "gpt-5.5", "2026-06-01T14:03:00Z", 3000, 50.0),
+            tps_record("openai", "gpt-5.5", "2026-06-01T14:04:00Z", 3000, 50.0),
+        ];
+
+        let filters = FilterCriteria {
+            from: None,
+            to: None,
+            source: None,
+            provider: None,
+            model: None,
+            tz: None,
+            exclude_zero_tokens: true,
+        };
+
+        let result = compute_tps_analysis(&records, &filters, None);
+        let series = &result.models[0];
+
+        // At 14:04, all 5 minute buckets (14:00–14:04) are in the window.
+        // Total tokens = 5 * 3000 = 15000, TPS = 15000 / 300 = 50.
+        let last = series.data_points.last().unwrap();
+        assert_eq!(last.time, "2026-06-01 14:04");
+        assert_eq!(last.tps, 50.0);
+    }
+
+    #[test]
+    fn tps_sub_second_duration_does_not_inflate_token_count() {
+        // A request with very high TPS and few output tokens completes in
+        // sub-second time. The active-period algorithm should correctly
+        // reflect the per-request generation speed: 603/0.001 = 603,000 TPS.
+        // The old wall-clock algorithm diluted this to ~2 TPS (603/300).
+        let records = vec![tps_record(
+            "xunfei",
+            "astron-code-latest",
+            "2026-06-01T10:00:00Z",
+            603,
+            603_000.0,
+        )];
+
+        let filters = FilterCriteria {
+            from: None,
+            to: None,
+            source: None,
+            provider: None,
+            model: None,
+            tz: None,
+            exclude_zero_tokens: true,
+        };
+
+        let result = compute_tps_analysis(&records, &filters, None);
+        let series = &result.models[0];
+
+        assert_eq!(series.data_points.len(), 1);
+        let dp = &series.data_points[0];
+        // Active-period TPS: 603 tokens / 0.001 active seconds = 603,000
+        assert!(
+            (dp.tps - 603_000.0).abs() < 1000.0,
+            "Sub-second request should show ~603,000 TPS (per-request rate), got {}",
+            dp.tps
+        );
     }
 
     fn local_dt(

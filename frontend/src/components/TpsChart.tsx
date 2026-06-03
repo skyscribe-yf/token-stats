@@ -138,7 +138,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
         <h3 className="text-sm font-semibold text-slate-700 mb-2">
-          TPS 趋势 (5分钟滑动平均)
+          TPS 趋势 (5分钟窗口活跃期)
         </h3>
         <div className="flex items-center justify-center h-48 text-slate-400 text-sm">
           暂无 TPS 数据
@@ -151,7 +151,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
     <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-slate-700">
-          TPS 趋势 (5分钟滑动平均)
+          TPS 趋势 (5分钟窗口活跃期)
         </h3>
         <div className="text-[10px] text-slate-400">
           {chartData.length} 个数据点 · {modelColorMap.size} 个模型
