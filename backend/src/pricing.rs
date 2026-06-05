@@ -548,9 +548,9 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         }
     }
 
-    // 6. Derived sources without original cost: codex, claude-code, etc.
+    // 6. Derived sources without original cost: codex, claude-code, kimi-code, etc.
     //    Compute from per-model token rates. pricing.toml model prices are in USD.
-    if record.source == "codex" || record.source == "claude-code" {
+    if record.source == "codex" || record.source == "claude-code" || record.source == "kimi-code" {
         if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
             let usd = mp.compute_usd(
                 record.input_tokens,
@@ -1486,5 +1486,82 @@ commandcode_divisor = 10.0
         );
 
         restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn kimi_code_derived_cost_openai_model() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [
+    { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
+    { divisor = 25.0 },
+]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+
+[[model]]
+name = "gpt-5.4"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 2.50
+"#,
+        );
+
+        // kimi-code record with gpt-5.4 from ainaiba provider, cost=0
+        let mut record = make_record("kimi-code", "ainaba", "gpt-5.4", 0, 0.0);
+        record.time = "2025-05-25T15:00:00Z".to_string(); // after cutoff → 25x
+        record.input_tokens = 100_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 110_000;
+
+        let cost = display_cost(&record);
+        // usd = 100000*2.5/1M + 10000*15/1M = 0.25 + 0.15 = 0.40
+        // cny = 0.40 * 6.82 / 25.0 = 0.10912
+        let expected = 0.40 * 6.82 / 25.0;
+        assert!(
+            cost > 0.0,
+            "kimi-code gpt-5.4 should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "kimi-code gpt-5.4 cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn kimi_code_kimi_provider_uses_per_token_estimate() {
+        let _guard = pricing_test_guard();
+        // kimi-code record with kimi provider should still use per-token estimate
+        let record = make_record("kimi-code", "kimi", "kimi-k2.6", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        assert!(
+            cost > 0.0,
+            "kimi-code kimi provider should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "kimi-code kimi provider cost: expected {}, got {}",
+            expected,
+            cost
+        );
     }
 }

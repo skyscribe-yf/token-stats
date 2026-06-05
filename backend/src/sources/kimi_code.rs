@@ -113,10 +113,15 @@ impl KimiCodeSource {
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
 
-                let model = msg
+                // Split vendor prefix: "kimi-code/kimi-for-coding" -> provider="kimi-code", model="kimi-for-coding"
+                let raw_model = msg
                     .get("model")
                     .and_then(|v| v.as_str())
                     .unwrap_or("kimi-for-coding");
+                let (provider_from_prefix, model) = match raw_model.split_once('/') {
+                    Some((vendor, model_name)) => (Some(vendor.to_string()), model_name),
+                    None => (None, raw_model),
+                };
 
                 // Timestamps in kimi-code wire are milliseconds since epoch.
                 let timestamp_ms = msg.get("time").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -133,7 +138,7 @@ impl KimiCodeSource {
                     date,
                     time,
                     api_key_prefix: "N/A".to_string(),
-                    provider: Self::resolve_provider(model),
+                    provider: provider_from_prefix.unwrap_or_else(|| Self::resolve_provider(model)),
                     original_provider: None,
                     model: super::normalize_model_name(model),
                     source: "kimi-code".to_string(),
@@ -204,5 +209,29 @@ mod tests {
             KimiCodeSource::resolve_provider("some-exotic-model"),
             "some-exotic-model"
         );
+    }
+
+    #[test]
+    fn strip_vendor_prefix_from_model() {
+        // Simulate what the parser does: split vendor/model
+        let raw = "kimi-code/kimi-for-coding";
+        let (provider, model) = raw.split_once('/').unwrap();
+        assert_eq!(provider, "kimi-code");
+        assert_eq!(model, "kimi-for-coding");
+
+        let raw = "ainaiba/gpt-5.4";
+        let (provider, model) = raw.split_once('/').unwrap();
+        assert_eq!(provider, "ainaiba");
+        assert_eq!(model, "gpt-5.4");
+
+        let raw = "xunfei/astron-code-latest";
+        let (provider, model) = raw.split_once('/').unwrap();
+        assert_eq!(provider, "xunfei");
+        assert_eq!(model, "astron-code-latest");
+
+        // No prefix - uses resolve_provider fallback
+        let raw = "kimi-for-coding";
+        assert!(raw.split_once('/').is_none());
+        assert_eq!(KimiCodeSource::resolve_provider(raw), "kimi");
     }
 }

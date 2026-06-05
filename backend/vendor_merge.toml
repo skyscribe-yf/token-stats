@@ -5,7 +5,7 @@
 
 [[vendor_group]]
 name = "kimi"
-providers = ["kimi", "kimi-coding"]
+providers = ["kimi", "kimi-coding", "kimi-code"]
 
 [[vendor_group]]
 name = "ainaba"
