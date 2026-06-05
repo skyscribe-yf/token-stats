@@ -156,6 +156,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   opencode: "#fb923c",    // orange-400
   "xiaomi-mimo-tp": "#f43f5e", // rose-500
   qoder: "#14b8a6",       // teal-500
+  "qoder-cn": "#0d9488",   // teal-600
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -188,6 +189,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   "xiaomi-mimo-tp": "Xiaomi MiMo TP",
   qoder: "Qoder",
+  "qoder-cn": "Qoder CN",
 };
 
 export function getSourceColor(source: string): string {

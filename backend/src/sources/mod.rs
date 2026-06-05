@@ -12,6 +12,7 @@ mod kimi_code;
 mod opencode;
 mod pi;
 mod qoder;
+mod qoder_cn;
 
 use crate::config;
 use crate::models::TokenRecord;
@@ -26,6 +27,7 @@ pub use kimi_code::KimiCodeSource;
 pub use opencode::OpenCodeSource;
 pub use pi::PiSource;
 pub use qoder::QoderSource;
+pub use qoder_cn::QoderCnSource;
 
 /// Trait for a data source that produces `TokenRecord` batches.
 pub trait DataSource: Send + Sync {
@@ -91,7 +93,7 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" => "openai".to_string(),
         "glm-5.1" => "opencode-go".to_string(),
         "sonnet" | "haiku" => "anthropic".to_string(),
-        "qmodel_latest" | "efficient" => "qoder".to_string(),
+        "qmodel_latest" | "efficient" | "auto" => "qoder".to_string(),
         _ if model.starts_with("claude-") => "anthropic".to_string(),
         _ => model.to_string(),
     }
@@ -124,6 +126,7 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
             Box::new(KimiCliSource),
             Box::new(KimiCodeSource),
             Box::new(QoderSource),
+            Box::new(QoderCnSource),
         ];
         if std::env::var("USE_CC_SWITCH").is_ok() {
             v.push(Box::new(CcSwitchSource));
@@ -264,6 +267,7 @@ mod tests {
     fn resolve_qoder_models() {
         assert_eq!(resolve_provider_from_model("qmodel_latest"), "qoder");
         assert_eq!(resolve_provider_from_model("efficient"), "qoder");
+        assert_eq!(resolve_provider_from_model("auto"), "qoder");
     }
 
     #[test]
