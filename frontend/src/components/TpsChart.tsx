@@ -205,7 +205,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
                   className="w-2 h-2 rounded-full"
                   style={{ background: isSelected ? color : "#94a3b8" }}
                 />
-                {model.split("/").pop()}
+                {model}
                 {isSelected && (
                   <X className="w-2.5 h-2.5 ml-0.5 opacity-60" />
                 )}
@@ -291,7 +291,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
                         }}
                       />
                       <span style={{ color: "#64748b" }}>
-                        {String(entry.name).split("/").pop()}:
+                        {(() => { const parts = String(entry.name).split("/"); return parts[0] + " / " + parts[1]; })()}:
                       </span>
                       <span style={{ fontWeight: 500, color: "#334155" }}>
                         {Number(entry.value).toFixed(1)} TPS
@@ -304,7 +304,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
           />
           <Legend
             wrapperStyle={{ fontSize: 10 }}
-            formatter={(value: string) => value.split("/").pop()}
+            formatter={(value: string) => value}
           />
           {Array.from(modelColorMap.entries()).map(([model, color]) => (
             <>

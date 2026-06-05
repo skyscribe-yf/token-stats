@@ -271,7 +271,9 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
     for r in records {
         map.entry(r.provider.clone()).or_default().accumulate(r);
         if let Some(ttft) = r.ttft_ms {
-            ttft_map.entry(r.provider.clone()).or_default().push(ttft);
+            if ttft > 0.0 {
+                ttft_map.entry(r.provider.clone()).or_default().push(ttft);
+            }
         }
         if let Some(tps) = r.tps {
             if tps > 0.0 && r.output_tokens > 0 {
@@ -576,11 +578,13 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             .or_default()
             .push(r.time.clone());
         if let Some(ttft) = r.ttft_ms {
-            agg.ttft_values.push(ttft);
-            agg.source_ttft
-                .entry(r.source.clone())
-                .or_default()
-                .push(ttft);
+            if ttft > 0.0 {
+                agg.ttft_values.push(ttft);
+                agg.source_ttft
+                    .entry(r.source.clone())
+                    .or_default()
+                    .push(ttft);
+            }
         }
         if let Some(tps) = r.tps {
             if tps > 0.0 && r.output_tokens > 0 {

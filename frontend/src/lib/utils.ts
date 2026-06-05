@@ -49,7 +49,7 @@ export function formatPeakRpm(rpm: number): string {
 }
 
 export function formatTtft(ms: number): string {
-  if (ms == null || Number.isNaN(ms) || ms === 0) return "-";
+  if (ms == null || Number.isNaN(ms) || ms <= 0) return "-";
   if (ms >= 1000) return (ms / 1000).toFixed(1) + "s";
   return Math.round(ms) + "ms";
 }
