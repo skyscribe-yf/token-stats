@@ -80,9 +80,9 @@ impl Default for PricingConfig {
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
                 kimi_per_token: 199.0 / 2_800_000_000.0,
-                // 99 CNY subscription, 268M platform tokens ≈ 16.36M dashboard tokens (~2.44% usage)
-                // effective per-token = 99 * 0.0244 / 16_360_000 ≈ 0.0000001479
-                xiaomi_mimo_tp_per_token: 0.0000001479,
+                // 99 CNY subscription, dashboard 672.26M tokens ≈ 84% usage
+                // effective per-token = 99 * 0.84 / 672_260_000 ≈ 0.0000001237
+                xiaomi_mimo_tp_per_token: 0.0000001237,
                 opencode_divisor: 6.0,
                 ainaba_divisor: 1.0,
                 ainaba_segments: Vec::new(),
