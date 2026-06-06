@@ -321,6 +321,29 @@ fn resolve_model_price<'a>(
         return state.model_map.get("claude-haiku-4-5");
     }
 
+    // Kimi family — kimi-k2.6, kimi-k2.5, kimi-for-coding, etc.
+    if model_lower.contains("kimi-k2.6") {
+        return state.model_map.get("kimi-k2.6");
+    }
+    if model_lower.contains("kimi-k2.5") {
+        return state.model_map.get("kimi-k2.5");
+    }
+    if model_lower.contains("kimi") || provider == "kimi" {
+        // Fallback: try kimi-k2.6 as the default kimi pricing
+        return state.model_map.get("kimi-k2.6");
+    }
+
+    // DeepSeek family
+    if model_lower.contains("deepseek-v4-pro") {
+        return state.model_map.get("deepseek-v4-pro");
+    }
+    if model_lower.contains("deepseek-v4-flash") {
+        return state.model_map.get("deepseek-v4-flash");
+    }
+    if provider == "deepseek" {
+        return state.model_map.get("deepseek-v4-pro");
+    }
+
     None
 }
 
@@ -445,9 +468,10 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         return cfg.special.xunfei_per_call;
     }
 
-    // 2. Kimi provider with zero stored cost: per-token estimate in CNY
-    //    Covers pi-sourced and kimi-cli records where vendor merge mapped
-    //    provider to "kimi" and no cost was recorded by the upstream tool.
+    // 2. Kimi provider with zero stored cost: per-token estimate in CNY.
+    //    Provider aliases such as "kimi-code" are merged to the canonical
+    //    "kimi" vendor before pricing, so all zero-cost kimi records share
+    //    the same subscription estimate regardless of source.
     if record.provider == "kimi" && record.cost == 0.0 {
         return record.total_tokens as f64 * cfg.special.kimi_per_token;
     }
@@ -566,6 +590,12 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             // FreeModel discount: 1 USD face value = 0.1 CNY actual cost
             if record.provider == "FreeModel" {
                 cny /= cfg.special.freemodel_divisor;
+            }
+            // OpenCode Go plan discount: listed API cost / opencode_divisor
+            // kimi-code records with provider="opencode-go" go through the
+            // same OpenCode Go subscription as pi records with opencode-go.
+            if record.provider == "opencode-go" {
+                cny /= cfg.special.opencode_divisor;
             }
             return cny;
         }
@@ -1546,22 +1576,38 @@ cache_write = 2.50
     }
 
     #[test]
-    fn kimi_code_kimi_provider_uses_per_token_estimate() {
+    fn kimi_code_kimi_provider_uses_same_per_token_estimate() {
         let _guard = pricing_test_guard();
-        // kimi-code record with kimi provider should still use per-token estimate
-        let record = make_record("kimi-code", "kimi", "kimi-k2.6", 1_000_000, 0.0);
+        // kimi-code records merged to provider="kimi" should follow the same
+        // subscription estimate as other kimi zero-cost records.
+        let record = make_record("kimi-code", "kimi", "kimi-k2.6", 170_000, 0.0);
         let cost = display_cost(&record);
-        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        let expected = 170_000.0 * PricingConfig::default().special.kimi_per_token;
         assert!(
             cost > 0.0,
-            "kimi-code kimi provider should have non-zero cost, got {}",
+            "kimi-code/kimi-k2.6 should have non-zero cost, got {}",
             cost
         );
         assert!(
             (cost - expected).abs() < 1e-9,
-            "kimi-code kimi provider cost: expected {}, got {}",
+            "kimi-code/kimi-k2.6 cost: expected {}, got {}",
             expected,
             cost
+        );
+
+        // kimi-code/kimi-for-coding should resolve to the same kimi estimate.
+        let record2 = make_record("kimi-code", "kimi", "kimi-for-coding", 170_000, 0.0);
+        let cost2 = display_cost(&record2);
+        assert!(
+            cost2 > 0.0,
+            "kimi-code/kimi-for-coding should have non-zero cost, got {}",
+            cost2
+        );
+        assert!(
+            (cost2 - expected).abs() < 1e-9,
+            "kimi-code/kimi-for-coding cost: expected {}, got {}",
+            expected,
+            cost2
         );
     }
 }

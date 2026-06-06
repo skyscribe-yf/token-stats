@@ -373,17 +373,23 @@ function KimiCard({
   loading,
   highlightId,
   subscriptionSettings,
+  suffix,
 }: {
   status: KimiQuotaStatus | null;
   loading: boolean;
   highlightId: string | null;
   subscriptionSettings: SubscriptionSettings | null;
+  suffix?: string;
 }) {
-  const cardId = "quota-kimi";
+  const cardId = suffix === "EX" ? "quota-kimi-ex" : "quota-kimi";
   const flash = useHighlightFlash(highlightId, cardId);
-  const cycleCountdown = subscriptionSettings?.kimi_monthly_start_day
+  const label = suffix === "EX" ? "Kimi Code (EX)" : "Kimi Code";
+  const monthlyStartDay = suffix === "EX"
+    ? subscriptionSettings?.kimi_ex_monthly_start_day
+    : subscriptionSettings?.kimi_monthly_start_day;
+  const cycleCountdown = monthlyStartDay
     ? buildCycleCountdown(
-        computeNextBillingDate(subscriptionSettings.kimi_monthly_start_day)
+        computeNextBillingDate(monthlyStartDay)
       )
     : null;
   return (
@@ -395,7 +401,7 @@ function KimiCard({
       <CardHeader
         active={!!status?.available}
         loading={loading}
-        name="Kimi Code"
+        name={label}
         href="https://kimi.com"
         suffix="kimi.com"
         cycleCountdown={cycleCountdown}
@@ -741,6 +747,13 @@ export function QuotasSection({
           loading={quotaLoading}
           highlightId={highlightCardId}
           subscriptionSettings={subscriptionSettings}
+        />
+        <KimiCard
+          status={quota?.kimi_ex ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
+          subscriptionSettings={subscriptionSettings}
+          suffix="EX"
         />
         <XiaomiMiMoCard
           status={quota?.xiaomi_mimo ?? null}

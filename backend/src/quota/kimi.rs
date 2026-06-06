@@ -21,10 +21,22 @@ pub fn get_kimi_credentials_path() -> PathBuf {
         .join("kimi-code.json")
 }
 
-/// Read Kimi Code OAuth access token from the credentials file.
+/// Path to the second Kimi Code credentials file (EX account).
+/// Can be overridden via the `KIMI_CREDENTIALS_PATH_EX` env var.
+pub fn get_kimi_credentials_path_ex() -> PathBuf {
+    if let Ok(path) = std::env::var("KIMI_CREDENTIALS_PATH_EX") {
+        return PathBuf::from(path);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".kimi")
+        .join("credentials")
+        .join("kimi-code-ex.json")
+}
+
+/// Read Kimi Code OAuth access token from a credentials file.
 /// Returns None if the file is missing, unreadable, or the token is expired.
-pub fn get_kimi_code_access_token() -> Option<String> {
-    let path = get_kimi_credentials_path();
+fn read_kimi_access_token(path: &std::path::Path) -> Option<String> {
     if !path.exists() {
         tracing::debug!("Kimi credentials file not found at {:?}", path);
         return None;
@@ -57,16 +69,19 @@ pub fn get_kimi_code_access_token() -> Option<String> {
     Some(token.to_string())
 }
 
-/// Attempt to refresh the Kimi Code OAuth access token using the stored
-/// refresh_token. On success, updates the credentials file and returns the new
-/// access token.
-pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String> {
-    let path = get_kimi_credentials_path();
-    if !path.exists() {
+/// Read Kimi Code OAuth access token from the primary credentials file.
+pub fn get_kimi_code_access_token() -> Option<String> {
+    read_kimi_access_token(&get_kimi_credentials_path())
+}
+
+/// Attempt to refresh the Kimi Code OAuth access token for a given credentials path.
+/// On success, updates the credentials file and returns the new access token.
+async fn refresh_token(client: &reqwest::Client, creds_path: &std::path::Path) -> Option<String> {
+    if !creds_path.exists() {
         return None;
     }
 
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = std::fs::read_to_string(creds_path).ok()?;
     let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
 
     let refresh_token = creds.get("refresh_token").and_then(|v| v.as_str())?;
@@ -133,7 +148,7 @@ pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String>
             }
 
             let new_content = serde_json::to_string_pretty(&new_creds).unwrap_or_default();
-            if std::fs::write(&path, new_content).is_err() {
+            if std::fs::write(creds_path, new_content).is_err() {
                 tracing::warn!("Failed to write refreshed token to credentials file");
             }
             tracing::info!(
@@ -159,6 +174,11 @@ pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String>
     }
 }
 
+/// Attempt to refresh the Kimi Code OAuth access token for the primary account.
+pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String> {
+    refresh_token(client, &get_kimi_credentials_path()).await
+}
+
 /// Kimi Auth API base URL for token refresh.
 pub fn get_kimi_auth_base_url() -> String {
     std::env::var("KIMI_AUTH_BASE_URL").unwrap_or_else(|_| "https://auth.kimi.com".to_string())
@@ -172,23 +192,35 @@ pub fn get_kimi_code_base_url() -> String {
 
 // ─── Kimi Quota Fetching ─────────────────────────────────────────────────────
 
-/// Fetch Kimi Code usage and build the status DTO.
-pub async fn fetch_kimi_quota(client: &reqwest::Client) -> KimiQuotaStatus {
-    let access_token = match get_kimi_code_access_token() {
+/// Core fetch logic: get token, call API, parse response.
+async fn fetch_kimi_quota_inner(
+    client: &reqwest::Client,
+    credentials_path: &std::path::Path,
+    label: &str,
+) -> KimiQuotaStatus {
+    let access_token = match read_kimi_access_token(credentials_path) {
         Some(t) => t,
         None => {
-            tracing::info!("Kimi Code access token expired or missing, attempting refresh");
-            match refresh_kimi_code_token(client).await {
+            tracing::info!(
+                "Kimi Code {} access token expired or missing, attempting refresh",
+                label
+            );
+            match refresh_token(client, credentials_path).await {
                 Some(t) => t,
                 None => {
+                    let env_name = if label == "EX" {
+                        "KIMI_CREDENTIALS_PATH_EX"
+                    } else {
+                        "KIMI_CREDENTIALS_PATH"
+                    };
                     return KimiQuotaStatus {
                         available: false,
                         data: None,
-                        error: Some(
-                            "Kimi Code access token not found and refresh failed. \
-                             Log in with `kimi` CLI or set KIMI_CREDENTIALS_PATH"
-                                .to_string(),
-                        ),
+                        error: Some(format!(
+                            "Kimi Code {} access token not found and refresh failed. \
+                             Log in with `kimi` CLI or set {}",
+                            label, env_name
+                        )),
                     };
                 }
             }
@@ -246,6 +278,16 @@ pub async fn fetch_kimi_quota(client: &reqwest::Client) -> KimiQuotaStatus {
         data: Some(quota),
         error: None,
     }
+}
+
+/// Fetch Kimi Code usage for the primary account.
+pub async fn fetch_kimi_quota(client: &reqwest::Client) -> KimiQuotaStatus {
+    fetch_kimi_quota_inner(client, &get_kimi_credentials_path(), "primary").await
+}
+
+/// Fetch Kimi Code usage for the EX (secondary) account.
+pub async fn fetch_kimi_quota_ex(client: &reqwest::Client) -> KimiQuotaStatus {
+    fetch_kimi_quota_inner(client, &get_kimi_credentials_path_ex(), "EX").await
 }
 
 /// Extract quota information from the parsed Kimi Code usage response.

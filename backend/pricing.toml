@@ -248,7 +248,21 @@ cache_read = 0.16
 cache_write = 0.0
 
 [[model]]
+name = "kimi-k2.6"
+input = 0.95
+output = 4.00
+cache_read = 0.16
+cache_write = 0.0
+
+[[model]]
 name = "cc:kimi-k2.5"
+input = 0.60
+output = 3.00
+cache_read = 0.10
+cache_write = 0.0
+
+[[model]]
+name = "kimi-k2.5"
 input = 0.60
 output = 3.00
 cache_read = 0.10

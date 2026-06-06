@@ -169,6 +169,7 @@ pub struct QuotaOpenCode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaResponse {
     pub kimi: Option<KimiQuotaStatus>,
+    pub kimi_ex: Option<KimiQuotaStatus>,
     pub opencode_go: Option<OpenCodeQuotaStatus>,
     pub opencode_go_ex: Option<OpenCodeQuotaStatus>,
     pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,

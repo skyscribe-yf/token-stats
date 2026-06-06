@@ -98,9 +98,14 @@ impl QuotaFetcher {
         }
     }
 
-    /// Fetch Kimi Code usage from the Kimi Code platform API.
+    /// Fetch Kimi Code usage from the Kimi Code platform API (primary account).
     pub async fn fetch_kimi_quota(&self) -> KimiQuotaStatus {
         kimi::fetch_kimi_quota(&self.client).await
+    }
+
+    /// Fetch Kimi Code usage from the Kimi Code platform API (EX/secondary account).
+    pub async fn fetch_kimi_quota_ex(&self) -> KimiQuotaStatus {
+        kimi::fetch_kimi_quota_ex(&self.client).await
     }
 
     /// Fetch OpenCode-go subscription/quota info via HTTP + HTML scraping.

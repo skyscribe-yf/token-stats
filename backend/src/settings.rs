@@ -117,6 +117,8 @@ pub struct SubscriptionSettings {
     /// Day of month (1–28) when the Kimi monthly subscription renews.
     /// `None` means the user has not configured it yet.
     pub kimi_monthly_start_day: Option<u8>,
+    /// Day of month (1–28) when the EX Kimi monthly subscription renews.
+    pub kimi_ex_monthly_start_day: Option<u8>,
 }
 
 /// Return the path to the subscription settings JSON file.
@@ -185,6 +187,21 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
             );
             return SubscriptionSettings {
                 kimi_monthly_start_day: None,
+                kimi_ex_monthly_start_day: settings.kimi_ex_monthly_start_day,
+            };
+        }
+    }
+
+    // Validate kimi_ex_monthly_start_day is in 1..=28 if set
+    if let Some(day) = settings.kimi_ex_monthly_start_day {
+        if !(1..=28).contains(&day) {
+            tracing::warn!(
+                "Invalid kimi_ex_monthly_start_day {} in settings file, ignoring",
+                day
+            );
+            return SubscriptionSettings {
+                kimi_monthly_start_day: settings.kimi_monthly_start_day,
+                kimi_ex_monthly_start_day: None,
             };
         }
     }
@@ -290,6 +307,7 @@ mod tests {
         let path = tmp_dir.path().join("subscription_settings.json");
         let original = SubscriptionSettings {
             kimi_monthly_start_day: Some(15),
+            kimi_ex_monthly_start_day: None,
         };
         let content = serde_json::to_string_pretty(&original).unwrap();
         std::fs::write(&path, content).unwrap();
@@ -315,8 +333,8 @@ mod tests {
     fn subscription_settings_invalid_day_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("subscription_settings.json");
-        std::fs::write(&path, r#"{\"kimi_monthly_start_day\": 31}"#).unwrap();
+        std::fs::write(&path, r#"{\"kimi_ex_monthly_start_day\": 31}"#).unwrap();
         let settings = load_subscription_settings_from_path(&path);
-        assert_eq!(settings.kimi_monthly_start_day, None);
+        assert_eq!(settings.kimi_ex_monthly_start_day, None);
     }
 }

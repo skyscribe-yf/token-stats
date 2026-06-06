@@ -134,11 +134,23 @@ impl KimiCodeSource {
 
                 let total = input_other + output + cache_read + cache_creation;
 
+                // Resolve model vendor first — kimi-code is a kimi subscription,
+                // so all kimi-family models should bill as provider="kimi" regardless
+                // of which API proxy routed them (e.g. "opencode-go/kimi-k2.6").
+                // The vendor prefix is just API routing info; the model's actual
+                // vendor determines billing.
+                let resolved = Self::resolve_provider(model);
+                let provider = if resolved == "kimi" {
+                    "kimi".to_string()
+                } else {
+                    provider_from_prefix.unwrap_or(resolved)
+                };
+
                 records.push(TokenRecord {
                     date,
                     time,
                     api_key_prefix: "N/A".to_string(),
-                    provider: provider_from_prefix.unwrap_or_else(|| Self::resolve_provider(model)),
+                    provider,
                     original_provider: None,
                     model: super::normalize_model_name(model),
                     source: "kimi-code".to_string(),
@@ -215,23 +227,52 @@ mod tests {
     fn strip_vendor_prefix_from_model() {
         // Simulate what the parser does: split vendor/model
         let raw = "kimi-code/kimi-for-coding";
-        let (provider, model) = raw.split_once('/').unwrap();
-        assert_eq!(provider, "kimi-code");
+        let (prefix, model) = raw.split_once('/').unwrap();
+        assert_eq!(prefix, "kimi-code");
         assert_eq!(model, "kimi-for-coding");
 
         let raw = "ainaiba/gpt-5.4";
-        let (provider, model) = raw.split_once('/').unwrap();
-        assert_eq!(provider, "ainaiba");
+        let (prefix, model) = raw.split_once('/').unwrap();
+        assert_eq!(prefix, "ainaiba");
         assert_eq!(model, "gpt-5.4");
 
         let raw = "xunfei/astron-code-latest";
-        let (provider, model) = raw.split_once('/').unwrap();
-        assert_eq!(provider, "xunfei");
+        let (prefix, model) = raw.split_once('/').unwrap();
+        assert_eq!(prefix, "xunfei");
         assert_eq!(model, "astron-code-latest");
 
         // No prefix - uses resolve_provider fallback
         let raw = "kimi-for-coding";
         assert!(raw.split_once('/').is_none());
         assert_eq!(KimiCodeSource::resolve_provider(raw), "kimi");
+    }
+
+    #[test]
+    fn kimi_models_always_resolve_to_kimi_provider() {
+        // Regardless of the vendor prefix in the wire record, kimi-family models
+        // should always get provider="kimi" for correct subscription billing.
+        fn resolve_provider_for_raw(raw: &str) -> String {
+            let (prefix, model) = match raw.split_once('/') {
+                Some((p, m)) => (Some(p), m),
+                None => (None, raw),
+            };
+            let resolved = KimiCodeSource::resolve_provider(model);
+            if resolved == "kimi" {
+                "kimi".to_string()
+            } else {
+                prefix.unwrap_or(&resolved).to_string()
+            }
+        }
+
+        // kimi models with various prefixes → always "kimi"
+        assert_eq!(resolve_provider_for_raw("opencode-go/kimi-k2.6"), "kimi");
+        assert_eq!(resolve_provider_for_raw("kimi-code/kimi-for-coding"), "kimi");
+        assert_eq!(resolve_provider_for_raw("kimi-code/kimi-k2.5"), "kimi");
+        assert_eq!(resolve_provider_for_raw("kimi-k2.6"), "kimi");
+
+        // Non-kimi models keep their prefix-based provider
+        assert_eq!(resolve_provider_for_raw("ainaiba/gpt-5.4"), "ainaiba");
+        assert_eq!(resolve_provider_for_raw("xunfei/astron-code-latest"), "xunfei");
+        assert_eq!(resolve_provider_for_raw("deepseek/deepseek-v4-pro"), "deepseek");
     }
 }

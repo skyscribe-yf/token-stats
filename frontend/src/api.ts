@@ -273,6 +273,7 @@ export interface XiaomiMiMoQuotaStatus {
 
 export interface QuotaResponse {
   kimi: KimiQuotaStatus | null;
+  kimi_ex: KimiQuotaStatus | null;
   opencode_go: OpenCodeQuotaStatus | null;
   opencode_go_ex: OpenCodeQuotaStatus | null;
   xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
@@ -583,6 +584,7 @@ export async function saveAdvancedModels(models: string[]): Promise<{ success: b
 
 export interface SubscriptionSettings {
   kimi_monthly_start_day: number | null;
+  kimi_ex_monthly_start_day: number | null;
 }
 
 export async function fetchSubscriptionSettings(): Promise<SubscriptionSettings> {

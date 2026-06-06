@@ -79,8 +79,28 @@ export function SettingsDrawer({
               onChange={(e) => {
                 const v = e.target.value ? parseInt(e.target.value) : null;
                 onSubscriptionSettingsChange({
-                  ...(subscriptionSettings ?? { kimi_monthly_start_day: null }),
+                  ...(subscriptionSettings ?? { kimi_monthly_start_day: null, kimi_ex_monthly_start_day: null }),
                   kimi_monthly_start_day: v,
+                });
+              }}
+              className="flex-1 px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-primary-500 outline-none"
+              placeholder="1-28"
+            />
+          </div>
+          <label className="block text-[10px] text-slate-500 mb-1 mt-2">
+            Kimi (EX) 月起始日 (1–28)
+          </label>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={1}
+              max={28}
+              value={subscriptionSettings?.kimi_ex_monthly_start_day ?? ""}
+              onChange={(e) => {
+                const v = e.target.value ? parseInt(e.target.value) : null;
+                onSubscriptionSettingsChange({
+                  ...(subscriptionSettings ?? { kimi_monthly_start_day: null, kimi_ex_monthly_start_day: null }),
+                  kimi_ex_monthly_start_day: v,
                 });
               }}
               className="flex-1 px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-primary-500 outline-none"
