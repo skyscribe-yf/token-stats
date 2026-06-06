@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { KpiStrip } from "./KpiStrip";
 import { QuotaChips } from "./QuotaChips";
 import type { AggregatedStats } from "../api";
@@ -16,7 +17,7 @@ interface GlanceBandProps {
   onChipClick: (cardId: string) => void;
 }
 
-export function GlanceBand({
+export const GlanceBand = memo(function GlanceBand({
   overall,
   quota,
   xunfei,
@@ -36,4 +37,4 @@ export function GlanceBand({
       <KpiStrip overall={overall} />
     </section>
   );
-}
+});

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ExternalLink } from "lucide-react";
 import {
   buildCycleCountdown,
@@ -715,7 +716,7 @@ function SkeletonBars() {
   );
 }
 
-export function QuotasSection({
+export const QuotasSection = memo(function QuotasSection({
   quota,
   xunfei,
   ainaibaCredit,
@@ -781,4 +782,4 @@ export function QuotasSection({
       </div>
     </section>
   );
-}
+});

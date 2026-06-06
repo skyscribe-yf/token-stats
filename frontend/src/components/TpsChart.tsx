@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { memo, useState, useMemo, useCallback } from "react";
 import {
   LineChart,
   Line,
@@ -37,7 +37,7 @@ interface TpsChartProps {
   loading: boolean;
 }
 
-export function TpsChart({ tpsData, loading }: TpsChartProps) {
+export const TpsChart = memo(function TpsChart({ tpsData, loading }: TpsChartProps) {
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -118,7 +118,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
 
   const selectAll = useCallback(() => {
     setSelectedModels(new Set());
-  }, [selectedModels, allModels]);
+  }, []);
 
   const clearAll = useCallback(() => {
     setSelectedModels(new Set(["__none__"]));
@@ -321,7 +321,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
                 dot={false}
                 connectNulls={true}
                 legendType="none"
-                animationDuration={300}
+                isAnimationActive={false}
               />
               {/* Solid foreground line: actual data segments */}
               <Line
@@ -333,7 +333,7 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
                 strokeWidth={1.5}
                 dot={false}
                 connectNulls={false}
-                animationDuration={300}
+                isAnimationActive={false}
               />
             </>
           ))}
@@ -341,4 +341,4 @@ export function TpsChart({ tpsData, loading }: TpsChartProps) {
       </ResponsiveContainer>
     </div>
   );
-}
+});

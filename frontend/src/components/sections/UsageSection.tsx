@@ -251,7 +251,7 @@ export const UsageSection = React.memo(function UsageSection({
   const totalWindowPages = Math.ceil(rpmWindowSummaries.length / WINDOW_PAGE_SIZE);
   useEffect(() => {
     setWindowPage(1);
-  }, [rpmData]);
+  }, [rpmData?.windows.length]);
   useEffect(() => {
     if (windowPage > totalWindowPages && totalWindowPages > 0) {
       setWindowPage(totalWindowPages);
@@ -352,6 +352,7 @@ export const UsageSection = React.memo(function UsageSection({
                 name="缓存"
                 stackId="tokens"
                 fill="#c084fc"
+                isAnimationActive={false}
               />
             )}
             {chartMetrics.has("input") && (
@@ -361,6 +362,7 @@ export const UsageSection = React.memo(function UsageSection({
                 name="输入"
                 stackId="tokens"
                 fill="#38bdf8"
+                isAnimationActive={false}
               />
             )}
             {chartMetrics.has("output") && (
@@ -370,6 +372,7 @@ export const UsageSection = React.memo(function UsageSection({
                 name="输出"
                 stackId="tokens"
                 fill="#fb923c"
+                isAnimationActive={false}
               />
             )}
             {chartMetrics.has("cacheHitRatio") && showRatioAxis && (
@@ -382,6 +385,7 @@ export const UsageSection = React.memo(function UsageSection({
                 strokeWidth={2}
                 strokeDasharray="6 3"
                 dot={{ r: 2 }}
+                isAnimationActive={false}
               />
             )}
             {chartMetrics.has("cacheHitRatioNoXunfei") && showRatioAxis && (
@@ -394,6 +398,7 @@ export const UsageSection = React.memo(function UsageSection({
                 strokeWidth={1.5}
                 strokeDasharray="4 2"
                 dot={{ r: 1.5 }}
+                isAnimationActive={false}
               />
             )}
           </ComposedChart>
@@ -428,6 +433,7 @@ export const UsageSection = React.memo(function UsageSection({
                 name="调用次数"
                 fill="#2dd4bf"
                 radius={[4, 4, 0, 0]}
+                isAnimationActive={false}
               />
             </BarChart>
           </ResponsiveContainer>
@@ -486,6 +492,7 @@ export const UsageSection = React.memo(function UsageSection({
                 dataKey={vendorBreakdownMetric}
                 name={vendorBreakdownMetric === "cost" ? "费用" : "总 Token"}
                 radius={[0, 4, 4, 0]}
+                isAnimationActive={false}
               >
                 {vendorChartData.map((entry, index) => (
                   <Cell
@@ -552,6 +559,7 @@ export const UsageSection = React.memo(function UsageSection({
                 fill="#6366f1"
                 fillOpacity={0.15}
                 strokeWidth={1.5}
+                isAnimationActive={false}
               />
               {/* Draw window boundary lines */}
               {rpmData.windows.slice(1).map((w, i) => (

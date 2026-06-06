@@ -262,9 +262,9 @@ export default function App() {
   const availableSliceModels =
     sliceModelOptions.length > 0 ? sliceModelOptions : filteredModels;
 
-  const effectiveSelectedPivotModels = reconcileSelectedModels(
-    selectedPivotModels,
-    availableSliceModels
+  const effectiveSelectedPivotModels = useMemo(
+    () => reconcileSelectedModels(selectedPivotModels, availableSliceModels),
+    [selectedPivotModels, availableSliceModels]
   );
   const modelFilter = useMemo(() => {
     if (effectiveSelectedPivotModels.size === 0) return undefined;
@@ -316,10 +316,9 @@ export default function App() {
         "1h",
         debouncedModelFilter
       ).catch(() => null);
-      const [s, sliceStats, f, h] = await Promise.all([
+      const [s, sliceStats, h] = await Promise.all([
         filteredStatsPromise,
         sliceStatsPromise,
-        fetchFilters(),
         hourlyPromise,
       ]);
       setStats(s);
@@ -329,13 +328,7 @@ export default function App() {
           sliceStats.by_model.map((modelStats) => modelStats.model)
         )
       );
-      setFilters(f);
       setLastUpdatedAt(new Date());
-      if (!filtersInitializedRef.current) {
-        setSelectedSources(new Set(f.sources));
-        setSelectedVendors(new Set(f.vendors));
-        filtersInitializedRef.current = true;
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载数据失败");
     } finally {
@@ -496,6 +489,23 @@ export default function App() {
     };
     doRefresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const f = await fetchFilters();
+        setFilters(f);
+        if (!filtersInitializedRef.current) {
+          setSelectedSources(new Set(f.sources));
+          setSelectedVendors(new Set(f.vendors));
+          filtersInitializedRef.current = true;
+        }
+      } catch (e) {
+        console.error("Failed to load filters", e);
+      }
+    };
+    load();
   }, []);
 
   useEffect(() => {

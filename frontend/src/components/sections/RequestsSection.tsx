@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, Fragment, useEffect } from "react";
+import { memo, useMemo, useState, useCallback, Fragment, useEffect } from "react";
 import {
   ChevronDown,
   ChevronRight as ChevronRightIcon,
@@ -88,7 +88,7 @@ interface RequestsSectionProps {
   onAdvancedModelsChange: (models: string[]) => void;
 }
 
-export function RequestsSection({
+export const RequestsSection = memo(function RequestsSection({
   stats,
   requests,
   hideFreeModels,
@@ -1094,4 +1094,4 @@ export function RequestsSection({
       </details>
     </section>
   );
-}
+});
