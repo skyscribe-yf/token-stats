@@ -29,9 +29,9 @@ pub fn get_kimi_credentials_path_ex() -> PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
-        .join(".kimi")
+        .join(".kimi-code-user2")
         .join("credentials")
-        .join("kimi-code-ex.json")
+        .join("kimi-code.json")
 }
 
 /// Read Kimi Code OAuth access token from a credentials file.
