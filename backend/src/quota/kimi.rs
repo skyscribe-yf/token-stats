@@ -543,4 +543,19 @@ mod tests {
 
         assert!(!status.available);
     }
+
+    #[test]
+    fn test_get_kimi_credentials_path_ex_default() {
+        temp_env::with_var("KIMI_CREDENTIALS_PATH_EX", None::<&str>, || {
+            temp_env::with_var("HOME", Some("/tmp/fakehome"), || {
+                let path = get_kimi_credentials_path_ex();
+                assert_eq!(
+                    path,
+                    std::path::PathBuf::from(
+                        "/tmp/fakehome/.kimi-code-user2/credentials/kimi-code.json"
+                    )
+                );
+            });
+        });
+    }
 }
