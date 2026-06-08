@@ -266,9 +266,14 @@ pub async fn export_data(State(state): State<Arc<AppState>>) -> impl IntoRespons
     let guard = state.records.read().await;
     let mut out = String::with_capacity(guard.len() * 256);
     for r in guard.iter() {
-        if let Ok(line) = serde_json::to_string(r) {
-            out.push_str(&line);
-            out.push('\n');
+        match serde_json::to_string(r) {
+            Ok(line) => {
+                out.push_str(&line);
+                out.push('\n');
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize record during export: {}", e);
+            }
         }
     }
     (
@@ -402,10 +407,22 @@ pub async fn restore_backup(
 
     if let Some(ref dir) = body.backup_dir {
         let dir = PathBuf::from(dir);
+        // Look for standard backup filenames and exported files
         for name in &["api_requests.jsonl", "usage.jsonl"] {
             let path = dir.join(name);
             if path.exists() {
                 files.push(path);
+            }
+        }
+        // Also accept token-stats-export-*.jsonl files produced by the export button
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with("token-stats-export-") && name.ends_with(".jsonl") {
+                        files.push(path);
+                    }
+                }
             }
         }
     }

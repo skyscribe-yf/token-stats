@@ -15,6 +15,17 @@ pub fn get_kimi_credentials_path() -> PathBuf {
         return PathBuf::from(path);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+
+    // Prefer the modern Kimi Code path (~/.kimi-code) over the legacy
+    // Kimi CLI path (~/.kimi) so migrated users see the correct account.
+    let modern = PathBuf::from(&home)
+        .join(".kimi-code")
+        .join("credentials")
+        .join("kimi-code.json");
+    if modern.exists() {
+        return modern;
+    }
+
     PathBuf::from(home)
         .join(".kimi")
         .join("credentials")

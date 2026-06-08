@@ -13,6 +13,7 @@ interface SettingsDrawerProps {
   pricingConfig: PricingConfig | null;
 
   onExport: () => Promise<void>;
+  exportError: string | null;
   onRestore: (path: string) => Promise<void>;
   restoreLoading: boolean;
   restoreResult: RestoreResponse | null;
@@ -27,6 +28,7 @@ export function SettingsDrawer({
   onSaveSubscriptionSettings,
   pricingConfig,
   onExport,
+  exportError,
   onRestore,
   restoreLoading,
   restoreResult,
@@ -252,6 +254,9 @@ export function SettingsDrawer({
             <Download className="w-3 h-3" />
             导出备份
           </button>
+          {exportError && (
+            <p className="mt-1 text-[10px] text-rose-700">{exportError}</p>
+          )}
         </section>
 
         {/* 数据恢复 */}

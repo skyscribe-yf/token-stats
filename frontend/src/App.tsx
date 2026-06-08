@@ -208,6 +208,7 @@ export default function App() {
     null
   );
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const [advancedModels, setAdvancedModels] = useState<string[]>([]);
   const [selectedPivotModels, setSelectedPivotModels] = useState<Set<string>>(
@@ -945,6 +946,7 @@ export default function App() {
   }, [subscriptionSettings]);
 
   const handleExport = useCallback(async () => {
+    setExportError(null);
     try {
       const res = await exportBackup();
       const blob = await res.blob();
@@ -954,8 +956,8 @@ export default function App() {
       a.download = `token-stats-export-${new Date().toISOString().slice(0, 10)}.jsonl`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      /* silent */
+    } catch (e: unknown) {
+      setExportError(e instanceof Error ? e.message : "导出失败");
     }
   }, []);
 
@@ -1004,6 +1006,7 @@ export default function App() {
             onSaveSubscriptionSettings={handleSaveSubscriptionSettings}
             pricingConfig={pricingConfig}
             onExport={handleExport}
+            exportError={exportError}
             onRestore={handleRestore}
             restoreLoading={restoreLoading}
             restoreResult={restoreResult}

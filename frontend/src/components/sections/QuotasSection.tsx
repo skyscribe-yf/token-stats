@@ -442,9 +442,9 @@ function KimiCard({
               总配额 {status.data.total_remaining}/{status.data.total_limit}
             </div>
           )}
-          {subscriptionSettings?.kimi_monthly_start_day && (
+          {monthlyStartDay && (
             <div className="mt-1 text-[10px] text-slate-400">
-              月起始日: 每月 {subscriptionSettings.kimi_monthly_start_day} 号
+              月起始日: 每月 {monthlyStartDay} 号
             </div>
           )}
         </>
