@@ -383,6 +383,7 @@ export async function fetchTps(
 
 export interface AinaibaCreditCard {
   amount: number;
+  balance: number;
   expires_at: string;
 }
 

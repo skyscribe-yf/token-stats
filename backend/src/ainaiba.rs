@@ -1,15 +1,20 @@
 //! Ainaiba (XAI) credit balance fetcher.
 //!
-//! Queries the Ainaiba dashboard API at `api-xai.ainaibahub.com` using
+//! Queries the Yairouter dashboard API at `api.yairouter.com` using
 //! the `XAI_API_KEY` environment variable.
 //!
-//! The Ainaiba platform may have multiple credit balance entries ("到账卡")
-//! with different purchase rates (e.g. 40x legacy vs 25x current).
-//! This module reads all entries and exposes them individually.
+//! The platform may have multiple credit balance entries ("到账卡")
+//! with different purchase rates. This module reads all entries and
+//! exposes them individually.
+//!
+//! Note: `credit_total` (sum of active card amounts) may be smaller than
+//! `credit_used` (lifetime total) + `balance` (remaining). This is because
+//! `credit_used` accumulates across all cards over time while `credit_total`
+//! only reflects the current active cards' total granted amount.
 
 use serde::Serialize;
 
-const AINAIBA_API_BASE: &str = "https://api-xai.ainaibahub.com";
+const AINAIBA_API_BASE: &str = "https://api.yairouter.com";
 
 /// Response wrapper with availability flag and optional error.
 #[derive(Debug, Serialize)]
@@ -23,6 +28,8 @@ pub struct AinaibaCreditResponse {
 #[derive(Debug, Serialize)]
 pub struct CreditCardInfo {
     pub amount: f64,
+    /// Remaining balance on this card
+    pub balance: f64,
     pub expires_at: String,
 }
 
@@ -133,7 +140,7 @@ async fn fetch_dashboard(
     path: &str,
 ) -> Result<serde_json::Value, String> {
     let url = format!("{}{}", AINAIBA_API_BASE, path);
-    // Produces e.g. "https://api-xai.ainaibahub.com/dashboard/live".
+    // Produces e.g. "https://api.yairouter.com/dashboard/live".
     let response = client
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
@@ -161,8 +168,9 @@ fn parse_credit_data(
     let name = info["name"].as_str().unwrap_or("").to_string();
     let email = info["email"].as_str().unwrap_or("").to_string();
     let alias = info["alias"].as_str().unwrap_or("").to_string();
-    let balance = info["balance"].as_f64().unwrap_or(0.0);
     let credit_used = info["credit_used"].as_f64().unwrap_or(0.0);
+    // Top-level balance from API (sum of all card balances)
+    let api_balance = info["balance"].as_f64().unwrap_or(0.0);
     let hard_limit = info["hard_limit"].as_f64().unwrap_or(0.0);
     let daily_limit = info["daily_limit"].as_f64().unwrap_or(0.0);
     let rpm = info["rpm"].as_i64().unwrap_or(0);
@@ -181,6 +189,7 @@ fn parse_credit_data(
     if let Some(arr) = credit_balance.as_array() {
         for entry in arr {
             let amount = entry["amount"].as_f64().unwrap_or(0.0);
+            let card_balance = entry["balance"].as_f64().unwrap_or(0.0);
             let card_expires = entry["expires_at"].as_str().unwrap_or("").to_string();
             credit_total += amount;
             // Track the earliest expiry
@@ -189,6 +198,7 @@ fn parse_credit_data(
             }
             cards.push(CreditCardInfo {
                 amount,
+                balance: card_balance,
                 expires_at: card_expires,
             });
         }
@@ -200,6 +210,10 @@ fn parse_credit_data(
             .get(0)
             .and_then(|c| c["amount"].as_f64())
             .unwrap_or(0.0);
+        let card_balance = credit_balance
+            .get(0)
+            .and_then(|c| c["balance"].as_f64())
+            .unwrap_or(0.0);
         let card_expires = credit_balance
             .get(0)
             .and_then(|c| c["expires_at"].as_str())
@@ -210,10 +224,19 @@ fn parse_credit_data(
         if amount > 0.0 {
             cards.push(CreditCardInfo {
                 amount,
+                balance: card_balance,
                 expires_at: card_expires,
             });
         }
     }
+
+    // Use the sum of per-card balances as the canonical remaining balance.
+    // This is more accurate than the API's top-level balance when cards overlap.
+    let balance = if !cards.is_empty() {
+        cards.iter().map(|c| c.balance).sum::<f64>()
+    } else {
+        api_balance
+    };
 
     // Extract daily/monthly usage from live dashboard data
     let daily_used = live["daily_usage"]["CreditUsed"].as_f64().unwrap_or(0.0);

@@ -146,7 +146,7 @@ function buildQuotaChips(
   if (ainaibaCredit?.available && ainaibaCredit.data) {
     const a = ainaibaCredit.data;
     if (a.cards && a.cards.length > 1) {
-      // Multiple cards: show each one individually
+      // Multiple cards: show each one's remaining balance
       for (let i = 0; i < a.cards.length; i++) {
         const card = a.cards[i];
         chips.push({
@@ -154,7 +154,7 @@ function buildQuotaChips(
           cardId: "quota-ainaiba",
           vendor: "Ainaiba",
           scope: `卡${i + 1}`,
-          display: `¥${card.amount.toFixed(2)}`,
+          display: `¥${(card.balance ?? card.amount).toFixed(2)}`,
           pct: null,
         });
       }

@@ -262,7 +262,7 @@ function AinaibaCard({
         active={!!status?.available}
         loading={loading}
         name="Ainaiba"
-        suffix="xai.ainaibahub"
+        suffix="api.yairouter"
         cycleCountdown={cycleCountdown}
       />
       {loading ? (
@@ -284,16 +284,16 @@ function AinaibaCard({
             </div>
             <div className="text-[10px] text-slate-500">
               <span className="text-slate-700 font-medium">
-                {status.data.credit_used.toFixed(2)}
+                ¥{status.data.balance.toFixed(2)}
               </span>{" "}
-              / {status.data.credit_total.toFixed(2)} 额度
+              剩余 / ¥{status.data.credit_total.toFixed(2)} 到账
             </div>
           </div>
           <div className="space-y-1.5">
             <ProgressBar
-              label="总额度"
+              label="已用"
               used={status.data.credit_used}
-              limit={status.data.credit_total}
+              limit={status.data.credit_used + status.data.balance}
             />
             <ProgressBar
               label="日限"
@@ -316,7 +316,7 @@ function AinaibaCard({
                       )}
                     </span>
                     <span className="text-slate-700 font-medium tabular-nums">
-                      ¥{card.amount.toFixed(2)}
+                      剩¥{(card.balance ?? card.amount).toFixed(2)} / ¥{card.amount.toFixed(2)}
                     </span>
                   </div>
                 ))}
