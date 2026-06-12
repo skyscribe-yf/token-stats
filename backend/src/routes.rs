@@ -17,7 +17,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // ─── Query parameter types ───────────────────────────────────────────────────
@@ -356,6 +356,51 @@ pub async fn reload_pricing() -> impl IntoResponse {
     Json(serde_json::json!({ "success": true }))
 }
 
+// ─── Lenient parse helpers ──────────────────────────────────────────────────
+
+/// Attempt to parse a JSONL line as a TokenRecord, trying camelCase first
+/// then falling back to snake_case field names (for api_requests.jsonl exports).
+fn parse_record_lenient(line: &str) -> Option<TokenRecord> {
+    // First try canonical camelCase (TokenRecord's serde rename)
+    if let Ok(r) = serde_json::from_str::<TokenRecord>(line) {
+        return Some(r);
+    }
+
+    // Fallback: manually translate snake_case keys to camelCase
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let obj = v.as_object()?;
+
+    // Build a translated JSON object with camelCase keys
+    let mut camel = serde_json::Map::new();
+    for (k, val) in obj {
+        match k.as_str() {
+            "input_tokens" => { camel.insert("inputTokens".into(), val.clone()); }
+            "output_tokens" => { camel.insert("outputTokens".into(), val.clone()); }
+            "cache_read_tokens" => { camel.insert("cacheReadTokens".into(), val.clone()); }
+            "cache_write_tokens" => { camel.insert("cacheWriteTokens".into(), val.clone()); }
+            "total_tokens" => { camel.insert("totalTokens".into(), val.clone()); }
+            "api_key_prefix" => { camel.insert("apiKeyPrefix".into(), val.clone()); }
+            "ttft_ms" => { camel.insert("ttftMs".into(), val.clone()); }
+            "cache_hit_ratio" => { /* skip, not a TokenRecord field */ }
+            _ => { camel.insert(k.clone(), val.clone()); }
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(camel)).ok()
+}
+
+/// Infer source from a backup filename when the record itself is missing `source`.
+fn infer_source_from_filename(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    match name {
+        "usage.jsonl" => "pi".to_string(),
+        n if n.starts_with("token-stats-export-") && n.ends_with(".jsonl") => "pi".to_string(),
+        _ => "pi".to_string(), // default backup source
+    }
+}
+
 // ─── Restore ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -453,17 +498,27 @@ pub async fn restore_backup(
                 continue;
             }
 
-            let record: TokenRecord = match serde_json::from_str(&line) {
-                Ok(r) => r,
-                Err(e) => {
+            let record: TokenRecord = match parse_record_lenient(&line) {
+                None => {
                     errors.push(format!(
-                        "Parse error in {:?}: {} — {}",
+                        "Parse error in {:?}: — {}",
                         file_path,
-                        e,
                         line.chars().take(80).collect::<String>()
                     ));
                     continue;
                 }
+                Some(r) => r,
+            };
+
+            // Infer source from filename when missing
+            let record = if record.source.is_empty() {
+                let inferred = infer_source_from_filename(file_path);
+                TokenRecord {
+                    source: inferred,
+                    ..record
+                }
+            } else {
+                record
             };
 
             let key = (
