@@ -52,8 +52,8 @@ fn init_logging(log_level: &str) {
         )
         .append()
         .write_mode(WriteMode::AsyncWith {
-            pool_capa: 1 << 14,       // 16K message pool
-            message_capa: 1 << 16,    // 64K message channel
+            pool_capa: 1 << 14,    // 16K message pool
+            message_capa: 1 << 16, // 64K message channel
             flush_interval: std::time::Duration::from_secs(2),
         }),
         &FormatConfig::default().with_file(true),

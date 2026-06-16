@@ -46,6 +46,12 @@ pub struct SpecialPricing {
     pub freemodel_divisor: f64,
     #[serde(default)]
     pub commandcode_divisor: f64,
+    #[serde(default = "default_fenno_divisor")]
+    pub fenno_divisor: f64,
+}
+
+fn default_fenno_divisor() -> f64 {
+    150.0 * 6.82 / 10.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +94,7 @@ impl Default for PricingConfig {
                 ainaba_segments: Vec::new(),
                 freemodel_divisor: 68.2,
                 commandcode_divisor: 1.0,
+                fenno_divisor: default_fenno_divisor(),
             },
             model: Vec::new(),
         }
@@ -463,8 +470,18 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
     let state = state_cell().lock().unwrap();
     let cfg = &state.config;
 
-    // 1. 讯飞 (xunfei): flat per-call rate in CNY
-    if record.provider == "xunfei" {
+    // 1. 讯飞 (xunfei / xunfei-ex): flat per-call rate in CNY
+    if record.provider == "xunfei" || record.provider == "xunfei-ex" {
+        return cfg.special.xunfei_per_call;
+    }
+
+    // 1b. 讯飞API接口 (xunfei_api): cost is already in CNY from pi calculations.
+    //     If stored cost is available, return it as-is. Otherwise fall back to
+    //     flat per-call rate.
+    if record.provider == "xunfei_api" {
+        if record.cost > 0.0 {
+            return record.cost;
+        }
         return cfg.special.xunfei_per_call;
     }
 
@@ -479,7 +496,9 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
     // 2b. Xiaomi MiMo provider with zero stored cost: per-token estimate in CNY
     //     Similar to Kimi subscription model: 99 元 / 110 亿 Token (platform tokenization)
     //     Covers both "xiaomi-mimo" (pi direct) and "xiaomi-mimo-tp" (token plan).
-    if (record.provider == "xiaomi-mimo" || record.provider == "xiaomi-mimo-tp") && record.cost == 0.0 {
+    if (record.provider == "xiaomi-mimo" || record.provider == "xiaomi-mimo-tp")
+        && record.cost == 0.0
+    {
         return record.total_tokens as f64 * cfg.special.xiaomi_mimo_tp_per_token;
     }
 
@@ -549,6 +568,12 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             cny /= cfg.special.freemodel_divisor;
         }
 
+        // Fenno subscription discount: 10 CNY buys 150 USD face value.
+        // After USD→CNY conversion, divide by the effective face-value ratio.
+        if effective_provider == "fenno" {
+            cny /= cfg.special.fenno_divisor;
+        }
+
         return cny;
     }
 
@@ -596,6 +621,9 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             // same OpenCode Go subscription as pi records with opencode-go.
             if record.provider == "opencode-go" {
                 cny /= cfg.special.opencode_divisor;
+            }
+            if record.provider == "fenno" {
+                cny /= cfg.special.fenno_divisor;
             }
             return cny;
         }
@@ -741,6 +769,21 @@ mod tests {
     }
 
     #[test]
+    fn xunfei_ex_uses_same_per_call_rate() {
+        let _guard = pricing_test_guard();
+        // xunfei-ex provider should use the same flat per-call rate as xunfei
+        let record = make_record("pi", "xunfei-ex", "astron-code-latest", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "xunfei-ex should use per-call rate, expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
     fn non_kimi_provider_zero_cost_returns_zero() {
         let _guard = pricing_test_guard();
         // Non-kimi records with cost=0 should still return 0 (fallback)
@@ -766,6 +809,23 @@ mod tests {
         assert!(
             (cost - expected).abs() < 1e-9,
             "FreeModel cost should use divisor, expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn fenno_stored_cost_applies_subscription_divisor() {
+        let _guard = pricing_test_guard();
+        // Fenno list price is stored in USD, but the actual subscription spend is
+        // about 10 CNY for 150 USD face value.
+        let record = make_record("pi", "fenno", "gpt-5.4", 1_000_000, 0.05);
+        let cost = display_cost(&record);
+        let fenno_divisor = 150.0 * PricingConfig::default().usd_to_cny / 10.0;
+        let expected = 0.05 * PricingConfig::default().usd_to_cny / fenno_divisor;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "fenno cost should use subscription divisor, expected {}, got {}",
             expected,
             cost
         );

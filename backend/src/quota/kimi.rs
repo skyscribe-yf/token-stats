@@ -80,11 +80,6 @@ fn read_kimi_access_token(path: &std::path::Path) -> Option<String> {
     Some(token.to_string())
 }
 
-/// Read Kimi Code OAuth access token from the primary credentials file.
-pub fn get_kimi_code_access_token() -> Option<String> {
-    read_kimi_access_token(&get_kimi_credentials_path())
-}
-
 /// Attempt to refresh the Kimi Code OAuth access token for a given credentials path.
 /// On success, updates the credentials file and returns the new access token.
 async fn refresh_token(client: &reqwest::Client, creds_path: &std::path::Path) -> Option<String> {
@@ -183,11 +178,6 @@ async fn refresh_token(client: &reqwest::Client, creds_path: &std::path::Path) -
             None
         }
     }
-}
-
-/// Attempt to refresh the Kimi Code OAuth access token for the primary account.
-pub async fn refresh_kimi_code_token(client: &reqwest::Client) -> Option<String> {
-    refresh_token(client, &get_kimi_credentials_path()).await
 }
 
 /// Kimi Auth API base URL for token refresh.

@@ -35,6 +35,10 @@ freemodel_divisor = 68.2
 # CommandCode 订阅折扣：实际成本 = 列出价格 / 10
 commandcode_divisor = 10.0
 
+# Fenno 订阅折扣：10 CNY 可买 150 USD 面值
+# 先按 USD→CNY 换算，再除以折扣倍率：150 × 6.82 / 10 = 102.3
+fenno_divisor = 102.3
+
 # 模型价格（USD per 1_000_000 tokens）
 # 用于 codex/claude-code 等无原始 cost 的源，从 token 用量计算
 # cache_write 对 OpenAI 模型等于 input（首次缓存按正常输入计费）

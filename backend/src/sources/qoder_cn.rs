@@ -33,14 +33,22 @@ impl QoderCnSource {
     fn sessions_path() -> PathBuf {
         let override_path = std::env::var("QODER_CN_SESSIONS_PATH").ok();
         override_path.map_or_else(
-            || super::home_dir().join(".qoder-cn").join("logs").join("sessions"),
+            || {
+                super::home_dir()
+                    .join(".qoder-cn")
+                    .join("logs")
+                    .join("sessions")
+            },
             PathBuf::from,
         )
     }
 
     fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
         if !base_path.exists() {
-            tracing::warn!("Qoder CN sessions dir not found at {:?}, skipping", base_path);
+            tracing::warn!(
+                "Qoder CN sessions dir not found at {:?}, skipping",
+                base_path
+            );
             return Vec::new();
         }
 
@@ -72,7 +80,8 @@ impl QoderCnSource {
                 }
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
                     // Only process model.response.completed events with usage data
-                    if obj.get("type").and_then(|t| t.as_str()) != Some("model.response.completed") {
+                    if obj.get("type").and_then(|t| t.as_str()) != Some("model.response.completed")
+                    {
                         continue;
                     }
 

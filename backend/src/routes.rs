@@ -178,11 +178,7 @@ pub async fn get_tps(
         tz: tz.as_ref(),
         exclude_zero_tokens: true,
     };
-    let response = aggregator::compute_tps_analysis(
-        &records,
-        &filters,
-        query.models.as_deref(),
-    );
+    let response = aggregator::compute_tps_analysis(&records, &filters, query.models.as_deref());
     Json(response)
 }
 
@@ -240,7 +236,14 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
 pub async fn get_quota() -> impl IntoResponse {
     let fetcher = QuotaFetcher::new();
 
-    let (kimi_result, kimi_ex_result, opencode_result, opencode_ex_result, xiaomi_mimo_result, commandcode_result) = tokio::join!(
+    let (
+        kimi_result,
+        kimi_ex_result,
+        opencode_result,
+        opencode_ex_result,
+        xiaomi_mimo_result,
+        commandcode_result,
+    ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
         fetcher.fetch_opencode_quota(),
@@ -374,15 +377,31 @@ fn parse_record_lenient(line: &str) -> Option<TokenRecord> {
     let mut camel = serde_json::Map::new();
     for (k, val) in obj {
         match k.as_str() {
-            "input_tokens" => { camel.insert("inputTokens".into(), val.clone()); }
-            "output_tokens" => { camel.insert("outputTokens".into(), val.clone()); }
-            "cache_read_tokens" => { camel.insert("cacheReadTokens".into(), val.clone()); }
-            "cache_write_tokens" => { camel.insert("cacheWriteTokens".into(), val.clone()); }
-            "total_tokens" => { camel.insert("totalTokens".into(), val.clone()); }
-            "api_key_prefix" => { camel.insert("apiKeyPrefix".into(), val.clone()); }
-            "ttft_ms" => { camel.insert("ttftMs".into(), val.clone()); }
+            "input_tokens" => {
+                camel.insert("inputTokens".into(), val.clone());
+            }
+            "output_tokens" => {
+                camel.insert("outputTokens".into(), val.clone());
+            }
+            "cache_read_tokens" => {
+                camel.insert("cacheReadTokens".into(), val.clone());
+            }
+            "cache_write_tokens" => {
+                camel.insert("cacheWriteTokens".into(), val.clone());
+            }
+            "total_tokens" => {
+                camel.insert("totalTokens".into(), val.clone());
+            }
+            "api_key_prefix" => {
+                camel.insert("apiKeyPrefix".into(), val.clone());
+            }
+            "ttft_ms" => {
+                camel.insert("ttftMs".into(), val.clone());
+            }
             "cache_hit_ratio" => { /* skip, not a TokenRecord field */ }
-            _ => { camel.insert(k.clone(), val.clone()); }
+            _ => {
+                camel.insert(k.clone(), val.clone());
+            }
         }
     }
     serde_json::from_value(serde_json::Value::Object(camel)).ok()
@@ -390,10 +409,7 @@ fn parse_record_lenient(line: &str) -> Option<TokenRecord> {
 
 /// Infer source from a backup filename when the record itself is missing `source`.
 fn infer_source_from_filename(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     match name {
         "usage.jsonl" => "pi".to_string(),
         n if n.starts_with("token-stats-export-") && n.ends_with(".jsonl") => "pi".to_string(),

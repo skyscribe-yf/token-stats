@@ -320,7 +320,7 @@ fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
 /// Check if a provider is xunfei (has no cache mechanism).
 /// Xunfei uses astron-code models which have zero cache reads, skewing the ratio.
 fn is_xunfei_provider(provider: &str) -> bool {
-    provider == "xunfei"
+    provider == "xunfei" || provider == "xunfei-ex"
 }
 
 /// Compute the bucket key for a record based on the resolution.
@@ -472,20 +472,16 @@ fn compute_rpm_from_times(times: &[String]) -> (f64, i64) {
         };
         if gap > GAP_THRESHOLD {
             // Close window: count minutes from sorted_keys[window_start_idx] to sorted_keys[i-1]
-            let (mins, reqs) = count_window_minutes_and_requests(
-                &sorted_keys[window_start_idx..i],
-                &minute_map,
-            );
+            let (mins, reqs) =
+                count_window_minutes_and_requests(&sorted_keys[window_start_idx..i], &minute_map);
             total_active_minutes += mins;
             total_requests += reqs;
             window_start_idx = i;
         }
     }
     // Close last window
-    let (mins, reqs) = count_window_minutes_and_requests(
-        &sorted_keys[window_start_idx..],
-        &minute_map,
-    );
+    let (mins, reqs) =
+        count_window_minutes_and_requests(&sorted_keys[window_start_idx..], &minute_map);
     total_active_minutes += mins;
     total_requests += reqs;
 
@@ -521,14 +517,31 @@ fn count_window_minutes_and_requests(
     }
     let start_dt = match parse_minute_key(&keys[0]) {
         Some(dt) => dt,
-        None => return (keys.len() as i64, keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum()),
+        None => {
+            return (
+                keys.len() as i64,
+                keys.iter()
+                    .map(|k| minute_map.get(k).copied().unwrap_or(0))
+                    .sum(),
+            )
+        }
     };
     let end_dt = match parse_minute_key(&keys[keys.len() - 1]) {
         Some(dt) => dt,
-        None => return (keys.len() as i64, keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum()),
+        None => {
+            return (
+                keys.len() as i64,
+                keys.iter()
+                    .map(|k| minute_map.get(k).copied().unwrap_or(0))
+                    .sum(),
+            )
+        }
     };
     let duration_minutes = (end_dt - start_dt).num_minutes() + 1;
-    let total_requests: i64 = keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum();
+    let total_requests: i64 = keys
+        .iter()
+        .map(|k| minute_map.get(k).copied().unwrap_or(0))
+        .sum();
     (duration_minutes, total_requests)
 }
 
@@ -621,7 +634,11 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
                 .source_aggs
                 .into_iter()
                 .map(|(source, acc)| {
-                    let source_times = agg.source_times.get(&source).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let source_times = agg
+                        .source_times
+                        .get(&source)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
                     let (source_avg_rpm, source_peak_rpm) = compute_rpm_from_times(source_times);
                     let source_ttft_vals = agg.source_ttft.get(&source);
                     let source_tps_data = agg.source_tps_data.get(&source);
@@ -707,11 +724,20 @@ fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
 /// Compute the local minute-bucket key for a record ("YYYY-MM-DD HH:MM").
 fn minute_key_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Option<String> {
     let local_dt = if let Some(tz) = tz {
-        record.parsed_time().map(|dt| dt.with_timezone(tz).naive_local())
+        record
+            .parsed_time()
+            .map(|dt| dt.with_timezone(tz).naive_local())
     } else {
         record.parsed_time().map(|dt| dt.naive_utc())
     };
-    local_dt.map(|dt| format!("{} {:02}:{:02}", dt.format("%Y-%m-%d"), dt.hour(), dt.minute()))
+    local_dt.map(|dt| {
+        format!(
+            "{} {:02}:{:02}",
+            dt.format("%Y-%m-%d"),
+            dt.hour(),
+            dt.minute()
+        )
+    })
 }
 
 /// Parse a minute key back to a chrono NaiveDateTime for arithmetic.
@@ -785,7 +811,11 @@ pub fn compute_rpm_analysis(
             }
             _ => {
                 // Fallback: if parsing fails, compare strings
-                if sorted_keys[i] != sorted_keys[i - 1] { 1 } else { 0 }
+                if sorted_keys[i] != sorted_keys[i - 1] {
+                    1
+                } else {
+                    0
+                }
             }
         };
 
@@ -818,7 +848,12 @@ pub fn compute_rpm_analysis(
         };
         let mut cursor = start_dt;
         loop {
-            let key = format!("{} {:02}:{:02}", cursor.format("%Y-%m-%d"), cursor.hour(), cursor.minute());
+            let key = format!(
+                "{} {:02}:{:02}",
+                cursor.format("%Y-%m-%d"),
+                cursor.hour(),
+                cursor.minute()
+            );
             let requests = minute_map.get(&key).copied().unwrap_or(0);
             all_buckets.push(MinuteBucket {
                 minute: key,
@@ -839,11 +874,7 @@ pub fn compute_rpm_analysis(
     } else {
         0.0
     };
-    let overall_peak_rpm = windows
-        .iter()
-        .map(|w| w.peak_rpm)
-        .max()
-        .unwrap_or(0);
+    let overall_peak_rpm = windows.iter().map(|w| w.peak_rpm).max().unwrap_or(0);
 
     RpmAnalysis {
         all_buckets,
@@ -870,8 +901,15 @@ fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Op
 
     // Compute duration and total requests without materializing every minute bucket
     let duration_minutes = (end_dt - start_dt).num_minutes() + 1;
-    let total_requests: i64 = window_keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).sum();
-    let peak_rpm = window_keys.iter().map(|k| minute_map.get(k).copied().unwrap_or(0)).max().unwrap_or(0);
+    let total_requests: i64 = window_keys
+        .iter()
+        .map(|k| minute_map.get(k).copied().unwrap_or(0))
+        .sum();
+    let peak_rpm = window_keys
+        .iter()
+        .map(|k| minute_map.get(k).copied().unwrap_or(0))
+        .max()
+        .unwrap_or(0);
     let avg_rpm = if duration_minutes > 0 {
         total_requests as f64 / duration_minutes as f64
     } else {
@@ -937,10 +975,8 @@ pub fn compute_tps_analysis(
                         start_utc.naive_utc().and_utc().fixed_offset()
                     };
                     let end_local = start_local
-                        + Duration::try_milliseconds(
-                            (duration_secs * 1000.0).ceil() as i64,
-                        )
-                        .unwrap_or(Duration::default());
+                        + Duration::try_milliseconds((duration_secs * 1000.0).ceil() as i64)
+                            .unwrap_or(Duration::default());
 
                     let entry_key = (r.provider.clone(), r.model.clone());
                     let buckets = minute_buckets.entry(entry_key).or_default();
@@ -967,14 +1003,12 @@ pub fn compute_tps_analysis(
                             );
                             let sec_start =
                                 (effective_start - cursor).num_milliseconds() as f64 / 1000.0;
-                            let sec_end =
-                                (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
-                            let bucket = buckets.entry(minute_key).or_insert_with(|| {
-                                MinuteBucket {
+                            let sec_end = (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
+                            let bucket =
+                                buckets.entry(minute_key).or_insert_with(|| MinuteBucket {
                                     tokens: 0.0,
                                     intervals: Vec::new(),
-                                }
-                            });
+                                });
                             bucket.tokens += tps * overlap_secs;
                             bucket.intervals.push((sec_start, sec_end));
                         }
@@ -1009,8 +1043,7 @@ pub fn compute_tps_analysis(
                         }
                         merged.push((start, end));
                     }
-                    let active_secs: f64 =
-                        merged.iter().map(|(s, e)| (e - s).max(0.0)).sum();
+                    let active_secs: f64 = merged.iter().map(|(s, e)| (e - s).max(0.0)).sum();
                     (minute_key, bucket.tokens, active_secs)
                 })
                 .collect();
@@ -1026,13 +1059,11 @@ pub fn compute_tps_analysis(
                     let in_window: Vec<&(String, f64, f64)> = resolved[..=i]
                         .iter()
                         .filter(|(t, _, _)| {
-                            parse_minute_key(t)
-                                .is_some_and(|dt| dt >= start_dt && dt <= end_dt)
+                            parse_minute_key(t).is_some_and(|dt| dt >= start_dt && dt <= end_dt)
                         })
                         .collect();
 
-                    let window_tokens: f64 =
-                        in_window.iter().map(|(_, tokens, _)| tokens).sum();
+                    let window_tokens: f64 = in_window.iter().map(|(_, tokens, _)| tokens).sum();
                     let window_active_secs: f64 = in_window
                         .iter()
                         .map(|(_, _, active_secs)| active_secs)
@@ -1301,11 +1332,41 @@ mod tests {
         // the true generation speed: 1200/12 = 100 TPS, regardless of idle
         // gaps between requests.
         let records = vec![
-            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:00:00Z", 1200, 100.0),
-            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:01:00Z", 1200, 100.0),
-            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:15:00Z", 1200, 100.0),
-            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:16:00Z", 1200, 100.0),
-            tps_record("xunfei", "astron-code-latest", "2026-06-01T10:30:00Z", 1200, 100.0),
+            tps_record(
+                "xunfei",
+                "astron-code-latest",
+                "2026-06-01T10:00:00Z",
+                1200,
+                100.0,
+            ),
+            tps_record(
+                "xunfei",
+                "astron-code-latest",
+                "2026-06-01T10:01:00Z",
+                1200,
+                100.0,
+            ),
+            tps_record(
+                "xunfei",
+                "astron-code-latest",
+                "2026-06-01T10:15:00Z",
+                1200,
+                100.0,
+            ),
+            tps_record(
+                "xunfei",
+                "astron-code-latest",
+                "2026-06-01T10:16:00Z",
+                1200,
+                100.0,
+            ),
+            tps_record(
+                "xunfei",
+                "astron-code-latest",
+                "2026-06-01T10:30:00Z",
+                1200,
+                100.0,
+            ),
         ];
 
         let filters = FilterCriteria {

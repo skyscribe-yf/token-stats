@@ -109,6 +109,10 @@ pub fn normalize_model_name(model: &str) -> String {
     if let Some(rest) = model.strip_prefix("claude-opus-") {
         return format!("claude-opus-{}", rest.replace('.', "-"));
     }
+    // xunfei_api model name normalization
+    if model == "xopkimik26" {
+        return "kimi-k2.6".to_string();
+    }
     model.to_string()
 }
 

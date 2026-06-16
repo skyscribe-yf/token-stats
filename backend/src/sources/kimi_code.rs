@@ -5,7 +5,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
-/// Kimi Code source: reads `~/.kimi-code/sessions/*/*/agents/*/wire.jsonl`.
+/// Kimi Code source: reads `~/.kimi-code*/sessions/*/*/agents/*/wire.jsonl`.
+///
+/// Auto-discovers all `~/.kimi-code*` directories (e.g. `~/.kimi-code`,
+/// `~/.kimi-code-user2`) to support multi-account setups.
+/// If `KIMI_CODE_HOME` is set, only that directory is used (backward compat).
 ///
 /// Each session is stored under a working-directory bucket:
 ///   sessions/<workDirKey>/<sessionId>/agents/<agentId>/wire.jsonl
@@ -23,19 +27,62 @@ impl DataSource for KimiCodeSource {
     }
 
     fn load(&self) -> Vec<TokenRecord> {
-        let base = Self::data_dir().join("sessions");
-        tracing::info!("Loading Kimi Code data from: {:?}", base);
-        let records = Self::parse(&base);
-        tracing::info!("Loaded {} kimi-code records", records.len());
-        records
+        let dirs = Self::data_dirs();
+        let mut all_records = Vec::new();
+        for data_dir in &dirs {
+            let base = data_dir.join("sessions");
+            tracing::info!("Loading Kimi Code data from: {:?}", base);
+            let records = Self::parse(&base);
+            tracing::info!(
+                "Loaded {} kimi-code records from {:?}",
+                records.len(),
+                data_dir
+            );
+            all_records.extend(records);
+        }
+        tracing::info!(
+            "Loaded {} total kimi-code records across {} directories",
+            all_records.len(),
+            dirs.len()
+        );
+        all_records
     }
 }
 
 impl KimiCodeSource {
-    fn data_dir() -> PathBuf {
-        std::env::var("KIMI_CODE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| super::home_dir().join(".kimi-code"))
+    /// Discover all kimi-code home directories.
+    ///
+    /// If `KIMI_CODE_HOME` is set, uses only that path (backward compat).
+    /// Otherwise, auto-discovers all `~/.kimi-code*` directories (e.g.
+    /// `~/.kimi-code`, `~/.kimi-code-user2`) to support multi-account setups.
+    fn data_dirs() -> Vec<PathBuf> {
+        let home = super::home_dir();
+
+        // Explicit override takes precedence — single directory, backward compatible.
+        if let Ok(path) = std::env::var("KIMI_CODE_HOME") {
+            return vec![PathBuf::from(path)];
+        }
+
+        // Auto-discover all ~/.kimi-code* directories.
+        let mut dirs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&home) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with(".kimi-code") && entry.path().is_dir() {
+                    dirs.push(entry.path());
+                }
+            }
+        }
+
+        // Ensure ~/.kimi-code is always included even if the glob missed it.
+        let default = home.join(".kimi-code");
+        if !dirs.iter().any(|d| *d == default) {
+            dirs.push(default);
+        }
+
+        dirs.sort();
+        dirs
     }
 
     fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
@@ -100,10 +147,7 @@ impl KimiCodeSource {
                     .get("inputOther")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
-                let output = usage
-                    .get("output")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let output = usage.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
                 let cache_read = usage
                     .get("inputCacheRead")
                     .and_then(|v| v.as_i64())
@@ -211,7 +255,10 @@ mod tests {
 
     #[test]
     fn resolve_anthropic_models() {
-        assert_eq!(KimiCodeSource::resolve_provider("claude-sonnet-4"), "anthropic");
+        assert_eq!(
+            KimiCodeSource::resolve_provider("claude-sonnet-4"),
+            "anthropic"
+        );
         assert_eq!(KimiCodeSource::resolve_provider("sonnet"), "anthropic");
     }
 
@@ -266,13 +313,22 @@ mod tests {
 
         // kimi models with various prefixes → always "kimi"
         assert_eq!(resolve_provider_for_raw("opencode-go/kimi-k2.6"), "kimi");
-        assert_eq!(resolve_provider_for_raw("kimi-code/kimi-for-coding"), "kimi");
+        assert_eq!(
+            resolve_provider_for_raw("kimi-code/kimi-for-coding"),
+            "kimi"
+        );
         assert_eq!(resolve_provider_for_raw("kimi-code/kimi-k2.5"), "kimi");
         assert_eq!(resolve_provider_for_raw("kimi-k2.6"), "kimi");
 
         // Non-kimi models keep their prefix-based provider
         assert_eq!(resolve_provider_for_raw("ainaiba/gpt-5.4"), "ainaiba");
-        assert_eq!(resolve_provider_for_raw("xunfei/astron-code-latest"), "xunfei");
-        assert_eq!(resolve_provider_for_raw("deepseek/deepseek-v4-pro"), "deepseek");
+        assert_eq!(
+            resolve_provider_for_raw("xunfei/astron-code-latest"),
+            "xunfei"
+        );
+        assert_eq!(
+            resolve_provider_for_raw("deepseek/deepseek-v4-pro"),
+            "deepseek"
+        );
     }
 }
