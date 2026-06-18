@@ -1,0 +1,74 @@
+--- /home/skyscribe/srcs/token-stats/patches/pi-token-tracker/token-tracker.ts.orig	2026-06-18 11:57:15.080535595 +0800
++++ /home/skyscribe/srcs/token-stats/patches/pi-token-tracker/token-tracker.ts	2026-06-18 11:54:05.021498468 +0800
+@@ -169,6 +169,71 @@
+     },
+   });
+ 
++  // ── Advisor tool call tracking ──────────────────────────────────
++  // The advisor tool (rpiv-advisor) calls completeSimple() directly,
++  // bypassing the main session message pipeline. The message_end event
++  // never fires for advisor calls. Instead, we intercept the tool result
++  // via tool_execution_end and extract token usage from the advisor's
++  // response.
++  //
++  // advisorModel format: "provider:model" (e.g. "fenno:gpt-5.5")
++
++  pi.on("tool_execution_end", async (event) => {
++    if (event.toolName !== "advisor") return;
++
++    const result = event.result as any;
++    const details = result?.details as
++      | { advisorModel?: string; effort?: string; usage?: any }
++      | undefined;
++    if (!details?.usage) return;
++
++    const usage = details.usage;
++    const advisorModel = details.advisorModel ?? "unknown:unknown";
++    const effort = details.effort;
++
++    // Parse "provider:model" format
++    const colonIdx = advisorModel.indexOf(":");
++    const provider =
++      colonIdx !== -1
++        ? advisorModel.slice(0, colonIdx)
++        : advisorModel;
++    const baseModel =
++      colonIdx !== -1
++        ? advisorModel.slice(colonIdx + 1)
++        : advisorModel;
++
++    // Append thinking level suffix for traceability (e.g. "gpt-5.5:xhigh")
++    const model = effort ? `${baseModel}:${effort}` : baseModel;
++
++    const now = new Date();
++    const record = {
++      date: now.toISOString().slice(0, 10),
++      time: now.toISOString(),
++      apiKeyPrefix: "advisor",
++      provider,
++      model,
++      source: "pi",
++      inputTokens: usage.input ?? usage.inputTokens ?? 0,
++      outputTokens: usage.output ?? usage.outputTokens ?? 0,
++      cacheReadTokens: usage.cacheRead ?? usage.cacheReadInputTokens ?? 0,
++      cacheWriteTokens: usage.cacheWrite ?? usage.cacheWriteInputTokens ?? 0,
++      totalTokens:
++        (usage.input ?? usage.inputTokens ?? 0) +
++        (usage.output ?? usage.outputTokens ?? 0) +
++        (usage.cacheRead ?? usage.cacheReadInputTokens ?? 0) +
++        (usage.cacheWrite ?? usage.cacheWriteInputTokens ?? 0),
++      cost: usage.cost?.total ?? 0,
++      ttftMs: null,
++      tps: null,
++    };
++
++    try {
++      appendFileSync(LOG_FILE, JSON.stringify(record) + "\n");
++    } catch {
++      // Silent fail
++    }
++  });
++
+   // Status indicator — safe no-op in RPC mode
+   pi.on("session_start", async (_event, ctx) => {
+     try {

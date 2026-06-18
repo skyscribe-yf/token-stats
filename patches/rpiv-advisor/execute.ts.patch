@@ -1,0 +1,105 @@
+/**
+ * patch: log advisor LLM token usage to ~/.pi/token-logs/usage.jsonl
+ *
+ * The pi-token-tracker extension only hooks into the main session's
+ * message pipeline (pi.on("message_end", ...)). The advisor tool uses
+ * completeSimple() directly, bypassing that pipeline entirely, so its
+ * token usage is never recorded.
+ *
+ * This patch adds a logAdvisorUsage() call right after completeSimple()
+ * returns, writing a record to the same usage.jsonl file in the exact
+ * same format as the token tracker. This ensures advisor calls appear
+ * in the token-stats dashboard.
+ *
+ * === Changes ===
+ *
+ * 1. Add imports for filesystem operations
+ * 2. Add logAdvisorUsage() helper
+ * 3. Insert logging call after completeSimple() before early returns
+ *
+ * === Apply ===
+ *   patch -u node_modules/@juicesharp/rpiv-advisor/advisor/execute.ts \
+ *            < patches/rpiv-advisor/execute.ts.patch
+ *
+ * === Revert ===
+ *   cp patches/rpiv-advisor/execute.ts.orig \
+ *      node_modules/@juicesharp/rpiv-advisor/advisor/execute.ts
+ *
+ * === Re-apply after npm update ===
+ *   ./patches/rpiv-advisor/apply-patch.sh
+ */
+--- a/advisor/execute.ts	2026-06-18 10:30:00
++++ b/advisor/execute.ts	2026-06-18 10:30:00
+@@ -9,6 +9,7 @@
+ 	buildSessionContext,
+ 	convertToLlm,
+ 	type ExtensionAPI,
++	appendFileSync,
+ 	type ExtensionContext,
+ } from "@earendil-works/pi-coding-agent";
+ import { ensureUserTailForAdvisor, stripInflightAdvisorCall } from "./context.js";
+@@ -22,6 +23,7 @@
+ import { ADVISOR_SYSTEM_PROMPT } from "./prompt.js";
+ import { getAdvisorEffort, getAdvisorModel } from "./state.js";
++import { existsSync, mkdirSync } from "node:fs";
++import { homedir } from "node:os";
++import { join } from "node:path";
+ 
+ interface AdvisorDetails {
+@@ -32,4 +34,35 @@
+ }
+ 
++// ── Token logging ─────────────────────────────────────────────────────
++// Logs advisor LLM call usage to the same usage.jsonl file that the
++// pi-token-tracker extension writes to, so advisor calls appear in the
++// token-stats dashboard.
++
++const LOG_DIR = join(homedir(), ".pi", "token-logs");
++const LOG_FILE = join(LOG_DIR, "usage.jsonl");
++
++function ensureLogDir() {
++	if (!existsSync(LOG_DIR)) {
++		mkdirSync(LOG_DIR, { recursive: true });
++	}
++}
++
++function logAdvisorUsage(
++	provider: string,
++	model: string,
++	usage: Usage,
++) {
++	const now = new Date();
++	const record = {
++		date: now.toISOString().slice(0, 10),
++		time: now.toISOString(),
++		apiKeyPrefix: "advisor",
++		provider,
++		model,
++		source: "pi",
++		inputTokens: usage.inputTokens ?? 0,
++		outputTokens: usage.outputTokens ?? 0,
++		cacheReadTokens: usage.cacheReadInputTokens ?? 0,
++		cacheWriteTokens: usage.cacheWriteInputTokens ?? 0,
++		totalTokens: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
++		cost: 0,
++		ttftMs: null,
++		tps: null,
++	};
++	ensureLogDir();
++	try {
++		appendFileSync(LOG_FILE, JSON.stringify(record) + "\n", "utf-8");
++	} catch {
++		// swallow — logging should never break the advisor
++	}
++}
++
+ // Single result-envelope builder — every executeAdvisor branch and the pre-call
+ // error paths funnel through here. `effort` is snapshotted once at executeAdvisor
+@@ -96,4 +129,7 @@
+ 		);
+ 
++		// ── Log token usage ──
++		logAdvisorUsage(advisor.provider, advisor.id, response.usage);
++
+ 		if (response.stopReason === "aborted") {
+ 			return buildAdvisorResult({
