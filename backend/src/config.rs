@@ -95,6 +95,11 @@ pub fn apply_vendor_merge(records: &mut [TokenRecord], merge_map: &HashMap<Strin
     let mut merged_count = 0usize;
     for record in records.iter_mut() {
         if let Some(target) = merge_map.get(&record.provider) {
+            // Preserve the original provider name for pricing logic
+            // (e.g. "kimi-coding" needs different pricing than raw "kimi")
+            if record.original_provider.is_none() {
+                record.original_provider = Some(record.provider.clone());
+            }
             record.provider = target.clone();
             merged_count += 1;
         }
@@ -174,6 +179,47 @@ providers = ["freemodel", "FreeModel"]
         assert_eq!(records[0].provider, "FreeModel"); // remapped from lowercase
         assert_eq!(records[1].provider, "FreeModel"); // unchanged (already FreeModel)
         assert_eq!(records[2].provider, "anthropic"); // unchanged
+    }
+
+    #[test]
+    fn apply_merge_preserves_original_provider() {
+        let mut map = HashMap::new();
+        map.insert("kimi-coding".to_string(), "kimi".to_string());
+        map.insert("openai".to_string(), "ainaba".to_string());
+
+        let mut records = vec![
+            test_record("kimi-coding"),
+            test_record("openai"),
+            test_record("kimi"), // already canonical, no merge
+        ];
+
+        apply_vendor_merge(&mut records, &map);
+
+        // kimi-coding → kimi, original_provider preserved
+        assert_eq!(records[0].provider, "kimi");
+        assert_eq!(records[0].original_provider, Some("kimi-coding".to_string()));
+        // openai → ainaba, original_provider preserved
+        assert_eq!(records[1].provider, "ainaba");
+        assert_eq!(records[1].original_provider, Some("openai".to_string()));
+        // kimi → kimi (no merge), original_provider stays None
+        assert_eq!(records[2].provider, "kimi");
+        assert_eq!(records[2].original_provider, None);
+    }
+
+    #[test]
+    fn apply_merge_does_not_overwrite_existing_original_provider() {
+        let mut map = HashMap::new();
+        map.insert("kimi-coding".to_string(), "kimi".to_string());
+
+        let mut record = test_record("kimi-coding");
+        record.original_provider = Some("custom-orig".to_string());
+        let mut records = vec![record];
+
+        apply_vendor_merge(&mut records, &map);
+
+        // Should NOT overwrite an already-set original_provider
+        assert_eq!(records[0].provider, "kimi");
+        assert_eq!(records[0].original_provider, Some("custom-orig".to_string()));
     }
 
     #[test]

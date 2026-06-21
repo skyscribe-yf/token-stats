@@ -89,11 +89,14 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         "kimi-for-coding" | "kimi-k2" | "kimi-k2.6" | "kimi-k2.5" => "kimi".to_string(),
         "astron-code-latest" => "xunfei".to_string(),
         "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
-        "deepseek-v4-pro" | "deepseek-v4-flash" => "deepseek".to_string(),
+        "deepseek-v4-pro" | "deepseek-v4-flash" | "deepseek-v3.2" => "deepseek".to_string(),
         "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" => "openai".to_string(),
-        "glm-5.1" => "opencode-go".to_string(),
+        "glm-5" | "glm-5.1" | "glm-4.7-flash" => "opencode-go".to_string(),
         "sonnet" | "haiku" => "anthropic".to_string(),
         "qmodel_latest" | "efficient" | "auto" => "qoder".to_string(),
+        "spark-x2" | "spark-x2-flash" => "xunfei".to_string(),
+        "qwen3.6-35b" | "qwen3.5-35b" | "qwen3.5-397b" | "qwen3-coder-next" => "qwen".to_string(),
+        "minimax-m2.5" => "minimax".to_string(),
         _ if model.starts_with("claude-") => "anthropic".to_string(),
         _ => model.to_string(),
     }
@@ -109,11 +112,33 @@ pub fn normalize_model_name(model: &str) -> String {
     if let Some(rest) = model.strip_prefix("claude-opus-") {
         return format!("claude-opus-{}", rest.replace('.', "-"));
     }
-    // xunfei_api model name normalization
-    if model == "xopkimik26" {
-        return "kimi-k2.6".to_string();
+    // Xunfei MaaS model ID → human-readable name
+    match model {
+        // Legacy channel name → default model
+        "astron-code-latest" => "glm-5.1".to_string(),
+        // GLM family
+        "xopglm5" => "glm-5".to_string(),
+        "xopglm51" => "glm-5.1".to_string(),
+        "xopglmv47flash" => "glm-4.7-flash".to_string(),
+        // Kimi family
+        "xopkimik26" => "kimi-k2.6".to_string(),
+        "xopkimik25" => "kimi-k2.5".to_string(),
+        // DeepSeek family
+        "xopdeepseekv4pro" => "deepseek-v4-pro".to_string(),
+        "xopdeepseekv4flash" => "deepseek-v4-flash".to_string(),
+        "xopdeepseekv32" => "deepseek-v3.2".to_string(),
+        // Spark family
+        "xsparkx2" => "spark-x2".to_string(),
+        "xsparkx2flash" => "spark-x2-flash".to_string(),
+        // Qwen family
+        "xopqwen36v35b" => "qwen3.6-35b".to_string(),
+        "xopqwen35v35b" => "qwen3.5-35b".to_string(),
+        "xopqwen35397b" => "qwen3.5-397b".to_string(),
+        "xop3qwencodernext" => "qwen3-coder-next".to_string(),
+        // MiniMax family
+        "xminimaxm25" => "minimax-m2.5".to_string(),
+        _ => model.to_string(),
     }
-    model.to_string()
 }
 
 // ─── Load all sources ────────────────────────────────────────────────────────
@@ -247,6 +272,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_normalized_xunfei_models() {
+        assert_eq!(resolve_provider_from_model("glm-5"), "opencode-go");
+        assert_eq!(resolve_provider_from_model("glm-5.1"), "opencode-go");
+        assert_eq!(resolve_provider_from_model("glm-4.7-flash"), "opencode-go");
+        assert_eq!(resolve_provider_from_model("spark-x2"), "xunfei");
+        assert_eq!(resolve_provider_from_model("spark-x2-flash"), "xunfei");
+        assert_eq!(resolve_provider_from_model("deepseek-v3.2"), "deepseek");
+        assert_eq!(resolve_provider_from_model("qwen3.6-35b"), "qwen");
+        assert_eq!(resolve_provider_from_model("qwen3.5-35b"), "qwen");
+        assert_eq!(resolve_provider_from_model("minimax-m2.5"), "minimax");
+    }
+
+    #[test]
     fn resolve_unknown_model_returns_model_name() {
         assert_eq!(
             resolve_provider_from_model("some-unknown-model"),
@@ -265,6 +303,26 @@ mod tests {
         assert_eq!(normalize_model_name("gpt-5.5"), "gpt-5.5");
         assert_eq!(normalize_model_name("deepseek-v4-pro"), "deepseek-v4-pro");
         assert_eq!(normalize_model_name("kimi-for-coding"), "kimi-for-coding");
+    }
+
+    #[test]
+    fn normalize_xunfei_model_ids() {
+        assert_eq!(normalize_model_name("astron-code-latest"), "glm-5.1");
+        assert_eq!(normalize_model_name("xopglm5"), "glm-5");
+        assert_eq!(normalize_model_name("xopglm51"), "glm-5.1");
+        assert_eq!(normalize_model_name("xopkimik26"), "kimi-k2.6");
+        assert_eq!(normalize_model_name("xopkimik25"), "kimi-k2.5");
+        assert_eq!(normalize_model_name("xopdeepseekv4pro"), "deepseek-v4-pro");
+        assert_eq!(normalize_model_name("xopdeepseekv4flash"), "deepseek-v4-flash");
+        assert_eq!(normalize_model_name("xopdeepseekv32"), "deepseek-v3.2");
+        assert_eq!(normalize_model_name("xsparkx2"), "spark-x2");
+        assert_eq!(normalize_model_name("xsparkx2flash"), "spark-x2-flash");
+        assert_eq!(normalize_model_name("xopqwen36v35b"), "qwen3.6-35b");
+        assert_eq!(normalize_model_name("xopqwen35v35b"), "qwen3.5-35b");
+        assert_eq!(normalize_model_name("xopqwen35397b"), "qwen3.5-397b");
+        assert_eq!(normalize_model_name("xop3qwencodernext"), "qwen3-coder-next");
+        assert_eq!(normalize_model_name("xopglmv47flash"), "glm-4.7-flash");
+        assert_eq!(normalize_model_name("xminimaxm25"), "minimax-m2.5");
     }
 
     #[test]

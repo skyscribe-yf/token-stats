@@ -117,31 +117,30 @@ export function formatTime(utcTimeStr: string): string {
 }
 
 /** Get today's date in local timezone as YYYY-MM-DD */
-export function getLocalToday(): string {
-  const d = new Date();
+export function getLocalToday(now: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 /** Get a Date offset by `days` from now, formatted as YYYY-MM-DD in local timezone */
-export function getLocalDateOffset(days: number): string {
-  const d = new Date();
+export function getLocalDateOffset(days: number, now: Date = new Date()): string {
+  const d = new Date(now);
   d.setDate(d.getDate() - days);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** Get a datetime-local value (YYYY-MM-DDTHH:mm) offset by `days` from now in local timezone */
-export function getLocalDatetimeOffset(days: number): string {
-  const d = new Date();
+export function getLocalDatetimeOffset(days: number, now: Date = new Date()): string {
+  const d = new Date(now);
   d.setDate(d.getDate() - days);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** Get a datetime-local value (YYYY-MM-DDTHH:mm) offset by `hours` from now in local timezone */
-export function getLocalDatetimeOffsetHours(hours: number): string {
-  const d = new Date();
+export function getLocalDatetimeOffsetHours(hours: number, now: Date = new Date()): string {
+  const d = new Date(now);
   d.setHours(d.getHours() - hours);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;

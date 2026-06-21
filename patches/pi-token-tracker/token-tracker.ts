@@ -64,8 +64,11 @@ export default function (pi: ExtensionAPI) {
   // messages interleaved with tool calls.  We isolate timing to each
   // individual streaming response so that tool-execution time is never
   // included in TTFT or TPS.
+  let connectionStartMs: number | undefined;  // before_provider_request (first connection attempt)
   let providerResponseMs: number | undefined; // after_provider_response
   let firstTokenMs: number | undefined;       // first message_update
+  let lastTokenMs: number | undefined;        // last message_update (for TPS window)
+  let messageUpdateCount: number = 0;         // number of streaming updates seen
 
   // Per-message deduplication key.  Pi may emit message_end twice for
   // the same assistant message (e.g. once from streaming completion and
@@ -73,15 +76,28 @@ export default function (pi: ExtensionAPI) {
   // double-counting tokens.
   let lastRecordFingerprint: string | undefined;
 
+  // Track connection start — fires BEFORE every provider request attempt,
+  // including retries after timeouts.  We only capture the FIRST attempt
+  // per message so that connection retry/timeout overhead is included in
+  // TTFT (the user experiences the full wait).
+  pi.on("before_provider_request", async () => {
+    if (!connectionStartMs) {
+      connectionStartMs = Date.now();
+    }
+  });
+
   pi.on("after_provider_response", async () => {
     providerResponseMs = Date.now();
   });
 
   pi.on("message_update", async (event) => {
     if (event.message.role !== "assistant") return;
+    const now = Date.now();
     if (!firstTokenMs) {
-      firstTokenMs = Date.now();
+      firstTokenMs = now;
     }
+    lastTokenMs = now;
+    messageUpdateCount++;
   });
 
   // Per-call token recording — fires for EVERY assistant message,
@@ -104,27 +120,58 @@ export default function (pi: ExtensionAPI) {
     if (fingerprint === lastRecordFingerprint) return;
     lastRecordFingerprint = fingerprint;
 
-    // TTFT: time from HTTP response headers to first streaming token.
-    // Falls back to undefined when the provider does not expose response
-    // timing or when streaming produced zero update events.
+    // TTFT: time from first provider connection attempt to first streaming
+    // token.  This captures the full lifecycle: DNS, TCP, TLS, HTTP
+    // round-trip, connection retries, and timeouts — not just the final
+    // successful response's time-to-first-token.
+    //
+    // We use before_provider_request (connection start) as the epoch
+    // instead of after_provider_response (headers received) because
+    // providers with retry logic (e.g. xunfei-ex) may spend tens of
+    // seconds in connection timeouts before headers arrive, and those
+    // timeouts are the dominant part of the user-perceived latency.
+    // Additionally, some async providers fire message_update before
+    // after_provider_response, making the old calculation produce invalid
+    // 0/1ms values.
     const ttftMs =
-      providerResponseMs && firstTokenMs
-        ? firstTokenMs - providerResponseMs
+      connectionStartMs && firstTokenMs
+        ? firstTokenMs - connectionStartMs
         : undefined;
 
     // TPS: output tokens / streaming generation duration (seconds).
-    // Computed only when we observed at least one streaming update.
-    // Guard against division by zero (extremely fast responses).
-    const elapsedSec = firstTokenMs ? (nowMs - firstTokenMs) / 1000 : 0;
+    // Computed only when we observed multiple streaming updates AND the
+    // generation duration is long enough for a reliable measurement.
+    //
+    // Guard 1 — minimum update count: when the server delivers all output
+    //   tokens in a single batched response, message_update fires once or
+    //   twice and the elapsed time reflects only post-processing overhead,
+    //   not real generation speed.  Requiring ≥3 updates ensures we only
+    //   compute TPS for genuinely streamed responses.
+    // Guard 2 — minimum elapsed time: sub-100 ms intervals are discarded
+    //   because JavaScript timer resolution (~1 ms) and event-loop batching
+    //   make sub-tick measurements unreliable.
+    const MIN_UPDATES = 3;
+    const MIN_ELAPSED_MS = 100;
+    const elapsedSec =
+      firstTokenMs && lastTokenMs
+        ? (lastTokenMs - firstTokenMs) / 1000
+        : 0;
     const tps =
-      firstTokenMs && usage.output > 0 && elapsedSec > 0
+      firstTokenMs &&
+      lastTokenMs &&
+      usage.output > 0 &&
+      messageUpdateCount >= MIN_UPDATES &&
+      elapsedSec * 1000 >= MIN_ELAPSED_MS
         ? usage.output / elapsedSec
         : undefined;
 
     // Reset timing state so the next assistant message (or the next turn)
     // starts with a clean slate.
+    connectionStartMs = undefined;
     providerResponseMs = undefined;
     firstTokenMs = undefined;
+    lastTokenMs = undefined;
+    messageUpdateCount = 0;
 
     const record = {
       date,
@@ -167,71 +214,6 @@ export default function (pi: ExtensionAPI) {
         // silent — RPC mode may not have UI
       }
     },
-  });
-
-  // ── Advisor tool call tracking ──────────────────────────────────
-  // The advisor tool (rpiv-advisor) calls completeSimple() directly,
-  // bypassing the main session message pipeline. The message_end event
-  // never fires for advisor calls. Instead, we intercept the tool result
-  // via tool_execution_end and extract token usage from the advisor's
-  // response.
-  //
-  // advisorModel format: "provider:model" (e.g. "fenno:gpt-5.5")
-
-  pi.on("tool_execution_end", async (event) => {
-    if (event.toolName !== "advisor") return;
-
-    const result = event.result as any;
-    const details = result?.details as
-      | { advisorModel?: string; effort?: string; usage?: any }
-      | undefined;
-    if (!details?.usage) return;
-
-    const usage = details.usage;
-    const advisorModel = details.advisorModel ?? "unknown:unknown";
-    const effort = details.effort;
-
-    // Parse "provider:model" format
-    const colonIdx = advisorModel.indexOf(":");
-    const provider =
-      colonIdx !== -1
-        ? advisorModel.slice(0, colonIdx)
-        : advisorModel;
-    const baseModel =
-      colonIdx !== -1
-        ? advisorModel.slice(colonIdx + 1)
-        : advisorModel;
-
-    // Append thinking level suffix for traceability (e.g. "gpt-5.5:xhigh")
-    const model = effort ? `${baseModel}:${effort}` : baseModel;
-
-    const now = new Date();
-    const record = {
-      date: now.toISOString().slice(0, 10),
-      time: now.toISOString(),
-      apiKeyPrefix: "advisor",
-      provider,
-      model,
-      source: "pi",
-      inputTokens: usage.input ?? usage.inputTokens ?? 0,
-      outputTokens: usage.output ?? usage.outputTokens ?? 0,
-      cacheReadTokens: usage.cacheRead ?? usage.cacheReadInputTokens ?? 0,
-      cacheWriteTokens: usage.cacheWrite ?? usage.cacheWriteInputTokens ?? 0,
-      totalTokens:
-        (usage.input ?? usage.inputTokens ?? 0) +
-        (usage.output ?? usage.outputTokens ?? 0) +
-        (usage.cacheRead ?? usage.cacheReadInputTokens ?? 0) +
-        (usage.cacheWrite ?? usage.cacheWriteInputTokens ?? 0),
-      cost: usage.cost?.total ?? 0,
-      ttftMs: null,
-      tps: null,
-    };
-
-    try {
-      appendFileSync(LOG_FILE, JSON.stringify(record) + "\n");
-    } catch {
-      // Silent fail
-    }
   });
 
   // Status indicator — safe no-op in RPC mode

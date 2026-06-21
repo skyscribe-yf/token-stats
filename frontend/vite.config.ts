@@ -9,5 +9,14 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../backend/static"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/recharts")) {
+            return "recharts";
+          }
+        },
+      },
+    },
   },
 });

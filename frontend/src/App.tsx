@@ -4,6 +4,8 @@ import {
   useMemo,
   useRef,
   useCallback,
+  lazy,
+  Suspense,
 } from "react";
 import { X } from "lucide-react";
 import {
@@ -51,6 +53,7 @@ import {
 } from "./lib/filterState";
 import {
   makeAppliedRange,
+  refreshAppliedRangeForPreset,
   toggleInSet,
   type TimePreset,
 } from "./lib/timeRange";
@@ -59,14 +62,30 @@ import { TopBar, type SectionId } from "./components/TopBar";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { GlanceBand } from "./components/GlanceBand";
-import {
-  UsageSection,
-  type ChartMetricKey,
-  type VendorBreakdownMetric,
-} from "./components/sections/UsageSection";
-import { QuotasSection } from "./components/sections/QuotasSection";
-import { RequestsSection } from "./components/sections/RequestsSection";
-import { TpsChart } from "./components/TpsChart";
+
+// Lazy-load chart-heavy sections to code-split recharts out of the main bundle
+const UsageSection = lazy(() =>
+  import("./components/sections/UsageSection").then((m) => ({
+    default: m.UsageSection,
+  }))
+);
+const TpsChart = lazy(() =>
+  import("./components/TpsChart").then((m) => ({ default: m.TpsChart }))
+);
+const QuotasSection = lazy(() =>
+  import("./components/sections/QuotasSection").then((m) => ({
+    default: m.QuotasSection,
+  }))
+);
+const RequestsSection = lazy(() =>
+  import("./components/sections/RequestsSection").then((m) => ({
+    default: m.RequestsSection,
+  }))
+);
+
+// Re-export types for local use (lazy doesn't affect type imports)
+import type { ChartMetricKey } from "./components/sections/UsageSection";
+import type { VendorBreakdownMetric } from "./components/sections/UsageSection";
 
 interface AlertItem {
   id: string;
@@ -150,6 +169,18 @@ export default function App() {
     makeAppliedRange("today")
   );
   const filtersInitializedRef = useRef(false);
+
+  // Refresh preset range periodically so "today" / "7d" etc. update after midnight
+  useEffect(() => {
+    if (activePreset === "custom") return;
+    const refresh = () =>
+      setAppliedRange((current) =>
+        refreshAppliedRangeForPreset(activePreset, current)
+      );
+    refresh();
+    const interval = setInterval(refresh, 30_000);
+    return () => clearInterval(interval);
+  }, [activePreset]);
 
   const [filters, setFilters] = useState<FilterOptions>({
     vendors: [],
@@ -1061,33 +1092,40 @@ export default function App() {
                 onChipClick={handleQuotaChipClick}
               />
 
-              <UsageSection
-                stats={stats}
-                hourlyStats={hourlyStats}
-                rpmData={rpmData}
-                chartMetrics={chartMetrics}
-                onChartMetricsChange={setChartMetrics}
-                vendorBreakdownMetric={vendorBreakdownMetric}
-                onVendorBreakdownMetricChange={setVendorBreakdownMetric}
-              />
+              <Suspense fallback={<div className="h-48 flex items-center justify-center text-slate-400">加载中…</div>}>
+                <UsageSection
+                  stats={stats}
+                  hourlyStats={hourlyStats}
+                  rpmData={rpmData}
+                  chartMetrics={chartMetrics}
+                  onChartMetricsChange={setChartMetrics}
+                  vendorBreakdownMetric={vendorBreakdownMetric}
+                  onVendorBreakdownMetricChange={setVendorBreakdownMetric}
+                />
+              </Suspense>
 
-              <TpsChart
-                tpsData={tpsData}
-                loading={loading}
-              />
+              <Suspense fallback={<div className="h-32 flex items-center justify-center text-slate-400">加载中…</div>}>
+                <TpsChart
+                  tpsData={tpsData}
+                  loading={loading}
+                />
+              </Suspense>
 
-              <QuotasSection
-                quota={quota}
-                xunfei={xunfei}
-                ainaibaCredit={ainaibaCredit}
-                quotaLoading={quotaLoading}
-                xunfeiLoading={xunfeiLoading}
-                ainaibaCreditLoading={ainaibaCreditLoading}
-                subscriptionSettings={subscriptionSettings}
-                highlightCardId={highlightCardId}
-              />
+              <Suspense fallback={<div className="h-48 flex items-center justify-center text-slate-400">加载中…</div>}>
+                <QuotasSection
+                  quota={quota}
+                  xunfei={xunfei}
+                  ainaibaCredit={ainaibaCredit}
+                  quotaLoading={quotaLoading}
+                  xunfeiLoading={xunfeiLoading}
+                  ainaibaCreditLoading={ainaibaCreditLoading}
+                  subscriptionSettings={subscriptionSettings}
+                  highlightCardId={highlightCardId}
+                />
+              </Suspense>
 
-              <RequestsSection
+              <Suspense fallback={<div className="h-48 flex items-center justify-center text-slate-400">加载中…</div>}>
+                <RequestsSection
                 stats={stats}
                 requests={requests}
                 hideFreeModels={hideFreeModels}
@@ -1101,6 +1139,7 @@ export default function App() {
                 advancedModels={advancedModels}
                 onAdvancedModelsChange={setAdvancedModels}
               />
+              </Suspense>
 
               <footer className="text-center text-xs text-slate-400 pb-4">
                 Token 统计仪表盘 · 基于 Rust + React 构建

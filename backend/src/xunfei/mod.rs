@@ -381,7 +381,7 @@ fn extract_model_list(plan: &serde_json::Value) -> Vec<XunfeiModelInfo> {
 
 fn field_i64(val: Option<&serde_json::Value>, key: &str) -> i64 {
     val.and_then(|v| v.get(key))
-        .and_then(|v| v.as_i64())
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
         .unwrap_or(0)
 }
 
@@ -403,9 +403,9 @@ mod tests {
                         "apiKey": "a96f1790a7656ed5f0fa29be01c2fc08:SECRET"
                     },
                     "codingPlanUsageDTO": {
-                        "packageUsage": 6256, "packageLimit": 18000, "packageLeft": 11744,
-                        "rp5hUsage": 197, "rp5hLimit": 1200,
-                        "rpwUsage": 6256, "rpwLimit": 9000
+                        "packageUsage": 6256.0, "packageLimit": 18000, "packageLeft": 11744.0,
+                        "rp5hUsage": 197.0, "rp5hLimit": 1200,
+                        "rpwUsage": 6256.0, "rpwLimit": 9000
                     },
                     "createTime": "2026-05-14 11:50:44",
                     "expiresAt": "2026-06-14 11:52:41",

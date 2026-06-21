@@ -553,6 +553,14 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             return record.cost / cfg.special.opencode_divisor * cfg.usd_to_cny;
         }
 
+        // 4b2. kimi-coding Pi provider: subscription model, same as kimi-code.
+        //     The stored cost is the API list price (USD), not the actual
+        //     subscription cost. Use kimi_per_token estimate instead.
+        //     (original_provider preserved by vendor merge from "kimi-coding" → "kimi")
+        if effective_provider == "kimi-coding" {
+            return record.total_tokens as f64 * cfg.special.kimi_per_token;
+        }
+
         // 4c. Other Pi providers: cost is in USD, convert to CNY
         let mut cny = record.cost * cfg.usd_to_cny;
 
@@ -738,9 +746,36 @@ mod tests {
     }
 
     #[test]
+    fn kimi_coding_subscription_uses_per_token_estimate() {
+        let _guard = pricing_test_guard();
+        // Records from kimi-coding provider (subscription) with cost>0 should
+        // use kimi_per_token estimate, NOT the stored USD cost.
+        // This matches kimi-code behavior (same subscription model).
+        let mut record = make_record("pi", "kimi", "kimi-for-coding", 1_000_000, 0.05);
+        record.original_provider = Some("kimi-coding".to_string());
+        let cost = display_cost(&record);
+        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        // The subscription estimate should be significantly lower than USD*6.82
+        let usd_cny = 0.05 * PricingConfig::default().usd_to_cny; // 0.341
+        assert!(
+            expected < usd_cny,
+            "kimi_per_token estimate ({}) should be < USD*CNY ({})",
+            expected,
+            usd_cny
+        );
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "kimi-coding should use per-token estimate, expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
     fn kimi_with_stored_cost_uses_stored_cost() {
         let _guard = pricing_test_guard();
-        // Records with provider="kimi" but cost>0 should use the stored cost path
+        // Records with provider="kimi" (no original_provider) and cost>0
+        // should use the stored cost path (raw kimi API, not subscription)
         let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.05);
         let cost = display_cost(&record);
         // cost is in USD, so should be converted to CNY (0.05 * 6.82)
