@@ -10,6 +10,7 @@
 //! using the current `pricing.toml` configuration.
 
 use crate::models::TokenRecord;
+use chrono::{Datelike, FixedOffset, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -48,10 +49,57 @@ pub struct SpecialPricing {
     pub commandcode_divisor: f64,
     #[serde(default = "default_fenno_divisor")]
     pub fenno_divisor: f64,
+    /// Off-peak (波谷) pricing configuration for xunfei/xunfei-ex.
+    /// If `None`, no off-peak discount is applied (always full price).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xunfei_off_peak: Option<XunfeiOffPeakConfig>,
 }
 
 fn default_fenno_divisor() -> f64 {
     150.0 * 6.82 / 10.0
+}
+
+/// Xunfei off-peak (波谷) pricing configuration.
+///
+/// Since 2026-06-18, Xunfei introduced time-differentiated billing (分时段差异化计量)
+/// with an off-peak discount coefficient. The official rules are:
+///
+/// | 时段         | 条件                          | 计费系数 |
+/// |-------------|-------------------------------|---------|
+/// | 高峰 (Peak) | 工作日 08:00–22:00 (UTC+8)    | 1.0     |
+/// | 波谷 (Off)  | 夜间 22:00–次日08:00          | 0.8     |
+/// | 波谷 (Off)  | 周末全天 (Sat/Sun)             | 0.8     |
+/// | 波谷 (Off)  | 法定节假日全天                   | 0.8     |
+///
+/// The coefficient also affects rate-limit quotas (流控次数): at coefficient 0.8,
+/// a 6000-call limit in 5 hours becomes effectively 7500 calls (6000 / 0.8).
+/// All rate-limit dimensions follow the same conversion logic.
+///
+/// Records before `effective_from` always use coefficient 1.0 (no discount).
+/// Chinese holidays must be updated annually when the State Council
+/// announces the official schedule (typically in November/December).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XunfeiOffPeakConfig {
+    /// Off-peak pricing coefficient (e.g. 0.8 = 80% of normal per-call price).
+    /// Peak hours always use coefficient 1.0 (full price).
+    pub coefficient: f64,
+
+    /// Effective start date in "YYYY-MM-DD" format (China Standard Time, UTC+8).
+    /// Records before this date always use coefficient 1.0 (no off-peak discount).
+    /// Per the official announcement: "2026-06-18".
+    pub effective_from: String,
+
+    /// Peak hour range in UTC+8: [start_hour, end_hour), 24-hour format.
+    /// Example: [8, 22] means peak is 08:00–22:00 (UTC+8).
+    /// Hours outside this range on non-holiday weekdays are off-peak.
+    pub peak_hours: [u8; 2],
+
+    /// Chinese public holidays in "YYYY-MM-DD" format (China Standard Time).
+    /// These dates are treated as off-peak regardless of day of week.
+    /// Must be updated annually when the State Council announces the schedule
+    /// (typically in November/December for the following year).
+    #[serde(default)]
+    pub holidays: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +143,7 @@ impl Default for PricingConfig {
                 freemodel_divisor: 68.2,
                 commandcode_divisor: 1.0,
                 fenno_divisor: default_fenno_divisor(),
+                xunfei_off_peak: None,
             },
             model: Vec::new(),
         }
@@ -426,6 +475,96 @@ fn normalize_commandcode_model(model: &str) -> String {
     key.to_string()
 }
 
+// ── Off-peak (波谷) determination for Xunfei ──────────────────────────────────
+
+/// Determine whether a xunfei/xunfei-ex record falls in the off-peak (波谷) period.
+///
+/// All times are interpreted in China Standard Time (UTC+8) because the
+/// off-peak policy is defined in terms of Chinese business hours.
+///
+/// Decision logic (checked in order, first match wins):
+///
+/// 1. **Before effective date** → NOT off-peak (coefficient 1.0)
+///    The policy started on 2026-06-18. Earlier records pay full price.
+///
+/// 2. **Chinese public holiday** → off-peak (coefficient 0.8)
+///    Holidays are off-peak all day regardless of day-of-week or hour.
+///    E.g. 端午节 (Dragon Boat) on a Friday at 10:00 → off-peak.
+///    Holiday dates come from `config.holidays` and must be updated annually.
+///
+/// 3. **Weekend (Saturday or Sunday)** → off-peak (coefficient 0.8)
+///    Weekends are off-peak all day (00:00–24:00).
+///
+/// 4. **Weekday night** (22:00–08:00) → off-peak (coefficient 0.8)
+///    Night hours on a non-holiday weekday are off-peak.
+///    Specifically: hour < peak_start (8) or hour >= peak_end (22).
+///
+/// 5. **Weekday peak hours** (08:00–22:00) → NOT off-peak (coefficient 1.0)
+///    Regular business hours on a working day → full price.
+///
+/// Note: The record's `time` field is in RFC3339 UTC. We convert to UTC+8
+/// before checking any time-based conditions.
+fn is_xunfei_off_peak(record: &TokenRecord, config: &XunfeiOffPeakConfig) -> bool {
+    // Step 1: Parse record time (RFC3339 UTC) and convert to China Standard Time (UTC+8).
+    // All peak/off-peak decisions are based on China time, not the user's local timezone.
+    let record_dt = match chrono::DateTime::parse_from_rfc3339(&record.time) {
+        Ok(dt) => dt.with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap()),
+        Err(_) => {
+            tracing::warn!(
+                "Failed to parse xunfei record time '{}', assuming peak",
+                record.time
+            );
+            return false; // Cannot determine → assume peak (safe default: no discount)
+        }
+    };
+
+    // Step 2: Check if the record is before the off-peak policy effective date.
+    // The policy started on 2026-06-18 (UTC+8). Records before this date
+    // always use coefficient 1.0 (no off-peak discount).
+    let effective_date = match NaiveDate::parse_from_str(&config.effective_from, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => {
+            tracing::warn!(
+                "Invalid xunfei_off_peak effective_from '{}', assuming peak",
+                config.effective_from
+            );
+            return false; // Bad config → assume peak (safe default)
+        }
+    };
+    if record_dt.date_naive() < effective_date {
+        return false; // Before policy start → peak (coefficient 1.0)
+    }
+
+    // Step 3: Check if the record's date (UTC+8) is a Chinese public holiday.
+    // Holidays are off-peak regardless of day of week or hour.
+    // E.g. 端午节 on a Wednesday at 14:00 is still off-peak (波谷).
+    let date_str = record_dt.format("%Y-%m-%d").to_string();
+    if config.holidays.contains(&date_str) {
+        return true; // 法定节假日全天 → 波谷
+    }
+
+    // Step 4: Check if the record falls on a weekend (Saturday or Sunday).
+    // Weekends are off-peak all day (00:00–24:00 UTC+8).
+    let weekday = record_dt.weekday();
+    if weekday == chrono::Weekday::Sat || weekday == chrono::Weekday::Sun {
+        return true; // 周末全天 → 波谷
+    }
+
+    // Step 5: For weekdays (that are not holidays), check the hour.
+    // Peak hours: [peak_start, peak_end) = [08:00, 22:00) in UTC+8.
+    // Off-peak hours: [00:00, peak_start) ∪ [peak_end, 24:00) = night time.
+    let hour = record_dt.hour() as u8;
+    let peak_start = config.peak_hours[0]; // e.g. 8 (08:00)
+    let peak_end = config.peak_hours[1]; // e.g. 22 (22:00)
+    if hour < peak_start || hour >= peak_end {
+        return true; // 工作日夜间 (22:00–次日08:00) → 波谷
+    }
+
+    // Step 6: Weekday during peak hours (08:00–22:00) → NOT off-peak.
+    // Coefficient 1.0 (full price) applies.
+    false
+}
+
 // ── Cost calculation ─────────────────────────────────────────────────────────
 
 /// Select the Ainaba divisor for a record based on its timestamp.
@@ -471,8 +610,21 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
     let cfg = &state.config;
 
     // 1. 讯飞 (xunfei / xunfei-ex): flat per-call rate in CNY
+    //    With off-peak (波谷) discount since 2026-06-18:
+    //    - Peak (工作日 08:00–22:00, UTC+8): coefficient 1.0 → full per-call price
+    //    - Off-peak (夜间/周末/节假日): coefficient 0.8 → 80% of per-call price
+    //    - Before 2026-06-18: always full price (no off-peak policy)
+    //
+    //    Calculation: base_per_call × off_peak_coefficient
+    //    Example: 199元/90000次 × 0.8 = 0.001769元/次 (off-peak)
     if record.provider == "xunfei" || record.provider == "xunfei-ex" {
-        return cfg.special.xunfei_per_call;
+        let base = cfg.special.xunfei_per_call;
+        if let Some(ref off_peak) = cfg.special.xunfei_off_peak {
+            if is_xunfei_off_peak(record, off_peak) {
+                return base * off_peak.coefficient; // 波谷折扣价
+            }
+        }
+        return base; // 高峰原价
     }
 
     // 1b. 讯飞API接口 (xunfei_api): cost is already in CNY from pi calculations.
@@ -1704,5 +1856,272 @@ cache_write = 2.50
             expected,
             cost2
         );
+    }
+
+    // ─── Xunfei off-peak (波谷) pricing tests ─────────────────────────────
+
+    /// Helper: build a temp config with xunfei off-peak enabled.
+    fn xunfei_off_peak_config() -> Vec<u8> {
+        "usd_to_cny = 6.82
+rate_date = \"2026-05-20\"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[special.xunfei_off_peak]
+coefficient = 0.8
+effective_from = \"2026-06-18\"
+peak_hours = [8, 22]
+holidays = [
+    \"2026-06-19\",  # Dragon Boat Festival (Friday)
+    \"2026-10-01\",  # National Day (Thursday)
+    \"2026-10-02\",  # National Day
+    \"2026-10-03\",  # National Day
+]
+"
+        .as_bytes()
+        .to_vec()
+    }
+
+    #[test]
+    fn xunfei_off_peak_before_effective_date_uses_full_price() {
+        // Records before 2026-06-18 should always use coefficient 1.0 (full price),
+        // regardless of time of day or day of week.
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-17 23:00 CST (night before effective date) → still full price
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-17T15:00:00Z".to_string(); // 23:00 CST
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call; // full price
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "before effective date should use full price: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_off_peak_weekday_night_uses_discount() {
+        // Weekday night (22:00–08:00 CST) → off-peak, coefficient 0.8
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-18 is a Thursday (weekday). 23:00 CST = 15:00 UTC
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-18T15:00:00Z".to_string(); // 23:00 CST, off-peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "weekday night should use 0.8 coefficient: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_off_peak_weekday_early_morning_uses_discount() {
+        // Weekday early morning (before 08:00 CST) → off-peak, coefficient 0.8
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-18 07:00 CST = 2026-06-17T23:00:00Z
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-17T23:00:00Z".to_string(); // 07:00 CST on Jun 18, off-peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "weekday early morning should use 0.8 coefficient: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_peak_weekday_daytime_uses_full_price() {
+        // Weekday daytime (08:00–22:00 CST) → peak, coefficient 1.0
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-18 10:00 CST = 02:00 UTC
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-18T02:00:00Z".to_string(); // 10:00 CST, peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call; // full price
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "weekday daytime should use full price: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_off_peak_weekend_uses_discount() {
+        // Weekend (Saturday/Sunday) all day → off-peak, coefficient 0.8
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-20 is a Saturday. 10:00 CST = 02:00 UTC
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-20T02:00:00Z".to_string(); // 10:00 CST Saturday, off-peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "weekend should use 0.8 coefficient: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_off_peak_holiday_uses_discount() {
+        // Chinese public holiday → off-peak all day, coefficient 0.8
+        // even if it falls on a weekday during business hours.
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-19 is a Friday (端午节, Dragon Boat Festival) at 10:00 CST
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-19T02:00:00Z".to_string(); // 10:00 CST Friday holiday, off-peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "holiday on weekday should use 0.8 coefficient: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_off_peak_national_day_holiday_uses_discount() {
+        // National Day holiday (国庆节) → off-peak all day
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-10-01 is a Thursday (国庆节) at 14:00 CST
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-10-01T06:00:00Z".to_string(); // 14:00 CST Thursday holiday, off-peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "national day holiday should use 0.8 coefficient: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_ex_off_peak_same_as_xunfei() {
+        // xunfei-ex provider should use the same off-peak logic as xunfei
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-18 23:00 CST (off-peak) with xunfei-ex provider
+        let mut record = make_record("pi", "xunfei-ex", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-18T15:00:00Z".to_string(); // 23:00 CST, off-peak
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "xunfei-ex off-peak should use 0.8 coefficient: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_no_off_peak_config_uses_full_price() {
+        // Without xunfei_off_peak config, all records should use full price
+        let _guard = pricing_test_guard();
+        // Default config has xunfei_off_peak = None
+        let record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "no off-peak config should use full price: expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn xunfei_peak_boundary_at_08_00_is_peak() {
+        // Exactly at 08:00 CST → peak starts (hour >= peak_start)
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-18 08:00 CST = 00:00 UTC
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-18T00:00:00Z".to_string(); // 08:00 CST, peak boundary
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call; // full price
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "08:00 CST should be peak: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn xunfei_peak_boundary_at_22_00_is_off_peak() {
+        // Exactly at 22:00 CST → off-peak starts (hour >= peak_end)
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&xunfei_off_peak_config());
+
+        // 2026-06-18 22:00 CST = 14:00 UTC
+        let mut record = make_record("pi", "xunfei", "astron-code-latest", 1_000_000, 0.0);
+        record.time = "2026-06-18T14:00:00Z".to_string(); // 22:00 CST, off-peak boundary
+        let cost = display_cost(&record);
+        let expected = PricingConfig::default().special.xunfei_per_call * 0.8;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "22:00 CST should be off-peak: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
     }
 }
