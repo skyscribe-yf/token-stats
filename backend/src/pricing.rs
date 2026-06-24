@@ -377,7 +377,10 @@ fn resolve_model_price<'a>(
         return state.model_map.get("claude-haiku-4-5");
     }
 
-    // Kimi family — kimi-k2.6, kimi-k2.5, kimi-for-coding, etc.
+    // Kimi family — kimi-k2.7, kimi-k2.6, kimi-k2.5, kimi-for-coding, etc.
+    if model_lower.contains("kimi-k2.7") {
+        return state.model_map.get("kimi-k2.7");
+    }
     if model_lower.contains("kimi-k2.6") {
         return state.model_map.get("kimi-k2.6");
     }
@@ -385,8 +388,8 @@ fn resolve_model_price<'a>(
         return state.model_map.get("kimi-k2.5");
     }
     if model_lower.contains("kimi") || provider == "kimi" {
-        // Fallback: try kimi-k2.6 as the default kimi pricing
-        return state.model_map.get("kimi-k2.6");
+        // Fallback: try kimi-k2.7 as the default kimi pricing
+        return state.model_map.get("kimi-k2.7");
     }
 
     // DeepSeek family
@@ -694,6 +697,20 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             return record.cost;
         }
 
+        // Pi's stored Ainaba cost can lag the latest pricing table for long
+        // contexts, so recompute from token counts when a known model exists.
+        if record.provider == "ainaba" || effective_provider == "ainaiba" {
+            if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+                let usd = mp.compute_usd(
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
+                );
+                return usd * cfg.usd_to_cny / get_ainaba_divisor(&cfg.special, &record.time);
+            }
+        }
+
         // 4a2. Xiaomi MiMo Pi provider: cost is in CNY (from platform), display as-is
         if effective_provider == "xiaomi-mimo" || effective_provider == "xiaomi-mimo-tp" {
             return record.cost;
@@ -855,6 +872,25 @@ mod tests {
             ttft_ms: None,
             tps: None,
         }
+    }
+
+    #[test]
+    fn project_pricing_toml_keeps_ainaba_segments_and_models() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        assert_eq!(cfg.special.commandcode_divisor, 10.0);
+        assert_eq!(cfg.special.ainaba_segments.len(), 2);
+        assert_eq!(cfg.special.ainaba_segments[1].divisor, 20.0);
+        assert_eq!(
+            cfg.special
+                .xunfei_off_peak
+                .as_ref()
+                .map(|cfg| (&cfg.effective_from, cfg.coefficient)),
+            Some((&"2026-06-18".to_string(), 0.8))
+        );
+        assert!(cfg.model.iter().any(|m| m.name == "gpt-5.4"));
+        assert!(cfg.model.iter().any(|m| m.name == "gpt-5.5"));
     }
 
     #[test]
@@ -1856,6 +1892,119 @@ cache_write = 2.50
             expected,
             cost2
         );
+    }
+
+    #[test]
+    fn ainaba_pi_stored_cost_recomputes_high_tier_with_cached_tokens() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-06-24"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [{ divisor = 20.0 }]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+
+[[model]]
+name = "gpt-5.4"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 2.50
+
+[[model]]
+name = "gpt-5.4"
+tier_threshold = 272000
+input = 5.00
+output = 22.50
+cache_read = 0.50
+cache_write = 5.00
+"#,
+        );
+
+        let mut record = make_record("pi", "ainaba", "gpt-5.4", 0, 0.0);
+        record.time = "2026-06-23T00:00:00Z".to_string();
+        record.input_tokens = 150_000;
+        record.output_tokens = 12_000;
+        record.cache_read_tokens = 100_000;
+        record.cache_write_tokens = 30_000;
+        record.total_tokens = 292_000;
+        // Simulate the tracker writing a base-tier USD cost even though the
+        // total input crosses the tier-2 threshold.
+        record.cost = 0.655;
+
+        let cost = display_cost(&record);
+        let expected_usd = 1.22;
+        let expected = expected_usd * 6.82 / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "ainaba high-tier pi cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn ainaba_pi_stored_cost_keeps_base_tier_below_threshold() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-06-24"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_segments = [{ divisor = 20.0 }]
+freemodel_divisor = 68.2
+commandcode_divisor = 10.0
+
+[[model]]
+name = "gpt-5.4"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 2.50
+
+[[model]]
+name = "gpt-5.4"
+tier_threshold = 272000
+input = 5.00
+output = 22.50
+cache_read = 0.50
+cache_write = 5.00
+"#,
+        );
+
+        let mut record = make_record("pi", "ainaba", "gpt-5.4", 0, 0.0);
+        record.time = "2026-06-24T00:00:00Z".to_string();
+        record.input_tokens = 100_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 50_000;
+        record.cache_write_tokens = 10_000;
+        record.total_tokens = 170_000;
+        record.cost = 0.4375;
+
+        let cost = display_cost(&record);
+        let expected = 0.4375 * 6.82 / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "ainaba base-tier pi cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
     }
 
     // ─── Xunfei off-peak (波谷) pricing tests ─────────────────────────────

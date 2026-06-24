@@ -372,6 +372,7 @@ function sortSourceDetails(
 // Re-export getDisplayModel so consumers don't need to import it separately
 const MODEL_MERGE_GROUPS: { display: string; originals: string[] }[] = [
   { display: "kimi-k2.6", originals: ["kimi-k2.6", "kimi-k2.6:high", "kimi-for-coding"] },
+  { display: "kimi-k2.7", originals: ["kimi-k2.7"] },
 ];
 
 const originalToDisplayModel = new Map<string, string>();

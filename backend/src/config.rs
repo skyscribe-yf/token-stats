@@ -197,7 +197,10 @@ providers = ["freemodel", "FreeModel"]
 
         // kimi-coding → kimi, original_provider preserved
         assert_eq!(records[0].provider, "kimi");
-        assert_eq!(records[0].original_provider, Some("kimi-coding".to_string()));
+        assert_eq!(
+            records[0].original_provider,
+            Some("kimi-coding".to_string())
+        );
         // openai → ainaba, original_provider preserved
         assert_eq!(records[1].provider, "ainaba");
         assert_eq!(records[1].original_provider, Some("openai".to_string()));
@@ -219,7 +222,10 @@ providers = ["freemodel", "FreeModel"]
 
         // Should NOT overwrite an already-set original_provider
         assert_eq!(records[0].provider, "kimi");
-        assert_eq!(records[0].original_provider, Some("custom-orig".to_string()));
+        assert_eq!(
+            records[0].original_provider,
+            Some("custom-orig".to_string())
+        );
     }
 
     #[test]

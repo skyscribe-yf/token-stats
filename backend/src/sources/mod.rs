@@ -86,7 +86,7 @@ pub(crate) fn parse_iso_timestamp(ts: &str) -> (String, String) {
 /// Used as a fallback when the provider field is missing or generic.
 pub(crate) fn resolve_provider_from_model(model: &str) -> String {
     match model {
-        "kimi-for-coding" | "kimi-k2" | "kimi-k2.6" | "kimi-k2.5" => "kimi".to_string(),
+        "kimi-for-coding" | "kimi-k2" | "kimi-k2.6" | "kimi-k2.5" | "kimi-k2.7" => "kimi".to_string(),
         "astron-code-latest" => "xunfei".to_string(),
         "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
         "deepseek-v4-pro" | "deepseek-v4-flash" | "deepseek-v3.2" => "deepseek".to_string(),
@@ -234,6 +234,40 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
         config::apply_vendor_merge(&mut all_records, &merge_map);
     }
 
+    // ── Kimi model upgrade: kimi-for-coding → kimi-k2.7 ──────────────────────
+    // On 2026-06-12 18:00 Beijing time (UTC+8), Kimi released kimi-k2.7 as the
+    // successor to kimi-for-coding. The kimi-code tool's backend was updated
+    // automatically, but the pi tool and kimi-cli still report the old model
+    // name "kimi-for-coding" in their logs. We normalize post-cutover records
+    // so that all tools show the correct model name consistently.
+    //
+    // IMPORTANT: This must run AFTER vendor merge, because pi records arrive
+    // with provider="kimi-coding" which gets merged to "kimi" by the step
+    // above. Without the merge, the provider check would miss these records.
+    //
+    // Only records with provider="kimi" are affected; records from other
+    // vendors (e.g. opencode-go routing kimi models) are left untouched.
+    let kimi_k27_cutoff = chrono::DateTime::parse_from_rfc3339("2026-06-12T10:00:00Z")
+        .expect("hardcoded cutoff is valid RFC3339")
+        .with_timezone(&chrono::Utc);
+    let mut kimi_renamed = 0usize;
+    for record in all_records.iter_mut() {
+        if record.provider == "kimi" && record.model == "kimi-for-coding" {
+            if let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
+                if record_time.with_timezone(&chrono::Utc) >= kimi_k27_cutoff {
+                    record.model = "kimi-k2.7".to_string();
+                    kimi_renamed += 1;
+                }
+            }
+        }
+    }
+    if kimi_renamed > 0 {
+        tracing::info!(
+            "Kimi model upgrade: renamed {} kimi-for-coding record(s) to kimi-k2.7 (cutoff: 2026-06-12 18:00 UTC+8)",
+            kimi_renamed
+        );
+    }
+
     all_records
 }
 
@@ -313,14 +347,20 @@ mod tests {
         assert_eq!(normalize_model_name("xopkimik26"), "kimi-k2.6");
         assert_eq!(normalize_model_name("xopkimik25"), "kimi-k2.5");
         assert_eq!(normalize_model_name("xopdeepseekv4pro"), "deepseek-v4-pro");
-        assert_eq!(normalize_model_name("xopdeepseekv4flash"), "deepseek-v4-flash");
+        assert_eq!(
+            normalize_model_name("xopdeepseekv4flash"),
+            "deepseek-v4-flash"
+        );
         assert_eq!(normalize_model_name("xopdeepseekv32"), "deepseek-v3.2");
         assert_eq!(normalize_model_name("xsparkx2"), "spark-x2");
         assert_eq!(normalize_model_name("xsparkx2flash"), "spark-x2-flash");
         assert_eq!(normalize_model_name("xopqwen36v35b"), "qwen3.6-35b");
         assert_eq!(normalize_model_name("xopqwen35v35b"), "qwen3.5-35b");
         assert_eq!(normalize_model_name("xopqwen35397b"), "qwen3.5-397b");
-        assert_eq!(normalize_model_name("xop3qwencodernext"), "qwen3-coder-next");
+        assert_eq!(
+            normalize_model_name("xop3qwencodernext"),
+            "qwen3-coder-next"
+        );
         assert_eq!(normalize_model_name("xopglmv47flash"), "glm-4.7-flash");
         assert_eq!(normalize_model_name("xminimaxm25"), "minimax-m2.5");
     }
@@ -385,5 +425,71 @@ mod tests {
         };
         assert_eq!(normal.input_tokens, 10000);
         assert_eq!(normal.total_tokens, 17000);
+    }
+
+    #[test]
+    fn kimi_for_coding_renamed_to_k2_7_after_cutoff() {
+        // After 2026-06-12T10:00:00Z (18:00 Beijing time), kimi-for-coding
+        // records with provider="kimi" should be renamed to kimi-k2.7.
+        //
+        // In the real pipeline, vendor merge runs first: "kimi-coding" → "kimi".
+        // So by the time this normalization runs, all kimi-family providers
+        // already have provider="kimi".
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-06-12T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        fn make_record(provider: &str, model: &str, time: &str) -> TokenRecord {
+            TokenRecord {
+                date: time[..10].to_string(),
+                time: time.to_string(),
+                api_key_prefix: "test".to_string(),
+                provider: provider.to_string(),
+                original_provider: None,
+                model: model.to_string(),
+                source: "test".to_string(),
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                total_tokens: 150,
+                cost: 0.0,
+                ttft_ms: None,
+                tps: None,
+            }
+        }
+
+        let mut records = vec![
+            // Before cutoff — should NOT be renamed
+            make_record("kimi", "kimi-for-coding", "2026-06-11T22:00:00Z"),
+            // Exactly at cutoff — should be renamed
+            make_record("kimi", "kimi-for-coding", "2026-06-12T10:00:00Z"),
+            // After cutoff — should be renamed (e.g. pi with kimi-coding already merged)
+            make_record("kimi", "kimi-for-coding", "2026-06-15T08:30:00Z"),
+            // Different provider — should NOT be renamed
+            make_record("opencode-go", "kimi-for-coding", "2026-06-15T08:30:00Z"),
+            // Already kimi-k2.7 — should NOT be changed
+            make_record("kimi", "kimi-k2.7", "2026-06-15T08:30:00Z"),
+        ];
+
+        // Apply the same logic as load_all_sources() (post vendor-merge)
+        let mut renamed = 0usize;
+        for record in records.iter_mut() {
+            if record.provider == "kimi" && record.model == "kimi-for-coding" {
+                if let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
+                    if record_time.with_timezone(&chrono::Utc) >= cutoff {
+                        record.model = "kimi-k2.7".to_string();
+                        renamed += 1;
+                    }
+                }
+            }
+        }
+
+        assert_eq!(renamed, 2, "exactly 2 records should be renamed");
+        assert_eq!(records[0].model, "kimi-for-coding", "before cutoff: unchanged");
+        assert_eq!(records[1].model, "kimi-k2.7", "at cutoff: renamed");
+        assert_eq!(records[2].model, "kimi-k2.7", "after cutoff: renamed");
+        assert_eq!(records[3].model, "kimi-for-coding", "non-kimi provider: unchanged");
+        assert_eq!(records[4].model, "kimi-k2.7", "already k2.7: unchanged");
     }
 }
