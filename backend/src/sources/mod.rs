@@ -107,7 +107,24 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
 /// Normalize model names across sources so the same model appears under one name.
 ///
 /// Pi uses `claude-opus-4.7` (dot) while Claude Code uses `claude-opus-4-7` (hyphen).
+/// Known thinking / reasoning level suffixes applied by providers (ainaiba, kimi, etc.).
+/// These indicate the reasoning effort level and should not create separate model buckets.
+const THINKING_LEVEL_SUFFIXES: &[&str] = &[":xhigh", ":high", ":low", ":medium"];
+
+/// Strip a known thinking-level suffix from the model name, if present.
+fn strip_thinking_level(model: &str) -> &str {
+    for suffix in THINKING_LEVEL_SUFFIXES {
+        if let Some(base) = model.strip_suffix(suffix) {
+            return base;
+        }
+    }
+    model
+}
+
 pub fn normalize_model_name(model: &str) -> String {
+    // Strip thinking-level suffixes first so later normalizations work on the base name.
+    let model = strip_thinking_level(model);
+
     // Normalize claude-opus-4.7 -> claude-opus-4-7
     if let Some(rest) = model.strip_prefix("claude-opus-") {
         return format!("claude-opus-{}", rest.replace('.', "-"));
@@ -363,6 +380,29 @@ mod tests {
         );
         assert_eq!(normalize_model_name("xopglmv47flash"), "glm-4.7-flash");
         assert_eq!(normalize_model_name("xminimaxm25"), "minimax-m2.5");
+    }
+
+    #[test]
+    fn normalize_strips_thinking_level_suffixes() {
+        assert_eq!(normalize_model_name("gpt-5.5:xhigh"), "gpt-5.5");
+        assert_eq!(normalize_model_name("gpt-5.5:high"), "gpt-5.5");
+        assert_eq!(normalize_model_name("deepseek-v4-pro:xhigh"), "deepseek-v4-pro");
+        assert_eq!(normalize_model_name("kimi-k2.6:high"), "kimi-k2.6");
+        assert_eq!(normalize_model_name("kimi-k2.6:xhigh"), "kimi-k2.6");
+    }
+
+    #[test]
+    fn normalize_preserves_non_thinking_colons() {
+        // Model names with colons that aren't thinking levels (e.g. qoder models)
+        // should not be stripped
+        let unknown = normalize_model_name("some-model:unknown");
+        assert_eq!(unknown, "some-model:unknown", "unknown colon suffix preserved");
+    }
+
+    #[test]
+    fn normalize_thinking_level_with_xunfei_models() {
+        // Thinking level should be stripped before xunfei normalization
+        assert_eq!(normalize_model_name("astron-code-latest:xhigh"), "glm-5.1");
     }
 
     #[test]
