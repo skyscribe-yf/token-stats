@@ -6,13 +6,14 @@
 
 pub mod commandcode;
 pub mod kimi;
+pub mod ollama;
 pub mod opencode;
 pub mod types;
 pub mod xiaomi_mimo;
 
 pub use types::{
-    CommandCodeQuotaStatus, KimiQuotaStatus, OpenCodeQuotaStatus, QuotaResponse,
-    XiaomiMiMoQuotaStatus,
+    CommandCodeQuotaStatus, KimiQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
+    QuotaResponse, XiaomiMiMoQuotaStatus,
 };
 
 use serde::de;
@@ -126,6 +127,11 @@ impl QuotaFetcher {
     /// Fetch CommandCode subscription/quota info.
     pub async fn fetch_commandcode_quota(&self) -> CommandCodeQuotaStatus {
         commandcode::fetch_commandcode_quota(&self.client).await
+    }
+
+    /// Fetch Ollama cloud subscription/quota info.
+    pub async fn fetch_ollama_quota(&self) -> OllamaQuotaStatus {
+        ollama::fetch_ollama_quota(&self.client).await
     }
 }
 

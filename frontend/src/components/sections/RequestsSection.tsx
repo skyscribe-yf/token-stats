@@ -112,6 +112,7 @@ export const RequestsSection = memo(function RequestsSection({
   const [pendingPivotModels, setPendingPivotModels] = useState<Set<string>>(
     new Set(selectedPivotModels)
   );
+  const [showCostColumns, setShowCostColumns] = useState(true);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [advancedModelsDraft, setAdvancedModelsDraft] = useState("");
 
@@ -218,7 +219,20 @@ export const RequestsSection = memo(function RequestsSection({
           <h3 className="text-sm font-semibold text-slate-700">
             供应商 &amp; 模型表现
           </h3>
-          <div className="relative model-filter-dropdown">
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowCostColumns((v) => !v)}
+              className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md border transition-colors ${
+                showCostColumns
+                  ? "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                  : "bg-slate-100 border-slate-300 text-slate-400"
+              }`}
+              title={showCostColumns ? "隐藏费用/平均成本列" : "显示费用/平均成本列"}
+            >
+              <span className="text-xs">¥</span>
+              {showCostColumns ? "费用列" : "隐藏"}
+            </button>
+            <div className="relative model-filter-dropdown">
             <button
               onClick={() => {
                 setPendingPivotModels(new Set(selectedPivotModels));
@@ -379,6 +393,7 @@ export const RequestsSection = memo(function RequestsSection({
               </div>
             )}
           </div>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs" style={{ tableLayout: "auto" }}>
@@ -392,8 +407,8 @@ export const RequestsSection = memo(function RequestsSection({
                 {pivotH("total", "合计", "right", "total_tokens")}
                 {pivotH("cacheHit", "缓存命中", "right", "cache_hit_ratio")}
                 {pivotH("outputRatio", "输出比", "right", "output_ratio")}
-                {pivotH("cost", "费用", "right", "cost")}
-                {pivotH("avgCost", "平均成本(/百万)", "right", "avg_cost")}
+                {showCostColumns && pivotH("cost", "费用", "right", "cost")}
+                {showCostColumns && pivotH("avgCost", "平均成本(/百万)", "right", "avg_cost")}
                 {pivotH("avgRpm", "平均 RPM", "right", "avg_rpm")}
                 {pivotH("peakRpm", "峰值 RPM", "right", "peak_rpm")}
                 {pivotH("avgTtft", "平均 TTFT", "right", "avg_ttft_ms")}
@@ -472,15 +487,19 @@ export const RequestsSection = memo(function RequestsSection({
                           {formatPercent(vendorSummary.output_ratio)}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right font-semibold text-slate-700">
-                        {formatCost(vendorSummary.cost)}
-                      </td>
-                      <td className="px-3 py-2 text-right text-slate-600">
-                        {formatAvgCost(
-                          vendorSummary.cost,
-                          vendorSummary.total_tokens
-                        )}
-                      </td>
+                      {showCostColumns && (
+                        <td className="px-3 py-2 text-right font-semibold text-slate-700">
+                          {formatCost(vendorSummary.cost)}
+                        </td>
+                      )}
+                      {showCostColumns && (
+                        <td className="px-3 py-2 text-right text-slate-600">
+                          {formatAvgCost(
+                            vendorSummary.cost,
+                            vendorSummary.total_tokens
+                          )}
+                        </td>
+                      )}
                       <td className="px-3 py-2 text-right">
                         <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
                           vendorSummary.avg_rpm > 10
@@ -609,12 +628,16 @@ export const RequestsSection = memo(function RequestsSection({
                                   {formatPercent(ms.output_ratio)}
                                 </span>
                               </td>
-                              <td className="px-3 py-2 text-right text-slate-600">
-                                {formatCost(ms.cost)}
-                              </td>
-                              <td className="px-3 py-2 text-right text-slate-600">
-                                {formatAvgCost(ms.cost, ms.total_tokens)}
-                              </td>
+                              {showCostColumns && (
+                                <td className="px-3 py-2 text-right text-slate-600">
+                                  {formatCost(ms.cost)}
+                                </td>
+                              )}
+                              {showCostColumns && (
+                                <td className="px-3 py-2 text-right text-slate-600">
+                                  {formatAvgCost(ms.cost, ms.total_tokens)}
+                                </td>
+                              )}
                               <td className="px-3 py-2 text-right">
                                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
                                   ms.avg_rpm > 10
@@ -723,12 +746,16 @@ export const RequestsSection = memo(function RequestsSection({
                                       );
                                     })()}
                                   </td>
-                                  <td className="px-3 py-2 text-right text-slate-600">
-                                    {formatCost(source.cost)}
-                                  </td>
-                                  <td className="px-3 py-2 text-right text-slate-600">
-                                    {formatAvgCost(source.cost, source.total_tokens)}
-                                  </td>
+                                  {showCostColumns && (
+                                    <td className="px-3 py-2 text-right text-slate-600">
+                                      {formatCost(source.cost)}
+                                    </td>
+                                  )}
+                                  {showCostColumns && (
+                                    <td className="px-3 py-2 text-right text-slate-600">
+                                      {formatAvgCost(source.cost, source.total_tokens)}
+                                    </td>
+                                  )}
                                   <td className="px-3 py-2 text-right">
                                     <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
                                       source.avg_rpm > 10
@@ -825,11 +852,14 @@ export const RequestsSection = memo(function RequestsSection({
                       {formatPercent(pivotSummary.output_ratio)}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-right font-bold text-slate-800">
-                    {formatCost(pivotSummary.cost)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-bold text-slate-800">
-                    {formatAvgCost(pivotSummary.cost, pivotSummary.total_tokens)}
+                  {showCostColumns && (
+                    <td className="px-3 py-2 text-right font-bold text-slate-800">
+                      {formatCost(pivotSummary.cost)}
+                    </td>
+                  )}
+                  {showCostColumns && (
+                    <td className="px-3 py-2 text-right font-bold text-slate-800">
+                      {formatAvgCost(pivotSummary.cost, pivotSummary.total_tokens)}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-400 text-[10px]">
                     {formatRpm(pivotSummary.avg_rpm)}

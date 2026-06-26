@@ -278,6 +278,30 @@ export interface QuotaResponse {
   opencode_go_ex: OpenCodeQuotaStatus | null;
   xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
   commandcode: CommandCodeQuotaStatus | null;
+  ollama: OllamaQuotaStatus | null;
+}
+
+// ─── Ollama Quota ───────────────────────────────────────────────────────────
+
+export interface OllamaUsageEntry {
+  usage_type: string;
+  percentage: number;
+  reset_time: string | null;
+}
+
+export interface OllamaQuotaData {
+  plan_name: string;
+  renews_on: string | null;
+  price: string | null;
+  usage_entries: OllamaUsageEntry[];
+  has_annual_option: boolean;
+  has_max_upgrade: boolean;
+}
+
+export interface OllamaQuotaStatus {
+  available: boolean;
+  data: OllamaQuotaData | null;
+  error: string | null;
 }
 
 // ─── CommandCode Quota ───────────────────────────────────────────────────────

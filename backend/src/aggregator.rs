@@ -1,7 +1,7 @@
 use crate::models::*;
 use crate::pricing;
 use crate::time::TimeBound;
-use chrono::{Duration, FixedOffset, Timelike, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Timelike, Utc};
 use std::collections::{HashMap, HashSet};
 
 // ── Shared accumulation helper ───────────────────────────────────────────────
@@ -436,18 +436,16 @@ fn compute_date_stats(
 /// 3. Detect active windows: a gap of ≥5 min with zero requests = boundary.
 /// 4. Fill zero-request minutes within each window.
 /// 5. avg_rpm = total_requests / total_active_minutes; peak_rpm = max bucket count.
-fn compute_rpm_from_times(times: &[String]) -> (f64, i64) {
-    if times.is_empty() {
+fn compute_rpm_from_minutes(minutes: &[i64]) -> (f64, i64) {
+    if minutes.is_empty() {
         return (0.0, 0);
     }
     const GAP_THRESHOLD: i64 = 5;
 
     // 1. Count per minute
-    let mut minute_map: HashMap<String, i64> = HashMap::new();
-    for t in times {
-        if let Some(key) = parse_time_to_minute_key(t) {
-            *minute_map.entry(key).or_default() += 1;
-        }
+    let mut minute_map: HashMap<i64, i64> = HashMap::new();
+    for &m in minutes {
+        *minute_map.entry(m).or_default() += 1;
     }
 
     if minute_map.is_empty() {
@@ -455,33 +453,25 @@ fn compute_rpm_from_times(times: &[String]) -> (f64, i64) {
     }
 
     // 2. Sort chronologically
-    let mut sorted_keys: Vec<String> = minute_map.keys().cloned().collect();
-    sorted_keys.sort();
+    let mut sorted: Vec<i64> = minute_map.keys().copied().collect();
+    sorted.sort();
 
     // 3. Detect active windows & count total active minutes + requests
     let mut total_active_minutes: i64 = 0;
     let mut total_requests: i64 = 0;
     let mut window_start_idx: usize = 0;
 
-    for i in 1..sorted_keys.len() {
-        let prev_dt = parse_minute_key(&sorted_keys[i - 1]);
-        let curr_dt = parse_minute_key(&sorted_keys[i]);
-        let gap: i64 = match (prev_dt, curr_dt) {
-            (Some(p), Some(c)) => (c - p).num_minutes(),
-            _ => 1,
-        };
+    for i in 1..sorted.len() {
+        let gap = sorted[i] - sorted[i - 1];
         if gap > GAP_THRESHOLD {
-            // Close window: count minutes from sorted_keys[window_start_idx] to sorted_keys[i-1]
-            let (mins, reqs) =
-                count_window_minutes_and_requests(&sorted_keys[window_start_idx..i], &minute_map);
+            let (mins, reqs) = count_window_minutes(&sorted[window_start_idx..i], &minute_map);
             total_active_minutes += mins;
             total_requests += reqs;
             window_start_idx = i;
         }
     }
     // Close last window
-    let (mins, reqs) =
-        count_window_minutes_and_requests(&sorted_keys[window_start_idx..], &minute_map);
+    let (mins, reqs) = count_window_minutes(&sorted[window_start_idx..], &minute_map);
     total_active_minutes += mins;
     total_requests += reqs;
 
@@ -495,49 +485,13 @@ fn compute_rpm_from_times(times: &[String]) -> (f64, i64) {
     (avg_rpm, peak_rpm)
 }
 
-/// Parse an RFC3339 timestamp string into a minute key "YYYY-MM-DD HH:MM" in UTC.
-fn parse_time_to_minute_key(time_str: &str) -> Option<String> {
-    let dt = chrono::DateTime::parse_from_rfc3339(time_str).ok()?;
-    Some(format!(
-        "{} {:02}:{:02}",
-        dt.format("%Y-%m-%d"),
-        dt.hour(),
-        dt.minute()
-    ))
-}
-
 /// Count the number of minutes (including zero-request fill) and total requests
-/// in a window spanned by the given sorted minute keys.
-fn count_window_minutes_and_requests(
-    keys: &[String],
-    minute_map: &HashMap<String, i64>,
-) -> (i64, i64) {
+/// in a window spanned by the given sorted minute indices.
+fn count_window_minutes(keys: &[i64], minute_map: &HashMap<i64, i64>) -> (i64, i64) {
     if keys.is_empty() {
         return (0, 0);
     }
-    let start_dt = match parse_minute_key(&keys[0]) {
-        Some(dt) => dt,
-        None => {
-            return (
-                keys.len() as i64,
-                keys.iter()
-                    .map(|k| minute_map.get(k).copied().unwrap_or(0))
-                    .sum(),
-            )
-        }
-    };
-    let end_dt = match parse_minute_key(&keys[keys.len() - 1]) {
-        Some(dt) => dt,
-        None => {
-            return (
-                keys.len() as i64,
-                keys.iter()
-                    .map(|k| minute_map.get(k).copied().unwrap_or(0))
-                    .sum(),
-            )
-        }
-    };
-    let duration_minutes = (end_dt - start_dt).num_minutes() + 1;
+    let duration_minutes = keys[keys.len() - 1] - keys[0] + 1;
     let total_requests: i64 = keys
         .iter()
         .map(|k| minute_map.get(k).copied().unwrap_or(0))
@@ -550,10 +504,10 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         accum: StatAccum,
         source_set: HashSet<String>,
         source_aggs: HashMap<String, StatAccum>,
-        /// Collect timestamps for RPM calculation (provider+model level)
-        times: Vec<String>,
-        /// Collect timestamps per source for RPM calculation
-        source_times: HashMap<String, Vec<String>>,
+        /// Collect UTC minute indices for RPM calculation (provider+model level)
+        times: Vec<i64>,
+        /// Collect UTC minute indices per source for RPM calculation
+        source_times: HashMap<String, Vec<i64>>,
         /// Collect TTFT values for averaging
         ttft_values: Vec<f64>,
         /// Collect TPS data for weighted averaging: (output_tokens_sum, duration_secs_sum)
@@ -572,7 +526,7 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             accum: StatAccum::default(),
             source_set: HashSet::new(),
             source_aggs: HashMap::new(),
-            times: Vec::new(),
+            times: Vec::with_capacity(64),
             source_times: HashMap::new(),
             ttft_values: Vec::new(),
             tps_data: (0, 0.0),
@@ -585,11 +539,13 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             .entry(r.source.clone())
             .or_default()
             .accumulate(r);
-        agg.times.push(r.time.clone());
-        agg.source_times
-            .entry(r.source.clone())
-            .or_default()
-            .push(r.time.clone());
+        if let Some(minute) = r.minute_index_utc() {
+            agg.times.push(minute);
+            agg.source_times
+                .entry(r.source.clone())
+                .or_default()
+                .push(minute);
+        }
         if let Some(ttft) = r.ttft_ms {
             if ttft > 0.0 {
                 agg.ttft_values.push(ttft);
@@ -616,8 +572,8 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
         .map(|((provider, model), agg)| {
             let mut sources: Vec<String> = agg.source_set.into_iter().collect();
             sources.sort();
-            // Compute RPM for this provider+model from its timestamps
-            let (avg_rpm, peak_rpm) = compute_rpm_from_times(&agg.times);
+            // Compute RPM for this provider+model from its minute indices
+            let (avg_rpm, peak_rpm) = compute_rpm_from_minutes(&agg.times);
             // Compute average TTFT
             let avg_ttft_ms = if agg.ttft_values.is_empty() {
                 0.0
@@ -639,7 +595,7 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
                         .get(&source)
                         .map(|v| v.as_slice())
                         .unwrap_or(&[]);
-                    let (source_avg_rpm, source_peak_rpm) = compute_rpm_from_times(source_times);
+                    let (source_avg_rpm, source_peak_rpm) = compute_rpm_from_minutes(source_times);
                     let source_ttft_vals = agg.source_ttft.get(&source);
                     let source_tps_data = agg.source_tps_data.get(&source);
                     let source_avg_ttft = source_ttft_vals
@@ -721,23 +677,29 @@ fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
 
 // ── RPM Analysis ────────────────────────────────────────────────────────────
 
-/// Compute the local minute-bucket key for a record ("YYYY-MM-DD HH:MM").
-fn minute_key_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Option<String> {
-    let local_dt = if let Some(tz) = tz {
-        record
-            .parsed_time()
-            .map(|dt| dt.with_timezone(tz).naive_local())
+/// Returns the minute index (minutes since Unix epoch) for a record.
+/// Uses the provided timezone if given, otherwise UTC.
+fn minute_index_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Option<i64> {
+    let dt = record.parsed_time()?;
+    let minute_dt = if let Some(tz) = tz {
+        dt.with_timezone(tz)
     } else {
-        record.parsed_time().map(|dt| dt.naive_utc())
+        dt.fixed_offset()
     };
-    local_dt.map(|dt| {
-        format!(
-            "{} {:02}:{:02}",
-            dt.format("%Y-%m-%d"),
-            dt.hour(),
-            dt.minute()
-        )
-    })
+    Some(minute_dt.timestamp() / 60)
+}
+
+/// Format a minute index back to the "YYYY-MM-DD HH:MM" display string in UTC.
+fn format_minute_index(idx: i64) -> String {
+    let dt = chrono::DateTime::from_timestamp(idx * 60, 0)
+        .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
+    let dt = dt.with_timezone(&chrono::Utc);
+    format!(
+        "{} {:02}:{:02}",
+        dt.format("%Y-%m-%d"),
+        dt.hour(),
+        dt.minute()
+    )
 }
 
 /// Parse a minute key back to a chrono NaiveDateTime for arithmetic.
@@ -773,11 +735,12 @@ pub fn compute_rpm_analysis(
         .filter(|r| !r.is_zero_token()) // RPM analysis excludes 0-token records
         .collect();
 
-    // 1. Count requests per minute
-    let mut minute_map: HashMap<String, i64> = HashMap::new();
+    // 1. Count requests per minute using integer minute indices to avoid
+    // repeated RFC3339 parsing + string formatting/formatting in hot loops.
+    let mut minute_map: HashMap<i64, i64> = HashMap::new();
     for r in &filtered {
-        if let Some(key) = minute_key_for_record(r, filters.tz) {
-            *minute_map.entry(key).or_default() += 1;
+        if let Some(idx) = minute_index_for_record(r, filters.tz) {
+            *minute_map.entry(idx).or_default() += 1;
         }
     }
 
@@ -792,36 +755,18 @@ pub fn compute_rpm_analysis(
         };
     }
 
-    // 2. Sort minute keys chronologically
-    let mut sorted_keys: Vec<String> = minute_map.keys().cloned().collect();
-    sorted_keys.sort();
+    // 2. Sort minute indices chronologically
+    let mut sorted: Vec<i64> = minute_map.keys().copied().collect();
+    sorted.sort();
 
     // 3. Detect active windows using gap threshold
     let mut windows: Vec<ActiveWindow> = Vec::new();
     let mut window_start_idx: usize = 0;
 
-    for i in 1..sorted_keys.len() {
-        let prev_dt = parse_minute_key(&sorted_keys[i - 1]);
-        let curr_dt = parse_minute_key(&sorted_keys[i]);
-
-        let gap: i64 = match (prev_dt, curr_dt) {
-            (Some(p), Some(c)) => {
-                let diff = c - p;
-                diff.num_minutes()
-            }
-            _ => {
-                // Fallback: if parsing fails, compare strings
-                if sorted_keys[i] != sorted_keys[i - 1] {
-                    1
-                } else {
-                    0
-                }
-            }
-        };
-
+    for i in 1..sorted.len() {
+        let gap = sorted[i] - sorted[i - 1];
         if gap > gap_threshold_minutes {
-            // Close current window
-            let window_keys = &sorted_keys[window_start_idx..i];
+            let window_keys = &sorted[window_start_idx..i];
             if let Some(w) = build_window(window_keys, &minute_map) {
                 windows.push(w);
             }
@@ -830,7 +775,7 @@ pub fn compute_rpm_analysis(
     }
 
     // Close last window
-    let window_keys = &sorted_keys[window_start_idx..];
+    let window_keys = &sorted[window_start_idx..];
     if let Some(w) = build_window(window_keys, &minute_map) {
         windows.push(w);
     }
@@ -838,31 +783,16 @@ pub fn compute_rpm_analysis(
     // 4. Build the full all_buckets list (filling in zero-request minutes within windows)
     let mut all_buckets: Vec<MinuteBucket> = Vec::new();
     for w in &windows {
-        let start_dt = match parse_minute_key(&w.start) {
-            Some(dt) => dt,
-            None => continue,
-        };
-        let end_dt = match parse_minute_key(&w.end) {
-            Some(dt) => dt,
-            None => continue,
-        };
-        let mut cursor = start_dt;
-        loop {
-            let key = format!(
-                "{} {:02}:{:02}",
-                cursor.format("%Y-%m-%d"),
-                cursor.hour(),
-                cursor.minute()
-            );
-            let requests = minute_map.get(&key).copied().unwrap_or(0);
-            all_buckets.push(MinuteBucket {
-                minute: key,
-                requests,
-            });
-            if cursor >= end_dt {
-                break;
-            }
-            cursor += chrono::Duration::minutes(1);
+        let start_idx = parse_minute_key(&w.start)
+            .map(|dt| dt.and_utc().timestamp() / 60)
+            .unwrap_or(0);
+        let end_idx = parse_minute_key(&w.end)
+            .map(|dt| dt.and_utc().timestamp() / 60)
+            .unwrap_or(0);
+        for idx in start_idx..=end_idx {
+            let minute = format_minute_index(idx);
+            let requests = minute_map.get(&idx).copied().unwrap_or(0);
+            all_buckets.push(MinuteBucket { minute, requests });
         }
     }
 
@@ -886,21 +816,20 @@ pub fn compute_rpm_analysis(
     }
 }
 
-/// Build an ActiveWindow from a slice of sorted minute keys that belong together.
+/// Build an ActiveWindow from a slice of sorted minute indices that belong together.
 /// Computes window stats without storing per-minute buckets (those live in `all_buckets`).
-fn build_window(window_keys: &[String], minute_map: &HashMap<String, i64>) -> Option<ActiveWindow> {
+fn build_window(window_keys: &[i64], minute_map: &HashMap<i64, i64>) -> Option<ActiveWindow> {
     if window_keys.is_empty() {
         return None;
     }
 
-    let start = window_keys[0].clone();
-    let end = window_keys[window_keys.len() - 1].clone();
-
-    let start_dt = parse_minute_key(&start)?;
-    let end_dt = parse_minute_key(&end)?;
+    let start_idx = window_keys[0];
+    let end_idx = window_keys[window_keys.len() - 1];
+    let start = format_minute_index(start_idx);
+    let end = format_minute_index(end_idx);
 
     // Compute duration and total requests without materializing every minute bucket
-    let duration_minutes = (end_dt - start_dt).num_minutes() + 1;
+    let duration_minutes = end_idx - start_idx + 1;
     let total_requests: i64 = window_keys
         .iter()
         .map(|k| minute_map.get(k).copied().unwrap_or(0))
@@ -952,7 +881,7 @@ pub fn compute_tps_analysis(
         tokens: f64,
         intervals: Vec<(f64, f64)>,
     }
-    let mut minute_buckets: HashMap<(String, String), HashMap<String, MinuteBucket>> =
+    let mut minute_buckets: HashMap<(String, String), HashMap<DateTime<FixedOffset>, MinuteBucket>> =
         HashMap::new();
     let mut all_models: HashSet<String> = HashSet::new();
 
@@ -968,11 +897,11 @@ pub fn compute_tps_analysis(
             if tps > 0.0 && r.output_tokens > 0 {
                 let duration_secs = r.output_tokens as f64 / tps;
 
-                if let Ok(start_utc) = chrono::DateTime::parse_from_rfc3339(&r.time) {
+                if let Some(start_utc) = r.parsed_time() {
                     let start_local = if let Some(tz) = filters.tz {
                         start_utc.with_timezone(tz)
                     } else {
-                        start_utc.naive_utc().and_utc().fixed_offset()
+                        start_utc.fixed_offset()
                     };
                     let end_local = start_local
                         + Duration::try_milliseconds((duration_secs * 1000.0).ceil() as i64)
@@ -995,17 +924,11 @@ pub fn compute_tps_analysis(
                             (bucket_end - effective_start).num_milliseconds() as f64 / 1000.0;
 
                         if overlap_secs > 0.0 {
-                            let minute_key = format!(
-                                "{} {:02}:{:02}",
-                                cursor.format("%Y-%m-%d"),
-                                cursor.hour(),
-                                cursor.minute()
-                            );
                             let sec_start =
                                 (effective_start - cursor).num_milliseconds() as f64 / 1000.0;
                             let sec_end = (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
                             let bucket =
-                                buckets.entry(minute_key).or_insert_with(|| MinuteBucket {
+                                buckets.entry(cursor).or_insert_with(|| MinuteBucket {
                                     tokens: 0.0,
                                     intervals: Vec::new(),
                                 });
@@ -1028,9 +951,9 @@ pub fn compute_tps_analysis(
         .into_iter()
         .map(|((provider, model), bucket_map)| {
             // Merge intervals per bucket to compute active seconds
-            let mut resolved: Vec<(String, f64, f64)> = bucket_map
+            let mut resolved: Vec<(DateTime<FixedOffset>, f64, f64)> = bucket_map
                 .into_iter()
-                .map(|(minute_key, bucket)| {
+                .map(|(cursor, bucket)| {
                     let mut intervals = bucket.intervals;
                     intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                     let mut merged: Vec<(f64, f64)> = Vec::new();
@@ -1044,42 +967,51 @@ pub fn compute_tps_analysis(
                         merged.push((start, end));
                     }
                     let active_secs: f64 = merged.iter().map(|(s, e)| (e - s).max(0.0)).sum();
-                    (minute_key, bucket.tokens, active_secs)
+                    (cursor, bucket.tokens, active_secs)
                 })
                 .collect();
             resolved.sort_by(|a, b| a.0.cmp(&b.0));
 
-            let data_points: Vec<TpsDataPoint> = resolved
-                .iter()
-                .enumerate()
-                .map(|(i, (time_key, _, _))| {
-                    let end_dt = parse_minute_key(time_key).unwrap();
-                    let start_dt = end_dt - Duration::minutes(4);
+            // Compute 5-minute rolling active-period TPS with a sliding window.
+            // resolved is sorted by cursor, so we advance the window start
+            // pointer monotonically instead of scanning resolved[..=i] for each i.
+            let mut data_points: Vec<TpsDataPoint> = Vec::with_capacity(resolved.len());
+            let mut window_tokens: f64 = 0.0;
+            let mut window_active_secs: f64 = 0.0;
+            let mut window_start: usize = 0;
 
-                    let in_window: Vec<&(String, f64, f64)> = resolved[..=i]
-                        .iter()
-                        .filter(|(t, _, _)| {
-                            parse_minute_key(t).is_some_and(|dt| dt >= start_dt && dt <= end_dt)
-                        })
-                        .collect();
+            for (i, (cursor, tokens, active_secs)) in resolved.iter().enumerate() {
+                let window_start_dt = *cursor - Duration::minutes(4);
 
-                    let window_tokens: f64 = in_window.iter().map(|(_, tokens, _)| tokens).sum();
-                    let window_active_secs: f64 = in_window
-                        .iter()
-                        .map(|(_, _, active_secs)| active_secs)
-                        .sum::<f64>();
+                window_tokens += tokens;
+                window_active_secs += active_secs;
 
-                    let avg_tps = if window_active_secs > 0.0 {
-                        window_tokens / window_active_secs
-                    } else {
-                        0.0
-                    };
-                    TpsDataPoint {
-                        time: time_key.clone(),
-                        tps: (avg_tps * 100.0).round() / 100.0,
+                while window_start < i {
+                    let (start_cursor, start_tokens, start_active_secs) = &resolved[window_start];
+                    if *start_cursor >= window_start_dt {
+                        break;
                     }
-                })
-                .collect();
+                    window_tokens -= start_tokens;
+                    window_active_secs -= start_active_secs;
+                    window_start += 1;
+                }
+
+                let avg_tps = if window_active_secs > 0.0 {
+                    window_tokens / window_active_secs
+                } else {
+                    0.0
+                };
+                let time_key = format!(
+                    "{} {:02}:{:02}",
+                    cursor.format("%Y-%m-%d"),
+                    cursor.hour(),
+                    cursor.minute()
+                );
+                data_points.push(TpsDataPoint {
+                    time: time_key,
+                    tps: (avg_tps * 100.0).round() / 100.0,
+                });
+            }
 
             TpsModelSeries {
                 model,
@@ -1486,4 +1418,5 @@ mod tests {
             .and_hms_opt(hour, minute, second)
             .unwrap()
     }
+
 }

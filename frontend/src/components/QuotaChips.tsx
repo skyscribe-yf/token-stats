@@ -171,6 +171,33 @@ function buildQuotaChips(
     }
   }
 
+  // Ollama
+  if (quota?.ollama?.available && quota.ollama.data) {
+    const o = quota.ollama.data;
+    if (o.price) {
+      chips.push({
+        id: "ollama-plan",
+        cardId: "quota-ollama",
+        vendor: "Ollama",
+        scope: o.plan_name,
+        display: o.price,
+        pct: null,
+      });
+    }
+    for (const entry of o.usage_entries) {
+      const scope =
+        entry.usage_type === "Session" ? "会话" : "周";
+      chips.push({
+        id: `ollama-${entry.usage_type}`,
+        cardId: "quota-ollama",
+        vendor: "Ollama",
+        scope,
+        display: `${entry.percentage}%`,
+        pct: entry.percentage,
+      });
+    }
+  }
+
   // CommandCode
   if (quota?.commandcode?.available && quota.commandcode.data) {
     const cc = quota.commandcode.data;

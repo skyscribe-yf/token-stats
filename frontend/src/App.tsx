@@ -284,6 +284,21 @@ export default function App() {
     return undefined;
   }, [appliedRange.from, appliedRange.to]);
 
+  // Scale the "hourly" requests chart resolution so huge ranges (e.g. "all")
+  // don't request tens of thousands of 1h buckets and block the UI refresh.
+  const hourlyResolution = useMemo(() => {
+    if (!appliedRange.from || !appliedRange.to) return undefined;
+    const fromMs = new Date(appliedRange.from).getTime();
+    const toMs = new Date(appliedRange.to).getTime();
+    if (isNaN(fromMs) || isNaN(toMs)) return undefined;
+    const rangeMs = toMs - fromMs;
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    if (rangeMs <= oneDayMs) return "1h";
+    if (rangeMs <= 3 * oneDayMs) return "2h";
+    if (rangeMs <= 14 * oneDayMs) return "12h";
+    return "day";
+  }, [appliedRange.from, appliedRange.to]);
+
   const filteredModels = useMemo(() => {
     const rawModels = stats?.by_model
       ? [...new Set(stats.by_model.map((m) => m.model))]
@@ -345,7 +360,7 @@ export default function App() {
         sourceFilter,
         vendorFilter,
         tzOffset,
-        "1h",
+        hourlyResolution,
         debouncedModelFilter
       ).catch(() => null);
       const [s, sliceStats, h] = await Promise.all([
@@ -373,6 +388,7 @@ export default function App() {
     vendorFilter,
     tzOffset,
     resolution,
+    hourlyResolution,
     debouncedModelFilter,
     hasEmptyRequiredSelection,
   ]);
@@ -1096,6 +1112,7 @@ export default function App() {
                 <UsageSection
                   stats={stats}
                   hourlyStats={hourlyStats}
+                  hourlyResolution={hourlyResolution}
                   rpmData={rpmData}
                   chartMetrics={chartMetrics}
                   onChartMetricsChange={setChartMetrics}

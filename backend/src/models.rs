@@ -60,6 +60,13 @@ impl TokenRecord {
             .ok()
             .map(|dt| dt.with_timezone(&Utc))
     }
+
+    /// Returns the UTC minute index (minutes since Unix epoch) for RPM calculations.
+    /// Avoids the repeated RFC3339 parsing + string formatting in hot loops.
+    pub fn minute_index_utc(&self) -> Option<i64> {
+        self.parsed_time().map(|dt| dt.timestamp() / 60)
+    }
+
 }
 
 /// Aggregation time resolution for date-based stats.

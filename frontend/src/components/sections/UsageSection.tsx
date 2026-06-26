@@ -43,6 +43,7 @@ export type VendorBreakdownMetric = "tokens" | "cost";
 interface UsageSectionProps {
   stats: StatsResponse;
   hourlyStats: StatsResponse | null;
+  hourlyResolution?: string;
   rpmData: RpmAnalysis | null;
   chartMetrics: ReadonlySet<ChartMetricKey>;
   onChartMetricsChange: (metrics: Set<ChartMetricKey>) => void;
@@ -137,6 +138,7 @@ function RpmTooltip({
 export const UsageSection = React.memo(function UsageSection({
   stats,
   hourlyStats,
+  hourlyResolution,
   rpmData,
   chartMetrics,
   onChartMetricsChange,
@@ -220,18 +222,44 @@ export const UsageSection = React.memo(function UsageSection({
     if (!rpmData?.all_buckets) return [];
     // Pre-compute window start set for O(1) lookup instead of O(n*m) .some()
     const windowStarts = new Set(rpmData.windows.map((w) => w.start));
-    return rpmData.all_buckets.map((b) => {
-      // Format: "2026-05-17 10:30" → "05-17 10:30"
-      const label = b.minute.includes(" ")
-        ? `${b.minute.substring(5)}`
-        : b.minute;
-      return {
-        minute: label,
+    const labelOf = (m: string) =>
+      m.includes(" ") ? m.substring(5) : m;
+
+    const buckets = rpmData.all_buckets;
+    const n = buckets.length;
+    // Cap rendered points so huge ranges (e.g. "all") don't freeze the UI
+    // by drawing tens of thousands of SVG nodes. We average consecutive
+    // buckets into bins so the y-axis stays "requests/minute".
+    const MAX_POINTS = 1200;
+    if (n <= MAX_POINTS) {
+      return buckets.map((b) => ({
+        minute: labelOf(b.minute),
         requests: b.requests,
-        // Mark window boundaries for visual separation
         isWindowStart: windowStarts.has(b.minute),
-      };
-    });
+      }));
+    }
+    const binSize = Math.ceil(n / MAX_POINTS);
+    const out: {
+      minute: string;
+      requests: number;
+      isWindowStart: boolean;
+    }[] = [];
+    for (let i = 0; i < n; i += binSize) {
+      const end = Math.min(i + binSize, n);
+      let sum = 0;
+      let isWindowStart = false;
+      for (let j = i; j < end; j++) {
+        const b = buckets[j];
+        sum += b.requests;
+        if (windowStarts.has(b.minute)) isWindowStart = true;
+      }
+      out.push({
+        minute: labelOf(buckets[i].minute),
+        requests: sum / (end - i),
+        isWindowStart,
+      });
+    }
+    return out;
   }, [rpmData]);
 
   const rpmWindowSummaries = useMemo(() => {
@@ -410,7 +438,13 @@ export const UsageSection = React.memo(function UsageSection({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-700 mb-2">
-            每小时请求数
+            {hourlyResolution === "day"
+              ? "每日请求数"
+              : hourlyResolution === "12h"
+                ? "每 12 小时请求数"
+                : hourlyResolution === "2h"
+                  ? "每 2 小时请求数"
+                  : "每小时请求数"}
           </h3>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={hourlyData}>
@@ -561,16 +595,22 @@ export const UsageSection = React.memo(function UsageSection({
                 strokeWidth={1.5}
                 isAnimationActive={false}
               />
-              {/* Draw window boundary lines */}
-              {rpmData.windows.slice(1).map((w, i) => (
-                <ReferenceLine
-                  key={`window-boundary-${i}`}
-                  x={w.start.substring(5)}
-                  stroke="#94a3b8"
-                  strokeDasharray="2 4"
-                  strokeWidth={1}
-                />
-              ))}
+              {/* Draw window boundary lines (skipped when too dense to keep
+               the chart responsive on large ranges; the window table below
+               still lists every active window) */}
+              {(() => {
+                const starts = rpmChartData.filter((p) => p.isWindowStart);
+                if (starts.length > 60) return null;
+                return starts.slice(1).map((p, i) => (
+                  <ReferenceLine
+                    key={`window-boundary-${i}`}
+                    x={p.minute}
+                    stroke="#94a3b8"
+                    strokeDasharray="2 4"
+                    strokeWidth={1}
+                  />
+                ));
+              })()}
             </AreaChart>
           </ResponsiveContainer>
           {rpmWindowSummaries.length > 1 && (

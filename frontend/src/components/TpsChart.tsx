@@ -69,32 +69,77 @@ export const TpsChart = memo(function TpsChart({ tpsData, loading }: TpsChartPro
     }
 
     // Collect all time points and build a map
-    const timeMap = new Map<string, Record<string, unknown>>();
     const colorMap = new Map<string, string>();
     let colorIdx = 0;
 
-    for (const series of tpsData.models) {
+    const selectedSeries = tpsData.models.filter((s) =>
+      effectiveSelection.has(`${s.provider}/${s.model}`)
+    );
+    for (const series of selectedSeries) {
       const modelKey = `${series.provider}/${series.model}`;
-      if (!effectiveSelection.has(modelKey)) continue;
-
       colorMap.set(modelKey, getModelColor(colorIdx++));
-
-      for (const dp of series.data_points) {
-        if (!timeMap.has(dp.time)) {
-          timeMap.set(dp.time, { time: dp.time });
-        }
-        timeMap.get(dp.time)![modelKey] = dp.tps;
-      }
     }
 
-    // Sort by time and fill gaps with null
-    const sorted = Array.from(timeMap.values()).sort((a, b) => {
-      const at = typeof a.time === 'string' ? a.time : '';
-      const bt = typeof b.time === 'string' ? b.time : '';
-      return at.localeCompare(bt);
-    });
+    // Gather the sorted unique time axis across all selected series.
+    const timesSet = new Set<string>();
+    for (const series of selectedSeries) {
+      for (const dp of series.data_points) timesSet.add(dp.time);
+    }
+    const sortedTimes = Array.from(timesSet).sort();
 
-    return { chartData: sorted, modelColorMap: colorMap };
+    // Cap the rendered time axis so huge ranges (e.g. "all") don't draw
+    // thousands of points per model and freeze the UI. When the axis is
+    // long we bucket consecutive times and average each model's TPS
+    // within a bucket, keeping the chart meaningful at a glance.
+    const MAX_POINTS = 600;
+    let chartData: Record<string, unknown>[];
+
+    if (sortedTimes.length <= MAX_POINTS) {
+      const timeMap = new Map<string, Record<string, unknown>>();
+      for (const series of selectedSeries) {
+        const modelKey = `${series.provider}/${series.model}`;
+        for (const dp of series.data_points) {
+          if (!timeMap.has(dp.time)) timeMap.set(dp.time, { time: dp.time });
+          timeMap.get(dp.time)![modelKey] = dp.tps;
+        }
+      }
+      chartData = sortedTimes.map((t) => timeMap.get(t)!);
+    } else {
+      const binSize = Math.ceil(sortedTimes.length / MAX_POINTS);
+      const binCount = Math.ceil(sortedTimes.length / binSize);
+      const bins: Record<string, unknown>[] = Array.from(
+        { length: binCount },
+        (_, i) => ({ time: sortedTimes[i * binSize] })
+      );
+      const accums: Map<string, { sum: number; cnt: number }>[] =
+        bins.map(() => new Map());
+      const timeToBin = new Map<string, number>();
+      sortedTimes.forEach((t, idx) =>
+        timeToBin.set(t, Math.floor(idx / binSize))
+      );
+      for (const series of selectedSeries) {
+        const modelKey = `${series.provider}/${series.model}`;
+        for (const dp of series.data_points) {
+          const b = timeToBin.get(dp.time)!;
+          const a = accums[b].get(modelKey);
+          if (a) {
+            a.sum += dp.tps;
+            a.cnt += 1;
+          } else {
+            accums[b].set(modelKey, { sum: dp.tps, cnt: 1 });
+          }
+        }
+      }
+      chartData = bins.map((row, b) => {
+        const out: Record<string, unknown> = { time: row.time };
+        for (const [modelKey, a] of accums[b]) {
+          out[modelKey] = a.sum / a.cnt;
+        }
+        return out;
+      });
+    }
+
+    return { chartData, modelColorMap: colorMap };
   }, [tpsData, effectiveSelection]);
 
   const toggleModel = useCallback(

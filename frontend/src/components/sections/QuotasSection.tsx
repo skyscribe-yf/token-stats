@@ -16,8 +16,8 @@ import type {
   AinaibaCreditResponse,
   OpenCodeQuotaStatus,
   KimiQuotaStatus,
-  XiaomiMiMoQuotaStatus,
   CommandCodeQuotaStatus,
+  OllamaQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
 
@@ -535,75 +535,6 @@ function OpenCodeCard({
   );
 }
 
-function XiaomiMiMoCard({
-  status,
-  loading,
-  highlightId,
-}: {
-  status: XiaomiMiMoQuotaStatus | null;
-  loading: boolean;
-  highlightId: string | null;
-}) {
-  const cardId = "quota-xiaomi-mimo";
-  const flash = useHighlightFlash(highlightId, cardId);
-  const cycleCountdown = buildCycleCountdown(
-    status?.data?.current_period_end
-      ? status.data.current_period_end.replace(" ", "T")
-      : null
-  );
-  return (
-    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
-      <CardHeader
-        active={!!status?.available}
-        loading={loading}
-        name="Xiaomi MiMo TP"
-        suffix="xiaomi.com"
-        cycleCountdown={cycleCountdown}
-      />
-      {loading ? (
-        <SkeletonBars />
-      ) : status?.available && status.data ? (
-        <>
-          <div className="flex items-center gap-2 text-[11px] mb-1">
-            <span className="font-medium text-slate-600">
-              {status.data.plan_name || status.data.plan_code}
-            </span>
-            {status.data.enable_auto_renew && (
-              <span className="px-1 py-0 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">
-                自动续费
-              </span>
-            )}
-          </div>
-          <div className="space-y-1">
-            {status.data.entries.map((entry) => (
-              <ProgressBar
-                key={entry.name}
-                label={entry.name === "plan_total_token" ? "总配额" : entry.name}
-                used={entry.used}
-                limit={entry.limit}
-              />
-            ))}
-          </div>
-          {status.data.current_period_end && (
-            <div className="mt-1 pt-1 border-t border-slate-100 text-[10px] text-slate-500">
-              到期 {status.data.current_period_end.split(" ")[0]}
-            </div>
-          )}
-          <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-[10px] text-amber-700">
-              ⚠️ 此价格为估算值，需根据实际使用情况调整
-            </p>
-          </div>
-        </>
-      ) : (
-        <p className="text-[11px] text-slate-400 italic">
-          {status?.error || "获取失败"}
-        </p>
-      )}
-    </CardShell>
-  );
-}
-
 function CommandCodeCard({
   status,
   loading,
@@ -705,6 +636,121 @@ function CommandCodeCard({
   );
 }
 
+function OllamaCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: OllamaQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-ollama";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+  const monthlyEntry = data?.usage_entries?.find(
+    (e) => e.usage_type === "Weekly"
+  );
+  const cycleCountdown = buildCycleCountdown(
+    monthlyEntry?.reset_time ?? null
+  );
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="Ollama"
+        href="https://ollama.com/settings/billing"
+        suffix="ollama.com"
+        cycleCountdown={cycleCountdown}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data ? (
+        <>
+          <div className="flex items-center gap-2 text-[11px] mb-1.5">
+            <span className="font-bold text-slate-800">
+              {data.plan_name}
+            </span>
+            {data.price && (
+              <span className="text-slate-400">{data.price}/月</span>
+            )}
+            {data.renews_on && (
+              <span className="text-slate-400 text-[10px]">
+                续费 {data.renews_on}
+              </span>
+            )}
+          </div>
+          {data.has_max_upgrade && (
+            <div className="mb-1.5 text-[10px] text-slate-500">
+              <a
+                href="https://ollama.com/settings/billing"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary-500 hover:underline"
+              >
+                升级至 Max
+              </a>
+              {data.has_annual_option && " · "}
+              {data.has_annual_option && (
+                <a
+                  href="https://ollama.com/settings/billing"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary-500 hover:underline"
+                >
+                  切换年付
+                </a>
+              )}
+            </div>
+          )}
+          {data.usage_entries.length > 0 && (
+            <div className="space-y-1.5">
+              {data.usage_entries.map((entry) => {
+                const scope =
+                  entry.usage_type === "Session" ? "会话" : "周";
+                return (
+                  <div key={entry.usage_type}>
+                    <div className="flex justify-between text-[10px] text-slate-500">
+                      <span>{scope}</span>
+                      <span>
+                        {entry.percentage}%
+                        {entry.reset_time &&
+                          ` · 重置 ${new Date(
+                            entry.reset_time
+                          ).toLocaleDateString()}`}
+                      </span>
+                    </div>
+                    <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          entry.percentage > 80
+                            ? "bg-rose-500"
+                            : entry.percentage > 50
+                              ? "bg-amber-500"
+                              : "bg-emerald-500"
+                        }`}
+                        style={{
+                          width: `${Math.min(entry.percentage, 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function SkeletonBars() {
   return (
     <div className="space-y-1.5">
@@ -756,11 +802,6 @@ export const QuotasSection = memo(function QuotasSection({
           subscriptionSettings={subscriptionSettings}
           suffix="EX"
         />
-        <XiaomiMiMoCard
-          status={quota?.xiaomi_mimo ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
         <OpenCodeCard
           status={quota?.opencode_go ?? null}
           loading={quotaLoading}
@@ -776,6 +817,11 @@ export const QuotasSection = memo(function QuotasSection({
         />
         <CommandCodeCard
           status={quota?.commandcode ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
+        />
+        <OllamaCard
+          status={quota?.ollama ?? null}
           loading={quotaLoading}
           highlightId={highlightCardId}
         />

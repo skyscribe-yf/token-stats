@@ -174,6 +174,7 @@ pub struct QuotaResponse {
     pub opencode_go_ex: Option<OpenCodeQuotaStatus>,
     pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,
     pub commandcode: Option<CommandCodeQuotaStatus>,
+    pub ollama: Option<OllamaQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,5 +248,34 @@ pub struct CommandCodeQuotaData {
 pub struct CommandCodeQuotaStatus {
     pub available: bool,
     pub data: Option<CommandCodeQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── Ollama types ────────────────────────────────────────────────────────────
+
+/// Single usage entry from Ollama cloud (session or weekly).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaUsageEntry {
+    pub usage_type: String,
+    pub percentage: i32,
+    pub reset_time: Option<String>,
+}
+
+/// Ollama Pro subscription and usage data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaQuotaData {
+    pub plan_name: String,
+    pub renews_on: Option<String>,
+    pub price: Option<String>,
+    pub usage_entries: Vec<OllamaUsageEntry>,
+    pub has_annual_option: bool,
+    pub has_max_upgrade: bool,
+}
+
+/// Ollama quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaQuotaStatus {
+    pub available: bool,
+    pub data: Option<OllamaQuotaData>,
     pub error: Option<String>,
 }

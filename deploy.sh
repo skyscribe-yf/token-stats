@@ -255,6 +255,13 @@ else
     echo "⚠️  COMMANDCODE_SESSION_TOKEN not set"
 fi
 
+if [ -n "${OLLAMA_AUTH_COOKIE:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "OLLAMA_AUTH_COOKIE" "$OLLAMA_AUTH_COOKIE"
+    echo "✅ Injected OLLAMA_AUTH_COOKIE"
+else
+    echo "⚠️  OLLAMA_AUTH_COOKIE not set"
+fi
+
 sudo systemctl daemon-reload
 
 # ── 6. Free new port from rogue processes ─────────────────────────────
