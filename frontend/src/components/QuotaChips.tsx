@@ -44,14 +44,16 @@ function buildQuotaChips(
 ): QuotaChip[] {
   const chips: QuotaChip[] = [];
 
-  // Xunfei accounts
+  // Xunfei accounts — only show chips for active subscriptions
   if (xunfei?.accounts) {
     for (const acc of xunfei.accounts) {
       if (!acc.available || acc.data.length === 0) continue;
       const suffix = acc.label === "ex" ? " EX" : "";
-      for (let si = 0; si < acc.data.length; si++) {
-        const sub = acc.data[si];
-        const subSuffix = acc.data.length > 1 ? ` #${si + 1}` : "";
+      const activeSubs = acc.data.filter((d) => d.status === "active");
+      if (activeSubs.length === 0) continue;
+      for (let si = 0; si < activeSubs.length; si++) {
+        const sub = activeSubs[si];
+        const subSuffix = activeSubs.length > 1 ? ` #${si + 1}` : "";
         const usage = sub.usage;
         if (usage.rp5h_limit > 0) {
           const pct = (usage.rp5h_used / usage.rp5h_limit) * 100;

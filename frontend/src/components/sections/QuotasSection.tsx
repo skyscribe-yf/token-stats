@@ -160,10 +160,16 @@ function XunfeiCard({
 }) {
   const cardId = `quota-xunfei-${account.label}`;
   const flash = useHighlightFlash(highlightId, cardId);
-  const hasActive = account.available && account.data.some((d) => d.status === "active");
-  // Use the earliest expiry across all subscriptions for the cycle countdown
-  const earliestExpiry = account.data
-    .filter((d) => d.status === "active")
+
+  // Only show active subscriptions; hide expired/inactive ones
+  const activeSubs = account.data.filter((d) => d.status === "active");
+  const allExpired = account.available && account.data.length > 0 && activeSubs.length === 0;
+  // Display subscriptions: active ones, or if all expired just the first for context
+  const displaySubs = activeSubs.length > 0 ? activeSubs : (allExpired ? [account.data[0]] : []);
+
+  const hasActive = account.available && activeSubs.length > 0;
+  // Use the earliest expiry across active subscriptions for the cycle countdown
+  const earliestExpiry = activeSubs
     .map((d) => d.expires_at.includes("T") ? d.expires_at : d.expires_at.replace(" ", "T"))
     .sort()[0];
   const cycleCountdown = buildCycleCountdown(earliestExpiry ?? null);
@@ -182,16 +188,22 @@ function XunfeiCard({
       />
       {loading ? (
         <SkeletonBars />
-      ) : account.available && account.data.length > 0 ? (
+      ) : account.available && displaySubs.length > 0 ? (
         <div className="space-y-2">
-          {account.data.map((sub, idx) => {
+          {allExpired && (
+            <div className="flex items-center gap-1.5 text-[11px] text-amber-600 bg-amber-50 rounded px-2 py-1 mb-1">
+              <span className="font-medium">⚠ 所有订阅已失效</span>
+              <span className="text-amber-500">· 请续费或更换套餐</span>
+            </div>
+          )}
+          {displaySubs.map((sub, idx) => {
             const isActive = sub.status === "active";
             return (
               <div key={idx} className={idx > 0 ? "pt-2 border-t border-slate-100" : ""}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
                   <span className="font-bold text-slate-800">
                     {sub.plan_name}
-                    {account.data.length > 1 && (
+                    {displaySubs.length > 1 && (
                       <span className="text-slate-400 font-normal ml-1">#{idx + 1}</span>
                     )}
                   </span>
@@ -211,33 +223,39 @@ function XunfeiCard({
                     <span className="text-slate-400 text-[10px]">🔑 {sub.api_key_masked}</span>
                   )}
                 </div>
-                <div className="space-y-1">
-                  {sub.usage.rp5h_limit > 0 && (
+                {isActive && (
+                  <div className="space-y-1">
+                    {sub.usage.rp5h_limit > 0 && (
+                      <ProgressBar
+                        label="5h"
+                        used={sub.usage.rp5h_used}
+                        limit={sub.usage.rp5h_limit}
+                      />
+                    )}
+                    {sub.usage.rpw_limit > 0 && (
+                      <ProgressBar
+                        label="周"
+                        used={sub.usage.rpw_used}
+                        limit={sub.usage.rpw_limit}
+                      />
+                    )}
                     <ProgressBar
-                      label="5h"
-                      used={sub.usage.rp5h_used}
-                      limit={sub.usage.rp5h_limit}
+                      label="月"
+                      used={sub.usage.package_used}
+                      limit={sub.usage.package_limit}
                     />
-                  )}
-                  {sub.usage.rpw_limit > 0 && (
-                    <ProgressBar
-                      label="周"
-                      used={sub.usage.rpw_used}
-                      limit={sub.usage.rpw_limit}
-                    />
-                  )}
-                  <ProgressBar
-                    label="月"
-                    used={sub.usage.package_used}
-                    limit={sub.usage.package_limit}
-                  />
-                </div>
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1.5 text-[10px] text-slate-500">
-                  <span>余额 ¥{(sub.balance.cash / 100).toFixed(2)}</span>
-                  {sub.balance.virtual_balance > 0 && (
-                    <span>
-                      赠送 ¥{(sub.balance.virtual_balance / 100).toFixed(2)}
-                    </span>
+                  {isActive && (
+                    <>
+                      <span>余额 ¥{(sub.balance.cash / 100).toFixed(2)}</span>
+                      {sub.balance.virtual_balance > 0 && (
+                        <span>
+                          赠送 ¥{(sub.balance.virtual_balance / 100).toFixed(2)}
+                        </span>
+                      )}
+                    </>
                   )}
                   <span>到期 {sub.expires_at.replace(" ", "T")}</span>
                 </div>

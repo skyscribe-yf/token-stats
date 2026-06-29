@@ -802,9 +802,11 @@ export default function App() {
       for (const acc of xunfei.accounts) {
         const suffix = acc.label === "ex" ? " (EX)" : "";
         if (acc.available && acc.data.length > 0) {
-          for (let si = 0; si < acc.data.length; si++) {
-            const sub = acc.data[si];
-            const subLabel = acc.data.length > 1 ? `#${si + 1}` : "";
+          // Only alert on active subscriptions
+          const activeSubs = acc.data.filter((d) => d.status === "active");
+          for (let si = 0; si < activeSubs.length; si++) {
+            const sub = activeSubs[si];
+            const subLabel = activeSubs.length > 1 ? `#${si + 1}` : "";
             const ratio =
               sub.usage.package_left /
               Math.max(sub.usage.package_limit, 1);
