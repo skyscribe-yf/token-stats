@@ -97,6 +97,31 @@ interface AlertItem {
 
 const LS_ACTIVE_SECTION = "token-stats:active-section";
 const LS_VENDOR_METRIC = "token-stats:vendor-breakdown-metric";
+const LS_ALERT_DISMISS = "token-stats:alert-dismiss";
+
+const DISMISS_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Read alert dismiss timestamps from localStorage. Returns a Map<alertId, timestamp>. */
+function readDismissedAlerts(): Map<string, number> {
+  try {
+    const raw = localStorage.getItem(LS_ALERT_DISMISS);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw);
+    if (typeof obj !== "object" || obj === null) return new Map();
+    const now = Date.now();
+    const map = new Map<string, number>();
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "number" && now - v < DISMISS_MS) {
+        map.set(k, v);
+      }
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+
 
 function readLs<T extends string>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -130,6 +155,60 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
     };
   }, [value, delayMs]);
   return debounced;
+}
+
+/**
+ * Visibility-aware interval hook.
+ *
+ * Runs the callback every `intervalMs` when the tab is visible.
+ * When the tab is hidden, polling slows to `backgroundIntervalMs` (default 5min)
+ * instead of fully stopping — so data stays reasonably fresh.
+ * On re-focus, the callback fires immediately and the interval resumes.
+ *
+ * The callback is stored in a ref, so the interval is only created once
+ * per `deps` change — no teardown/restart when the callback identity changes.
+ */
+function useVisibleInterval(
+  callback: () => void,
+  intervalMs: number,
+  deps: React.DependencyList,
+  backgroundIntervalMs = 300_000 // 5 min when hidden
+) {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback; // always latest, no interval restart
+
+  useEffect(() => {
+    let id: ReturnType<typeof setInterval> | null = null;
+    let isHidden = document.hidden;
+
+    const startInterval = (ms: number) => {
+      if (id !== null) clearInterval(id);
+      id = setInterval(() => callbackRef.current(), ms);
+    };
+
+    // Start at the appropriate interval for current visibility
+    startInterval(isHidden ? backgroundIntervalMs : intervalMs);
+
+    const onVisibilityChange = () => {
+      const nowHidden = document.hidden;
+      if (nowHidden && !isHidden) {
+        // Tab went hidden: switch to slow interval
+        startInterval(backgroundIntervalMs);
+      } else if (!nowHidden && isHidden) {
+        // Tab became visible: refresh immediately, then resume fast interval
+        callbackRef.current();
+        startInterval(intervalMs);
+      }
+      isHidden = nowHidden;
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      if (id !== null) clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 }
 
 function emptyStatsResponse(): StatsResponse {
@@ -171,6 +250,7 @@ export default function App() {
   const filtersInitializedRef = useRef(false);
 
   // Refresh preset range periodically so "today" / "7d" etc. update after midnight
+  // (lightweight — no network, just recomputes the time range)
   useEffect(() => {
     if (activePreset === "custom") return;
     const refresh = () =>
@@ -178,7 +258,7 @@ export default function App() {
         refreshAppliedRangeForPreset(activePreset, current)
       );
     refresh();
-    const interval = setInterval(refresh, 30_000);
+    const interval = setInterval(refresh, 60_000); // 1 min is enough for midnight rollover
     return () => clearInterval(interval);
   }, [activePreset]);
 
@@ -233,6 +313,9 @@ export default function App() {
     useState<SubscriptionSettings | null>(null);
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
+  const [dismissedPersisted, setDismissedPersisted] = useState<Set<string>>(
+    () => new Set(readDismissedAlerts().keys())
+  );
 
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreResult, setRestoreResult] = useState<RestoreResponse | null>(
@@ -437,77 +520,65 @@ export default function App() {
     void loadRequests();
   }, [loadRequests]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      void loadData();
-      void loadRequests();
-      if (appliedRange.from && appliedRange.to) {
-        void fetchRpm(
-          appliedRange.from,
-          appliedRange.to,
-          undefined,
-          undefined,
-          tzOffset
-        ).then(setRpmData).catch(() => {});
-        void fetchTps(
-          appliedRange.from,
-          appliedRange.to,
-          undefined,
-          undefined,
-          tzOffset
-        ).then(setTpsData).catch(() => {});
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [loadData, loadRequests, appliedRange.from, appliedRange.to, tzOffset]);
+  // Main data polling — visibility-aware: pauses when tab is hidden
+  // Uses stable deps (range/tz) so the interval never tears down;
+  // the callback ref always points to the latest loadData/loadRequests.
+  useVisibleInterval(() => {
+    void loadData();
+    void loadRequests();
+    if (appliedRange.from && appliedRange.to) {
+      void fetchRpm(
+        appliedRange.from,
+        appliedRange.to,
+        undefined,
+        undefined,
+        tzOffset
+      ).then(setRpmData).catch(() => {});
+      void fetchTps(
+        appliedRange.from,
+        appliedRange.to,
+        undefined,
+        undefined,
+        tzOffset
+      ).then(setTpsData).catch(() => {});
+    }
+  }, 30_000, [appliedRange.from, appliedRange.to, tzOffset]);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const q = await fetchQuota();
-        setQuota(q);
-      } catch {
-        /* optional */
-      } finally {
-        setQuotaLoading(false);
-      }
-    };
-    load();
-    const interval = setInterval(load, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  // Quota polling — visibility-aware
+  useVisibleInterval(async () => {
+    try {
+      const q = await fetchQuota();
+      setQuota(q);
+    } catch {
+      /* optional */
+    } finally {
+      setQuotaLoading(false);
+    }
+  }, 30_000, []);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const x = await fetchXunfei();
-        setXunfei(x);
-      } catch {
-        /* optional */
-      } finally {
-        setXunfeiLoading(false);
-      }
-    };
-    load();
-    const interval = setInterval(load, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  // Xunfei polling — visibility-aware
+  useVisibleInterval(async () => {
+    try {
+      const x = await fetchXunfei();
+      setXunfei(x);
+    } catch {
+      /* optional */
+    } finally {
+      setXunfeiLoading(false);
+    }
+  }, 30_000, []);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const x = await fetchAinaibaCredit();
-        setAinaibaCredit(x);
-      } catch {
-        /* optional */
-      } finally {
-        setAinaibaCreditLoading(false);
-      }
-    };
-    load();
-    const interval = setInterval(load, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  // Ainaiba credit polling — visibility-aware
+  useVisibleInterval(async () => {
+    try {
+      const x = await fetchAinaibaCredit();
+      setAinaibaCredit(x);
+    } catch {
+      /* optional */
+    } finally {
+      setAinaibaCreditLoading(false);
+    }
+  }, 30_000, []);
 
   useEffect(() => {
     const doRefresh = async () => {
@@ -730,31 +801,35 @@ export default function App() {
     if (xunfei?.accounts) {
       for (const acc of xunfei.accounts) {
         const suffix = acc.label === "ex" ? " (EX)" : "";
-        if (acc.available && acc.data) {
-          const ratio =
-            acc.data.usage.package_left /
-            Math.max(acc.data.usage.package_limit, 1);
-          if (ratio <= 0.2) {
-            alerts.push({
-              id: `xunfei_${acc.label}_quota_low`,
-              provider: `讯飞${suffix}`,
-              type: "quota_low",
-              message: `讯飞编程套餐${suffix} 月度余量不足`,
-              detail: `月度已用 ${((1 - ratio) * 100).toFixed(0)}%，建议切换至其他模型`,
-            });
-          }
-          if (acc.data.expires_at) {
-            const dateStr = acc.data.expires_at.includes("T")
-              ? acc.data.expires_at
-              : acc.data.expires_at.replace(" ", "T");
-            if (isWithin24Hours(dateStr)) {
+        if (acc.available && acc.data.length > 0) {
+          for (let si = 0; si < acc.data.length; si++) {
+            const sub = acc.data[si];
+            const subLabel = acc.data.length > 1 ? `#${si + 1}` : "";
+            const ratio =
+              sub.usage.package_left /
+              Math.max(sub.usage.package_limit, 1);
+            if (ratio <= 0.2) {
               alerts.push({
-                id: `xunfei_${acc.label}_expiring`,
-                provider: `讯飞${suffix}`,
-                type: "expiring_soon",
-                message: `讯飞编程套餐${suffix} 即将到期`,
-                detail: `到期日: ${acc.data.expires_at}`,
+                id: `xunfei_${acc.label}_${si}_quota_low`,
+                provider: `讯飞${suffix} ${subLabel}`,
+                type: "quota_low",
+                message: `讯飞编程套餐${suffix} ${subLabel} 月度余量不足`,
+                detail: `月度已用 ${((1 - ratio) * 100).toFixed(0)}%，建议切换至其他模型`,
               });
+            }
+            if (sub.expires_at) {
+              const dateStr = sub.expires_at.includes("T")
+                ? sub.expires_at
+                : sub.expires_at.replace(" ", "T");
+              if (isWithin24Hours(dateStr)) {
+                alerts.push({
+                  id: `xunfei_${acc.label}_${si}_expiring`,
+                  provider: `讯飞${suffix} ${subLabel}`,
+                  type: "expiring_soon",
+                  message: `讯飞编程套餐${suffix} ${subLabel} 即将到期`,
+                  detail: `到期日: ${sub.expires_at}`,
+                });
+              }
             }
           }
         }
@@ -813,8 +888,8 @@ export default function App() {
       }
     }
 
-    return alerts.filter((a) => !dismissedAlerts.has(a.id));
-  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts]);
+    return alerts.filter((a) => !dismissedAlerts.has(a.id) && !dismissedPersisted.has(a.id));
+  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts, dismissedPersisted]);
 
   const alertItems = computedAlerts;
 
@@ -1031,6 +1106,28 @@ export default function App() {
     });
   };
 
+  const dismissAllForDay = () => {
+    setShowAlertModal(false);
+    const now = Date.now();
+    const ids = alertItems.map((a) => a.id);
+    // persist to localStorage
+    try {
+      const existing = readDismissedAlerts();
+      for (const id of ids) {
+        existing.set(id, now);
+      }
+      localStorage.setItem(
+        LS_ALERT_DISMISS,
+        JSON.stringify(Object.fromEntries(existing))
+      );
+    } catch { /* ignore */ }
+    setDismissedPersisted((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       <TopBar
@@ -1219,6 +1316,12 @@ export default function App() {
               ))}
             </div>
             <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={dismissAllForDay}
+                className="px-3 py-1.5 text-xs font-medium rounded-md bg-primary-600 text-white hover:bg-primary-700"
+              >
+                24h 内不再提醒
+              </button>
               <button
                 onClick={dismissAllAlerts}
                 className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200"

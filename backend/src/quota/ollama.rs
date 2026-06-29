@@ -5,6 +5,7 @@
 //! Authenticates via `OLLAMA_AUTH_COOKIE` env var (full Cookie header value).
 
 use super::types::*;
+use crate::pricing;
 use chrono::DateTime;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -70,6 +71,26 @@ pub async fn fetch_ollama_quota(client: &Client) -> OllamaQuotaStatus {
 
     let price = billing_data.price.clone();
 
+    // Compute cost estimation from weekly usage percentage and empirical pricing
+    let pricing_cfg = pricing::get_config();
+    let per_token = pricing_cfg.special.ollama_cloud_empirical_per_token;
+    let weekly_quota = pricing_cfg.special.ollama_cloud_empirical_weekly_quota;
+
+    let (estimated_tokens_used, estimated_cost_cny) = if per_token > 0.0 && weekly_quota > 0 {
+        // Find the weekly usage entry to get the current percentage
+        let weekly_pct = usage_entries
+            .iter()
+            .find(|e| e.usage_type == "Weekly")
+            .map(|e| e.percentage)
+            .unwrap_or(0.0);
+
+        let tokens = (weekly_quota as f64 * weekly_pct / 100.0).round() as i64;
+        let cost = tokens as f64 * per_token;
+        (Some(tokens), Some(cost))
+    } else {
+        (None, None)
+    };
+
     info!("Ollama quota fetched");
 
     OllamaQuotaStatus {
@@ -81,6 +102,8 @@ pub async fn fetch_ollama_quota(client: &Client) -> OllamaQuotaStatus {
             usage_entries,
             has_annual_option: billing_data.has_annual_option,
             has_max_upgrade: billing_data.has_max_upgrade,
+            estimated_tokens_used,
+            estimated_cost_cny,
         }),
         error: None,
     }
@@ -274,7 +297,8 @@ fn extract_invoice_price(document: &Html) -> Option<String> {
 }
 
 /// Extract usage percentage for a given usage type (Session or Weekly).
-fn extract_usage_percentage(document: &Html, usage_type: &str) -> Option<i32> {
+/// Handles both integer ("100%") and float ("19.2%") formats.
+fn extract_usage_percentage(document: &Html, usage_type: &str) -> Option<f64> {
     let root = document.root_element();
     let text = root.text().collect::<Vec<_>>().join("");
 
@@ -283,15 +307,15 @@ fn extract_usage_percentage(document: &Html, usage_type: &str) -> Option<i32> {
     let text_lower = text.to_lowercase();
     let label_pos = text_lower.find(&label.to_lowercase())?;
 
-    // Look for "X% used" after the label
+    // Look for "X% used" after the label — match digits, dots, then "%"
     let after = &text[label_pos + label.len()..];
     let pct_start = after.find(|c: char| c.is_ascii_digit())?;
     let pct_str = after[pct_start..]
         .chars()
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect::<String>();
 
-    pct_str.parse::<i32>().ok()
+    pct_str.parse::<f64>().ok()
 }
 
 
@@ -403,11 +427,11 @@ mod tests {
         assert_eq!(entries.len(), 2);
 
         assert_eq!(entries[0].usage_type, "Session");
-        assert_eq!(entries[0].percentage, 0);
+        assert_eq!(entries[0].percentage, 0.0);
         assert_eq!(entries[0].reset_time.as_deref(), Some("2026-06-26T05:00:00Z"));
 
         assert_eq!(entries[1].usage_type, "Weekly");
-        assert_eq!(entries[1].percentage, 10);
+        assert_eq!(entries[1].percentage, 10.0);
         assert_eq!(entries[1].reset_time.as_deref(), Some("2026-06-29T00:00:00Z"));
     }
 
@@ -426,7 +450,7 @@ mod tests {
         </body></html>"#;
         let doc = Html::parse_document(html);
         let pct = extract_usage_percentage(&doc, "Session");
-        assert_eq!(pct, Some(42));
+        assert_eq!(pct, Some(42.0));
     }
 
     #[test]
@@ -489,5 +513,35 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].usage_type, "Session");
         assert_eq!(entries[1].usage_type, "Weekly");
+    }
+
+    #[test]
+    fn test_parse_usage_from_html_float_percentage() {
+        // Test float percentage parsing (e.g. "19.2% used")
+        let html = r#"<html>
+            <head><title>Usage · Settings</title></head>
+            <body>
+                <h2><span>Cloud usage</span><span>pro</span></h2>
+                <div>
+                    <div><span>Session usage</span><span>100% used</span></div>
+                    <div>
+                        <div class="local-time" data-time="2026-06-26T10:00:00Z">Resets in 6 minutes.</div>
+                    </div>
+                </div>
+                <div>
+                    <div><span>Weekly usage</span><span>19.2% used</span></div>
+                    <div>
+                        <div class="local-time" data-time="2026-06-29T00:00:00Z">Resets in 2 days.</div>
+                    </div>
+                </div>
+            </body>
+        </html>"#;
+
+        let entries = parse_usage_from_html(html);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].usage_type, "Session");
+        assert_eq!(entries[0].percentage, 100.0);
+        assert_eq!(entries[1].usage_type, "Weekly");
+        assert!((entries[1].percentage - 19.2).abs() < 0.01);
     }
 }

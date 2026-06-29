@@ -27,6 +27,10 @@ impl DataSource for QoderCnSource {
         tracing::info!("Loaded {} qoder-cn records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::sessions_path().exists()
+    }
 }
 
 impl QoderCnSource {

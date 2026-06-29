@@ -14,6 +14,7 @@ import {
   formatNumber,
   formatCalls,
   formatCost,
+  formatCostDetailed,
   formatPercent,
   formatAvgCost,
   formatRpm,
@@ -860,7 +861,8 @@ export const RequestsSection = memo(function RequestsSection({
                   {showCostColumns && (
                     <td className="px-3 py-2 text-right font-bold text-slate-800">
                       {formatAvgCost(pivotSummary.cost, pivotSummary.total_tokens)}
-                  </td>
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-right text-slate-400 text-[10px]">
                     {formatRpm(pivotSummary.avg_rpm)}
                   </td>
@@ -1005,7 +1007,7 @@ export const RequestsSection = memo(function RequestsSection({
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-600">
-                    {formatCost(r.cost, r.source)}
+                    {formatCostDetailed(r.cost, r.source)}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-600">
                     {r.ttft_ms != null ? (

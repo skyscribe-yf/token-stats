@@ -95,7 +95,7 @@ impl XunfeiFetcher {
                 if !r.status().is_success() {
                     return XunfeiStatus {
                         available: false,
-                        data: None,
+                        data: vec![],
                         error: Some(format!("Plan API returned HTTP {}", r.status())),
                     };
                 }
@@ -104,7 +104,7 @@ impl XunfeiFetcher {
                     Err(e) => {
                         return XunfeiStatus {
                             available: false,
-                            data: None,
+                            data: vec![],
                             error: Some(format!("Failed to parse plan response: {}", e)),
                         };
                     }
@@ -113,7 +113,7 @@ impl XunfeiFetcher {
             Err(e) => {
                 return XunfeiStatus {
                     available: false,
-                    data: None,
+                    data: vec![],
                     error: Some(format!("Plan API request failed: {}", e)),
                 };
             }
@@ -140,7 +140,7 @@ impl XunfeiFetcher {
             Some(session) => self.fetch_status_for_session(&session).await,
             None => XunfeiStatus {
                 available: false,
-                data: None,
+                data: vec![],
                 error: Some(
                     "Xunfei SSO session not found. Set XUNFEI_SSO_SESSION_ID \
                      or create ~/.config/token-stats/xunfei.json with ssoSessionId"
@@ -156,7 +156,7 @@ impl XunfeiFetcher {
             Some(session) => self.fetch_status_for_session(&session).await,
             None => XunfeiStatus {
                 available: false,
-                data: None,
+                data: vec![],
                 error: Some(
                     "Xunfei SSO session EX not found. Set XUNFEI_SSO_SESSION_ID_EX \
                      or create ~/.config/token-stats/xunfei-ex.json with ssoSessionId"
@@ -214,7 +214,7 @@ fn parse_xunfei_status(
                 .unwrap_or("Unknown error");
             return XunfeiStatus {
                 available: false,
-                data: None,
+                data: vec![],
                 error: Some(format!("API error (code {}): {}", code, msg)),
             };
         }
@@ -225,7 +225,7 @@ fn parse_xunfei_status(
         None => {
             return XunfeiStatus {
                 available: false,
-                data: None,
+                data: vec![],
                 error: Some("No active coding plans found".to_string()),
             };
         }
@@ -234,16 +234,21 @@ fn parse_xunfei_status(
     if rows.is_empty() {
         return XunfeiStatus {
             available: true,
-            data: None,
+            data: vec![],
             error: Some("No active coding plans".to_string()),
         };
     }
 
-    let plan = &rows[0];
-    let status_data = extract_plan_status(plan, balance_payload);
+    // Parse ALL subscription rows (a single account may have multiple subscriptions,
+    // e.g. two API keys under the same xunfei-ex package).
+    let statuses: Vec<XunfeiStatusData> = rows
+        .iter()
+        .map(|plan| extract_plan_status(plan, balance_payload))
+        .collect();
+
     XunfeiStatus {
         available: true,
-        data: Some(status_data),
+        data: statuses,
         error: None,
     }
 }
@@ -425,7 +430,8 @@ mod tests {
 
         let status = parse_xunfei_status(&plan_json, Some(&balance_json));
         assert!(status.available);
-        let data = status.data.unwrap();
+        assert_eq!(status.data.len(), 1);
+        let data = &status.data[0];
         assert_eq!(data.plan_name, "专业版");
         assert_eq!(data.status, "active");
         assert_eq!(data.package_id, 9198006);
@@ -444,7 +450,7 @@ mod tests {
         });
         let status = parse_xunfei_status(&plan_json, None);
         assert!(status.available);
-        assert!(status.data.is_none());
+        assert!(status.data.is_empty());
     }
 
     #[test]
@@ -453,6 +459,58 @@ mod tests {
         let status = parse_xunfei_status(&plan_json, None);
         assert!(!status.available);
         assert!(status.error.unwrap().contains("用户未登录"));
+    }
+
+    #[test]
+    fn test_parse_xunfei_status_multiple_subscriptions() {
+        let plan_json = serde_json::json!({
+            "code": 0,
+            "data": {
+                "page": 1,
+                "rows": [
+                    {
+                        "appId": "mc65e071",
+                        "codingPlanAppCredentialDTO": {
+                            "apiKey": "a96f1790a7656ed5f0fa29be01c2fc08:SECRET1"
+                        },
+                        "codingPlanUsageDTO": {
+                            "packageUsage": 3000.0, "packageLimit": 18000, "packageLeft": 15000.0,
+                            "rp5hUsage": 100.0, "rp5hLimit": 1200,
+                            "rpwUsage": 3000.0, "rpwLimit": 9000
+                        },
+                        "createTime": "2026-05-14 11:50:44",
+                        "expiresAt": "2026-06-14 11:52:41",
+                        "modelInfo": [],
+                        "name": "专业版", "packageId": 9198006, "price": 3900, "status": 1
+                    },
+                    {
+                        "appId": "mc65e072",
+                        "codingPlanAppCredentialDTO": {
+                            "apiKey": "b1234567abcdef0123456789abcdef01:SECRET2"
+                        },
+                        "codingPlanUsageDTO": {
+                            "packageUsage": 5000.0, "packageLimit": 18000, "packageLeft": 13000.0,
+                            "rp5hUsage": 200.0, "rp5hLimit": 1200,
+                            "rpwUsage": 5000.0, "rpwLimit": 9000
+                        },
+                        "createTime": "2026-05-20 10:00:00",
+                        "expiresAt": "2026-06-20 10:00:00",
+                        "modelInfo": [],
+                        "name": "专业版", "packageId": 9198007, "price": 3900, "status": 1
+                    }
+                ]
+            }
+        });
+
+        let status = parse_xunfei_status(&plan_json, None);
+        assert!(status.available);
+        assert_eq!(status.data.len(), 2);
+        assert_eq!(status.data[0].package_id, 9198006);
+        assert_eq!(status.data[0].usage.package_used, 3000);
+        assert!(status.data[0].api_key_masked.starts_with("a96f1790"));
+        assert_eq!(status.data[1].package_id, 9198007);
+        assert_eq!(status.data[1].usage.package_used, 5000);
+        assert!(status.data[1].api_key_masked.starts_with("b1234567"));
     }
 
     #[test]

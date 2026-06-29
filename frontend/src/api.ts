@@ -1,5 +1,49 @@
 const API_BASE = "/token-stats";
 
+/** Provider merge map: aliases → canonical name */
+const PROVIDER_MERGE: Record<string, string> = {
+  "ollama-cloud": "ollama",
+};
+
+/** Merge provider aliases in a StatsResponse so the UI shows unified vendors. */
+function mergeProviders(data: StatsResponse): StatsResponse {
+  const merge = <T extends { provider: string }>(
+    items: T[],
+    sumFields: (keyof T & string)[]
+  ): T[] => {
+    const map = new Map<string, T>();
+    for (const item of items) {
+      const canonical = PROVIDER_MERGE[item.provider] ?? item.provider;
+      const key = "model" in item ? `${canonical}::${(item as any).model}` : canonical;
+      const existing = map.get(key);
+      if (existing && existing.provider !== item.provider) {
+        // Merge into existing
+        for (const f of sumFields) {
+          (existing as any)[f] = ((existing as any)[f] as number) + ((item as any)[f] as number);
+        }
+      } else if (existing) {
+        // Same provider, no merge needed (shouldn't happen)
+      } else {
+        map.set(key, { ...item, provider: canonical });
+      }
+    }
+    return [...map.values()];
+  };
+
+  const numericVendorFields: (keyof VendorStats & string)[] = [
+    "calls", "input_tokens", "output_tokens",
+    "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost",
+  ];
+  const numericModelFields: (keyof ModelStats & string)[] = [
+    "calls", "input_tokens", "output_tokens",
+    "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost",
+  ];
+
+  data.by_vendor = merge(data.by_vendor, numericVendorFields);
+  data.by_model = merge(data.by_model, numericModelFields);
+  return data;
+}
+
 export interface AggregatedStats {
   total_calls: number;
   total_input_tokens: number;
@@ -169,7 +213,8 @@ export async function fetchStats(
   if (model) params.set("model", model);
   const res = await fetch(`${API_BASE}/api/stats?${params}`);
   if (!res.ok) throw new Error("Failed to fetch stats");
-  return res.json();
+  const data: StatsResponse = await res.json();
+  return mergeProviders(data);
 }
 
 export async function fetchRequests(
@@ -195,7 +240,12 @@ export async function fetchRequests(
   if (showZeroTokens !== undefined) params.set("show_zero_tokens", String(showZeroTokens));
   const res = await fetch(`${API_BASE}/api/requests?${params}`);
   if (!res.ok) throw new Error("Failed to fetch requests");
-  return res.json();
+  const data: PaginatedRequests = await res.json();
+  // Merge provider aliases in request rows
+  for (const r of data.data) {
+    if (PROVIDER_MERGE[r.provider]) r.provider = PROVIDER_MERGE[r.provider];
+  }
+  return data;
 }
 
 // ─── Kimi Code Quota ──────────────────────────────────────────────────────────
@@ -296,6 +346,8 @@ export interface OllamaQuotaData {
   usage_entries: OllamaUsageEntry[];
   has_annual_option: boolean;
   has_max_upgrade: boolean;
+  estimated_tokens_used: number | null;
+  estimated_cost_cny: number | null;
 }
 
 export interface OllamaQuotaStatus {
@@ -338,7 +390,10 @@ export async function fetchQuota(): Promise<QuotaResponse> {
 export async function fetchFilters(): Promise<FilterOptions> {
   const res = await fetch(`${API_BASE}/api/filters`);
   if (!res.ok) throw new Error("Failed to fetch filters");
-  return res.json();
+  const data: FilterOptions = await res.json();
+  // Merge provider aliases in vendor list
+  data.vendors = [...new Set(data.vendors.map(v => PROVIDER_MERGE[v] ?? v))];
+  return data;
 }
 
 export async function fetchRpm(
@@ -494,7 +549,7 @@ export interface XunfeiStatusData {
 export interface XunfeiAccountStatus {
   label: string;
   available: boolean;
-  data: XunfeiStatusData | null;
+  data: XunfeiStatusData[];
   error: string | null;
 }
 

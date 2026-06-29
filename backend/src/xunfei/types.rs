@@ -5,10 +5,12 @@
 use serde::{Deserialize, Serialize};
 
 /// Aggregated Xunfei subscription status for the dashboard.
+/// `data` is a Vec because a single account can have multiple subscriptions
+/// (e.g. two API keys under the same xunfei-ex package).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XunfeiStatus {
     pub available: bool,
-    pub data: Option<XunfeiStatusData>,
+    pub data: Vec<XunfeiStatusData>,
     pub error: Option<String>,
 }
 
@@ -17,7 +19,7 @@ pub struct XunfeiStatus {
 pub struct XunfeiAccountStatus {
     pub label: String,
     pub available: bool,
-    pub data: Option<XunfeiStatusData>,
+    pub data: Vec<XunfeiStatusData>,
     pub error: Option<String>,
 }
 

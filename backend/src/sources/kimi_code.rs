@@ -47,6 +47,10 @@ impl DataSource for KimiCodeSource {
         );
         all_records
     }
+
+    fn is_available(&self) -> bool {
+        Self::data_dirs().iter().any(|d| d.join("sessions").exists())
+    }
 }
 
 impl KimiCodeSource {

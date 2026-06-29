@@ -29,6 +29,14 @@ ainaba_segments = [
     { divisor = 20.0 },
 ]
 
+# Ollama Cloud empirical pricing（基于经验数据）
+# Pro 订阅 $20/月，38M token = 13% 周配额
+# 周配额 = 38M / 0.13 ≈ 292.3M tokens
+# 月配额 = 292.3M × 52/12 ≈ 1.27B tokens
+# 每百万token成本 = ¥136.4 / 1266.7 ≈ ¥0.1077
+ollama_cloud_empirical_per_token = 0.0000001077
+ollama_cloud_empirical_weekly_quota = 292307692
+
 # FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.82 / 0.1 = 68.2
 freemodel_divisor = 68.2
 

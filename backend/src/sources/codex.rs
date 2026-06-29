@@ -20,6 +20,10 @@ impl DataSource for CodexSource {
         tracing::info!("Loaded {} codex records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::sessions_path().exists()
+    }
 }
 
 impl CodexSource {

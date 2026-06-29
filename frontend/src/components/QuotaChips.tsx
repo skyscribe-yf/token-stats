@@ -47,41 +47,45 @@ function buildQuotaChips(
   // Xunfei accounts
   if (xunfei?.accounts) {
     for (const acc of xunfei.accounts) {
-      if (!acc.available || !acc.data) continue;
+      if (!acc.available || acc.data.length === 0) continue;
       const suffix = acc.label === "ex" ? " EX" : "";
-      const usage = acc.data.usage;
-      if (usage.rp5h_limit > 0) {
-        const pct = (usage.rp5h_used / usage.rp5h_limit) * 100;
-        chips.push({
-          id: `xunfei-${acc.label}-5h`,
-          cardId: `quota-xunfei-${acc.label}`,
-          vendor: `讯飞${suffix}`,
-          scope: "5h",
-          display: `${pct.toFixed(0)}%`,
-          pct,
-        });
-      }
-      if (usage.rpw_limit > 0) {
-        const pct = (usage.rpw_used / usage.rpw_limit) * 100;
-        chips.push({
-          id: `xunfei-${acc.label}-w`,
-          cardId: `quota-xunfei-${acc.label}`,
-          vendor: `讯飞${suffix}`,
-          scope: "周",
-          display: `${pct.toFixed(0)}%`,
-          pct,
-        });
-      }
-      if (usage.package_limit > 0) {
-        const pct = (usage.package_used / usage.package_limit) * 100;
-        chips.push({
-          id: `xunfei-${acc.label}-m`,
-          cardId: `quota-xunfei-${acc.label}`,
-          vendor: `讯飞${suffix}`,
-          scope: "月",
-          display: `${pct.toFixed(0)}%`,
-          pct,
-        });
+      for (let si = 0; si < acc.data.length; si++) {
+        const sub = acc.data[si];
+        const subSuffix = acc.data.length > 1 ? ` #${si + 1}` : "";
+        const usage = sub.usage;
+        if (usage.rp5h_limit > 0) {
+          const pct = (usage.rp5h_used / usage.rp5h_limit) * 100;
+          chips.push({
+            id: `xunfei-${acc.label}-${si}-5h`,
+            cardId: `quota-xunfei-${acc.label}`,
+            vendor: `讯飞${suffix}${subSuffix}`,
+            scope: "5h",
+            display: `${pct.toFixed(0)}%`,
+            pct,
+          });
+        }
+        if (usage.rpw_limit > 0) {
+          const pct = (usage.rpw_used / usage.rpw_limit) * 100;
+          chips.push({
+            id: `xunfei-${acc.label}-${si}-w`,
+            cardId: `quota-xunfei-${acc.label}`,
+            vendor: `讯飞${suffix}${subSuffix}`,
+            scope: "周",
+            display: `${pct.toFixed(0)}%`,
+            pct,
+          });
+        }
+        if (usage.package_limit > 0) {
+          const pct = (usage.package_used / usage.package_limit) * 100;
+          chips.push({
+            id: `xunfei-${acc.label}-${si}-m`,
+            cardId: `quota-xunfei-${acc.label}`,
+            vendor: `讯飞${suffix}${subSuffix}`,
+            scope: "月",
+            display: `${pct.toFixed(0)}%`,
+            pct,
+          });
+        }
       }
     }
   }
@@ -194,6 +198,16 @@ function buildQuotaChips(
         scope,
         display: `${entry.percentage}%`,
         pct: entry.percentage,
+      });
+    }
+    if (o.estimated_cost_cny != null) {
+      chips.push({
+        id: "ollama-cost",
+        cardId: "quota-ollama",
+        vendor: "Ollama",
+        scope: "成本",
+        display: `¥${o.estimated_cost_cny.toFixed(2)}`,
+        pct: null,
       });
     }
   }

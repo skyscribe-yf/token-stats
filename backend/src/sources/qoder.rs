@@ -27,6 +27,10 @@ impl DataSource for QoderSource {
         tracing::info!("Loaded {} qoder records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::projects_path().exists()
+    }
 }
 
 impl QoderSource {

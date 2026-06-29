@@ -257,7 +257,7 @@ pub struct CommandCodeQuotaStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaUsageEntry {
     pub usage_type: String,
-    pub percentage: i32,
+    pub percentage: f64,
     pub reset_time: Option<String>,
 }
 
@@ -270,6 +270,12 @@ pub struct OllamaQuotaData {
     pub usage_entries: Vec<OllamaUsageEntry>,
     pub has_annual_option: bool,
     pub has_max_upgrade: bool,
+    /// Estimated tokens used this week based on usage percentage and empirical weekly quota.
+    #[serde(default)]
+    pub estimated_tokens_used: Option<i64>,
+    /// Estimated cost in CNY for this week's usage.
+    #[serde(default)]
+    pub estimated_cost_cny: Option<f64>,
 }
 
 /// Ollama quota status for the dashboard.

@@ -49,6 +49,15 @@ pub struct SpecialPricing {
     pub commandcode_divisor: f64,
     #[serde(default = "default_fenno_divisor")]
     pub fenno_divisor: f64,
+    /// Ollama Cloud empirical per-token cost in CNY.
+    /// Derived from: $20/mo Pro × 6.82 / (weekly_quota × 52/12)
+    /// = ¥136.40 / 1,266,666,667 ≈ 0.0000001077
+    #[serde(default)]
+    pub ollama_cloud_empirical_per_token: f64,
+    /// Ollama Cloud weekly quota in tokens (empirical).
+    /// Derived from: 38M tokens / 13% ≈ 292,307,692
+    #[serde(default)]
+    pub ollama_cloud_empirical_weekly_quota: i64,
     /// Off-peak (波谷) pricing configuration for xunfei/xunfei-ex.
     /// If `None`, no off-peak discount is applied (always full price).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -143,6 +152,8 @@ impl Default for PricingConfig {
                 freemodel_divisor: 68.2,
                 commandcode_divisor: 1.0,
                 fenno_divisor: default_fenno_divisor(),
+                ollama_cloud_empirical_per_token: 0.0000001077,
+                ollama_cloud_empirical_weekly_quota: 292307692,
                 xunfei_off_peak: None,
             },
             model: Vec::new(),
@@ -682,6 +693,13 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             );
             return usd * cfg.usd_to_cny / cfg.special.commandcode_divisor;
         }
+    }
+
+    // 4b. Ollama Cloud (subscription): empirical per-token estimate in CNY.
+    //     Applies to both "ollama" and vendor-merged "ollama-cloud" records.
+    //     Uses the same per-token rate as the quota card cost estimation.
+    if record.provider == "ollama" && record.cost == 0.0 {
+        return record.total_tokens as f64 * cfg.special.ollama_cloud_empirical_per_token;
     }
 
     // 5. Records with stored cost (Pi source, or others that recorded cost)

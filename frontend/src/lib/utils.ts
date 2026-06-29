@@ -21,6 +21,15 @@ export function formatCost(cost: number, source?: string): string {
   return "¥" + cost.toFixed(2);
 }
 
+/** Format a single request's cost with 4 decimal places (detailed request list).
+ *  Shows the full precision needed to distinguish tiny per-call amounts. */
+export function formatCostDetailed(cost: number, source?: string): string {
+  if (cost == null || Number.isNaN(cost)) return "-";
+  if (cost === 0 && source && source !== "pi") return "N/A";
+  if (cost === 0) return "¥0.0000";
+  return "¥" + cost.toFixed(4);
+}
+
 /** Format average cost per million tokens — returns only the numeric value.
  *  The unit label (¥/百万) is expected to be rendered in the table header. */
 export function formatAvgCost(costCny: number, totalTokens: number): string {

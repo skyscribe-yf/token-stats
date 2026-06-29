@@ -18,6 +18,7 @@ use crate::config;
 use crate::models::TokenRecord;
 use chrono::{DateTime, Utc};
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
@@ -36,6 +37,13 @@ pub trait DataSource: Send + Sync {
 
     /// Load all records from this source.
     fn load(&self) -> Vec<TokenRecord>;
+
+    /// Whether this source's data path exists and should be loaded.
+    /// Sources returning false are skipped entirely during refresh,
+    /// avoiding unnecessary I/O and log spam.
+    fn is_available(&self) -> bool {
+        true
+    }
 }
 
 // ─── Shared utilities ────────────────────────────────────────────────────────
@@ -160,6 +168,11 @@ pub fn normalize_model_name(model: &str) -> String {
 
 // ─── Load all sources ────────────────────────────────────────────────────────
 
+/// Cache which sources are available (path exists) so we don't re-stat
+/// missing directories every 30s, and don't log "not found" warnings
+/// on every refresh cycle. Re-checked on every call but only logged once.
+static UNAVAILABLE_SOURCES: OnceLock<Vec<&'static str>> = OnceLock::new();
+
 pub fn load_all_sources() -> Vec<TokenRecord> {
     let mut all_records = Vec::new();
 
@@ -180,7 +193,28 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
         v
     };
 
+    // Determine which sources are unavailable (only log warnings once)
+    let unavailable: Vec<&'static str> = sources
+        .iter()
+        .filter(|src| !src.is_available())
+        .map(|src| src.name())
+        .collect();
+
+    // Only log "not found" warnings once, not every 30s
+    let already_warned = UNAVAILABLE_SOURCES.get().map_or(false, |prev| {
+        prev.len() == unavailable.len() && prev.iter().zip(unavailable.iter()).all(|(a, b)| a == b)
+    });
+    if !already_warned {
+        for name in &unavailable {
+            tracing::warn!("Source '{}' data path not found, skipping", name);
+        }
+        let _ = UNAVAILABLE_SOURCES.set(unavailable.clone());
+    }
+
     for src in &sources {
+        if !src.is_available() {
+            continue;
+        }
         let records = src.load();
         tracing::info!("Loaded {} records from {}", records.len(), src.name());
         all_records.extend(records);
@@ -287,8 +321,6 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
 
     all_records
 }
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

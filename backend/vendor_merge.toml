@@ -12,5 +12,9 @@ name = "ainaba"
 providers = ["openai", "ainaiba"]
 
 [[vendor_group]]
+name = "ollama"
+providers = ["ollama", "ollama-cloud"]
+
+[[vendor_group]]
 name = "FreeModel"
 providers = ["freemodel", "FreeModel"]

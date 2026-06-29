@@ -160,77 +160,91 @@ function XunfeiCard({
 }) {
   const cardId = `quota-xunfei-${account.label}`;
   const flash = useHighlightFlash(highlightId, cardId);
-  const active = account.available && account.data?.status === "active";
-  const cycleCountdown = buildCycleCountdown(
-    account.data?.expires_at
-      ? account.data.expires_at.includes("T")
-        ? account.data.expires_at
-        : account.data.expires_at.replace(" ", "T")
-      : null
-  );
+  const hasActive = account.available && account.data.some((d) => d.status === "active");
+  // Use the earliest expiry across all subscriptions for the cycle countdown
+  const earliestExpiry = account.data
+    .filter((d) => d.status === "active")
+    .map((d) => d.expires_at.includes("T") ? d.expires_at : d.expires_at.replace(" ", "T"))
+    .sort()[0];
+  const cycleCountdown = buildCycleCountdown(earliestExpiry ?? null);
+
+  const suffix = account.label === "ex" ? " (EX)" : "";
 
   return (
-    <CardShell id={cardId} available={!!active} highlight={flash}>
+    <CardShell id={cardId} available={!!hasActive} highlight={flash}>
       <CardHeader
-        active={!!active}
+        active={!!hasActive}
         loading={loading}
-        name={`讯飞编程套餐${account.label === "ex" ? " (EX)" : ""}`}
+        name={`讯飞编程套餐${suffix}`}
         href="https://xinghuo.xfyun.cn"
         suffix="xfyun.cn"
         cycleCountdown={cycleCountdown}
       />
       {loading ? (
         <SkeletonBars />
-      ) : account.available && account.data ? (
-        <>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
-            <span className="font-bold text-slate-800">
-              {account.data.plan_name}
-            </span>
-            <span
-              className={`px-1 py-0 rounded-full text-[10px] font-medium ${
-                account.data.status === "active"
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-slate-100 text-slate-600"
-              }`}
-            >
-              {account.data.status === "active" ? "有效" : account.data.status}
-            </span>
-            <span className="text-slate-400">
-              ¥{(account.data.price / 100).toFixed(2)}/月
-            </span>
-          </div>
-          <div className="space-y-1">
-            {account.data.usage.rp5h_limit > 0 && (
-              <ProgressBar
-                label="5h"
-                used={account.data.usage.rp5h_used}
-                limit={account.data.usage.rp5h_limit}
-              />
-            )}
-            {account.data.usage.rpw_limit > 0 && (
-              <ProgressBar
-                label="周"
-                used={account.data.usage.rpw_used}
-                limit={account.data.usage.rpw_limit}
-              />
-            )}
-            <ProgressBar
-              label="月"
-              used={account.data.usage.package_used}
-              limit={account.data.usage.package_limit}
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1.5 pt-1.5 border-t border-slate-100 text-[10px] text-slate-500">
-            <span>余额 ¥{(account.data.balance.cash / 100).toFixed(2)}</span>
-            {account.data.balance.virtual_balance > 0 && (
-              <span>
-                赠送 ¥{(account.data.balance.virtual_balance / 100).toFixed(2)}
-              </span>
-            )}
-            <span>到期 {account.data.expires_at.replace(" ", "T")}</span>
-          </div>
-        </>
+      ) : account.available && account.data.length > 0 ? (
+        <div className="space-y-2">
+          {account.data.map((sub, idx) => {
+            const isActive = sub.status === "active";
+            return (
+              <div key={idx} className={idx > 0 ? "pt-2 border-t border-slate-100" : ""}>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
+                  <span className="font-bold text-slate-800">
+                    {sub.plan_name}
+                    {account.data.length > 1 && (
+                      <span className="text-slate-400 font-normal ml-1">#{idx + 1}</span>
+                    )}
+                  </span>
+                  <span
+                    className={`px-1 py-0 rounded-full text-[10px] font-medium ${
+                      isActive
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {isActive ? "有效" : sub.status}
+                  </span>
+                  <span className="text-slate-400">
+                    ¥{(sub.price / 100).toFixed(2)}/月
+                  </span>
+                  {sub.api_key_masked && sub.api_key_masked !== "N/A" && (
+                    <span className="text-slate-400 text-[10px]">🔑 {sub.api_key_masked}</span>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {sub.usage.rp5h_limit > 0 && (
+                    <ProgressBar
+                      label="5h"
+                      used={sub.usage.rp5h_used}
+                      limit={sub.usage.rp5h_limit}
+                    />
+                  )}
+                  {sub.usage.rpw_limit > 0 && (
+                    <ProgressBar
+                      label="周"
+                      used={sub.usage.rpw_used}
+                      limit={sub.usage.rpw_limit}
+                    />
+                  )}
+                  <ProgressBar
+                    label="月"
+                    used={sub.usage.package_used}
+                    limit={sub.usage.package_limit}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1.5 text-[10px] text-slate-500">
+                  <span>余额 ¥{(sub.balance.cash / 100).toFixed(2)}</span>
+                  {sub.balance.virtual_balance > 0 && (
+                    <span>
+                      赠送 ¥{(sub.balance.virtual_balance / 100).toFixed(2)}
+                    </span>
+                  )}
+                  <span>到期 {sub.expires_at.replace(" ", "T")}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
         <p className="text-[11px] text-slate-400 italic">
           {account.error || "获取失败"}
@@ -648,11 +662,15 @@ function OllamaCard({
   const cardId = "quota-ollama";
   const flash = useHighlightFlash(highlightId, cardId);
   const data = status?.data;
-  const monthlyEntry = data?.usage_entries?.find(
+  // Use the nearest reset time for the cycle countdown
+  const sessionEntry = data?.usage_entries?.find(
+    (e) => e.usage_type === "Session"
+  );
+  const weeklyEntry = data?.usage_entries?.find(
     (e) => e.usage_type === "Weekly"
   );
   const cycleCountdown = buildCycleCountdown(
-    monthlyEntry?.reset_time ?? null
+    sessionEntry?.reset_time ?? weeklyEntry?.reset_time ?? null
   );
 
   return (
@@ -682,17 +700,19 @@ function OllamaCard({
               </span>
             )}
           </div>
-          {data.has_max_upgrade && (
-            <div className="mb-1.5 text-[10px] text-slate-500">
-              <a
-                href="https://ollama.com/settings/billing"
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary-500 hover:underline"
-              >
-                升级至 Max
-              </a>
-              {data.has_annual_option && " · "}
+          <div className="flex items-center justify-between text-[10px] mb-1.5">
+            <div className="flex items-center gap-1.5 text-slate-500">
+              {data.has_max_upgrade && (
+                <a
+                  href="https://ollama.com/settings/billing"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary-500 hover:underline"
+                >
+                  升级至 Max
+                </a>
+              )}
+              {data.has_max_upgrade && data.has_annual_option && " · "}
               {data.has_annual_option && (
                 <a
                   href="https://ollama.com/settings/billing"
@@ -704,22 +724,34 @@ function OllamaCard({
                 </a>
               )}
             </div>
-          )}
+            {data.estimated_tokens_used != null && data.estimated_cost_cny != null && (
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400">
+                  本周 {formatNumber(data.estimated_tokens_used)}
+                </span>
+                <span className="text-slate-700 font-medium">
+                  ≈¥{data.estimated_cost_cny.toFixed(2)}
+                </span>
+              </div>
+            )}
+          </div>
           {data.usage_entries.length > 0 && (
             <div className="space-y-1.5">
               {data.usage_entries.map((entry) => {
                 const scope =
                   entry.usage_type === "Session" ? "会话" : "周";
+                const pctDisplay =
+                  entry.percentage % 1 === 0
+                    ? `${entry.percentage}`
+                    : entry.percentage.toFixed(1);
+                const resetDisplay = formatResetTime(entry.reset_time);
                 return (
                   <div key={entry.usage_type}>
                     <div className="flex justify-between text-[10px] text-slate-500">
                       <span>{scope}</span>
                       <span>
-                        {entry.percentage}%
-                        {entry.reset_time &&
-                          ` · 重置 ${new Date(
-                            entry.reset_time
-                          ).toLocaleDateString()}`}
+                        {pctDisplay}%
+                        {resetDisplay && ` · 剩余 ${resetDisplay}`}
                       </span>
                     </div>
                     <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
@@ -741,6 +773,8 @@ function OllamaCard({
               })}
             </div>
           )}
+
+
         </>
       ) : (
         <p className="text-[11px] text-slate-400 italic">

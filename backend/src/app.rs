@@ -36,56 +36,70 @@ impl AppState {
     /// Incrementally refresh records from all data sources.
     ///
     /// Returns the number of new records added.
+    ///
+    /// Optimization: builds the fingerprint set under a **read** lock first,
+    /// then only acquires a write lock if there are new records to add.
+    /// This avoids blocking API reads during the expensive HashSet construction.
     pub async fn refresh_records(&self) -> usize {
         let new_records = load_all_sources();
-        let mut guard = self.records.write().await;
-        // Build a fingerprint set of existing records to avoid duplicates.
-        // Fingerprint: (time, provider, model, source, input, output, cache_read)
-        // This is effectively unique for any real-world record.
-        let mut seen: HashSet<(
-            String, // time
-            String, // provider
-            String, // model
-            String, // source
-            i64,    // input_tokens
-            i64,    // output_tokens
-            i64,    // cache_read_tokens
-        )> = HashSet::with_capacity(guard.len());
-        for r in guard.iter() {
-            seen.insert((
-                r.time.clone(),
-                r.provider.clone(),
-                r.model.clone(),
-                r.source.clone(),
-                r.input_tokens,
-                r.output_tokens,
-                r.cache_read_tokens,
-            ));
-        }
 
-        let mut added = 0usize;
-        for r in new_records {
-            let key = (
-                r.time.clone(),
-                r.provider.clone(),
-                r.model.clone(),
-                r.source.clone(),
-                r.input_tokens,
-                r.output_tokens,
-                r.cache_read_tokens,
-            );
-            if seen.insert(key) {
-                guard.push(r);
-                added += 1;
+        // Phase 1: Build fingerprint set under read lock (cheap, doesn't block readers)
+        let seen = {
+            let guard = self.records.read().await;
+            let mut seen: HashSet<(
+                String, // time
+                String, // provider
+                String, // model
+                String, // source
+                i64,    // input_tokens
+                i64,    // output_tokens
+                i64,    // cache_read_tokens
+            )> = HashSet::with_capacity(guard.len());
+            for r in guard.iter() {
+                seen.insert((
+                    r.time.clone(),
+                    r.provider.clone(),
+                    r.model.clone(),
+                    r.source.clone(),
+                    r.input_tokens,
+                    r.output_tokens,
+                    r.cache_read_tokens,
+                ));
             }
-        }
+            seen
+        };
+        // Read lock released here — API handlers can proceed.
 
-        if added > 0 {
-            tracing::info!("Refreshed data: {} records (+{} new)", guard.len(), added);
-        } else {
+        // Phase 2: Filter new records outside any lock
+        let records_to_add: Vec<TokenRecord> = new_records
+            .into_iter()
+            .filter(|r| {
+                let key = (
+                    r.time.clone(),
+                    r.provider.clone(),
+                    r.model.clone(),
+                    r.source.clone(),
+                    r.input_tokens,
+                    r.output_tokens,
+                    r.cache_read_tokens,
+                );
+                !seen.contains(&key)
+            })
+            .collect();
+
+        let added = records_to_add.len();
+        if added == 0 {
+            let guard = self.records.read().await;
             tracing::debug!("Refreshed data: {} records (unchanged)", guard.len());
+            return 0;
         }
 
+        // Phase 3: Write lock only for the actual append
+        let mut guard = self.records.write().await;
+        for r in records_to_add {
+            guard.push(r);
+        }
+        tracing::info!("Refreshed data: {} records (+{} new)", guard.len(), added);
         added
     }
 

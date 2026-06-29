@@ -22,6 +22,10 @@ impl DataSource for CcSwitchSource {
         tracing::info!("Loaded {} ccswitch records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::db_path().exists()
+    }
 }
 
 impl CcSwitchSource {

@@ -19,6 +19,10 @@ impl DataSource for OpenCodeSource {
         tracing::info!("Loaded {} opencode records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::db_path().exists()
+    }
 }
 
 impl OpenCodeSource {

@@ -21,6 +21,10 @@ impl DataSource for ClaudeCodeSource {
         tracing::info!("Loaded {} claude-code records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::projects_path().exists()
+    }
 }
 
 impl ClaudeCodeSource {

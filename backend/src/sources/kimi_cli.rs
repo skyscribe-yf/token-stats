@@ -21,6 +21,10 @@ impl DataSource for KimiCliSource {
         tracing::info!("Loaded {} kimi-cli records", records.len());
         records
     }
+
+    fn is_available(&self) -> bool {
+        Self::sessions_path().exists()
+    }
 }
 
 impl KimiCliSource {
