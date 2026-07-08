@@ -329,6 +329,7 @@ export interface QuotaResponse {
   xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
   commandcode: CommandCodeQuotaStatus | null;
   ollama: OllamaQuotaStatus | null;
+  meituan: MeituanQuotaStatus | null;
 }
 
 // ─── Ollama Quota ───────────────────────────────────────────────────────────
@@ -353,6 +354,35 @@ export interface OllamaQuotaData {
 export interface OllamaQuotaStatus {
   available: boolean;
   data: OllamaQuotaData | null;
+  error: string | null;
+}
+
+// ─── Meituan LongCat Quota ──────────────────────────────────────────────────
+
+export interface MeituanTokenPack {
+  package_name: string;
+  source_type_text: string;
+  source_type_code: number;
+  status_text: string;
+  status_code: number;
+  total_token_amount: number;
+  used_token_amount: number;
+  remain_token_amount: number;
+  usage_percent: number;
+  valid_start_time: string;
+  valid_end_date_text: string;
+  applicable_models: string[];
+}
+
+export interface MeituanQuotaData {
+  packs: MeituanTokenPack[];
+  active_count: number;
+  recent_7d_tokens: number;
+}
+
+export interface MeituanQuotaStatus {
+  available: boolean;
+  data: MeituanQuotaData | null;
   error: string | null;
 }
 

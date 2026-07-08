@@ -262,6 +262,13 @@ else
     echo "⚠️  OLLAMA_AUTH_COOKIE not set"
 fi
 
+if [ -n "${MEITUAN_AUTH_COOKIE:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "MEITUAN_AUTH_COOKIE" "$MEITUAN_AUTH_COOKIE"
+    echo "✅ Injected MEITUAN_AUTH_COOKIE"
+else
+    echo "⚠️  MEITUAN_AUTH_COOKIE not set"
+fi
+
 sudo systemctl daemon-reload
 
 # ── 6. Free new port from rogue processes ─────────────────────────────

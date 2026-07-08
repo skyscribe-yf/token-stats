@@ -712,20 +712,6 @@ export default function App() {
       }
     }
 
-    if (quota?.kimi_ex?.available && quota.kimi_ex.data) {
-      const kexd = quota.kimi_ex.data;
-      const ratio2 = kexd.weekly_remaining / Math.max(kexd.weekly_limit, 1);
-      if (ratio2 <= 0.2) {
-        alerts.push({
-          id: "kimi_ex_quota_low",
-          provider: "Kimi (EX)",
-          type: "quota_low",
-          message: "Kimi (EX) 周限额余量不足",
-          detail: `周限额已用 ${((1 - ratio2) * 100).toFixed(0)}%，建议切换至其他模型以节省额度`,
-        });
-      }
-    }
-
     if (subscriptionSettings?.kimi_monthly_start_day) {
       const nextBilling = computeNextBillingDate(
         subscriptionSettings.kimi_monthly_start_day
@@ -737,21 +723,6 @@ export default function App() {
           type: "expiring_soon",
           message: "Kimi 订阅即将到期",
           detail: `下次计费日: ${nextBilling.toLocaleDateString()}，请注意续费`,
-        });
-      }
-    }
-
-    if (subscriptionSettings?.kimi_ex_monthly_start_day) {
-      const nextBillingEx = computeNextBillingDate(
-        subscriptionSettings.kimi_ex_monthly_start_day
-      );
-      if (isWithin24Hours(nextBillingEx.toISOString())) {
-        alerts.push({
-          id: "kimi_ex_expiring",
-          provider: "Kimi (EX)",
-          type: "expiring_soon",
-          message: "Kimi (EX) 订阅即将到期",
-          detail: `下次计费日: ${nextBillingEx.toLocaleDateString()}，请注意续费`,
         });
       }
     }

@@ -49,6 +49,11 @@ pub struct SpecialPricing {
     pub commandcode_divisor: f64,
     #[serde(default = "default_fenno_divisor")]
     pub fenno_divisor: f64,
+    /// Meituan LongCat per-token cost in CNY (resource pack billing).
+    /// Only non-cached input + output tokens are billed; cache hits are free.
+    /// Default: 10 CNY / 50,000,000 tokens = 0.0000002
+    #[serde(default = "default_meituan_per_token")]
+    pub meituan_per_token: f64,
     /// Ollama Cloud empirical per-token cost in CNY.
     /// Derived from: $20/mo Pro × 6.82 / (weekly_quota × 52/12)
     /// = ¥136.40 / 1,266,666,667 ≈ 0.0000001077
@@ -66,6 +71,10 @@ pub struct SpecialPricing {
 
 fn default_fenno_divisor() -> f64 {
     150.0 * 6.82 / 10.0
+}
+
+fn default_meituan_per_token() -> f64 {
+    10.0 / 50_000_000.0 // 10 CNY / 50M tokens
 }
 
 /// Xunfei off-peak (波谷) pricing configuration.
@@ -152,6 +161,7 @@ impl Default for PricingConfig {
                 freemodel_divisor: 68.2,
                 commandcode_divisor: 1.0,
                 fenno_divisor: default_fenno_divisor(),
+                meituan_per_token: default_meituan_per_token(),
                 ollama_cloud_empirical_per_token: 0.0000001077,
                 ollama_cloud_empirical_weekly_quota: 292307692,
                 xunfei_off_peak: None,
@@ -666,6 +676,13 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         && record.cost == 0.0
     {
         return record.total_tokens as f64 * cfg.special.xiaomi_mimo_tp_per_token;
+    }
+
+    // 2c. Meituan LongCat: resource-pack billing, only non-cached input + output count.
+    //     Cache hits (cache_read) are free — not deducted from the resource pack.
+    //     Formula: (input_tokens + output_tokens) × meituan_per_token (CNY)
+    if record.provider == "meituan" {
+        return (record.input_tokens + record.output_tokens) as f64 * cfg.special.meituan_per_token;
     }
 
     // 3. OpenCode source (direct from OpenCode DB): cost is in USD
@@ -1280,6 +1297,37 @@ cache_write = 0.5865
             "xiaomi-mimo stored cost is CNY, expected 0.039, got {}",
             cost
         );
+    }
+
+    #[test]
+    fn meituan_per_token_only_bills_input_and_output() {
+        let _guard = pricing_test_guard();
+        // Meituan LongCat: resource-pack billing, only input + output tokens count.
+        // Cache hits (cache_read) and cache writes are FREE.
+        // Default rate: 10 CNY / 50M tokens = 0.0000002 CNY/token
+        let mut record = make_record("pi", "meituan", "LongCat-2.0", 0, 0.0);
+        record.input_tokens = 50_000_000;
+        record.output_tokens = 0;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 50_000_000;
+        let cost = display_cost(&record);
+        // 50M input tokens × 0.0000002 = 10.0 CNY
+        assert!((cost - 10.0).abs() < 0.01, "expected 10.0, got {}", cost);
+
+        // Cache reads should NOT add to cost
+        record.cache_read_tokens = 100_000_000;
+        record.total_tokens = 150_000_000;
+        let cost_with_cache = display_cost(&record);
+        assert!((cost_with_cache - 10.0).abs() < 0.01, "cache should be free, expected 10.0, got {}", cost_with_cache);
+
+        // Input + output both count
+        record.input_tokens = 25_000_000;
+        record.output_tokens = 25_000_000;
+        record.cache_read_tokens = 0;
+        record.total_tokens = 50_000_000;
+        let cost_mixed = display_cost(&record);
+        assert!((cost_mixed - 10.0).abs() < 0.01, "input+output should = 10.0, got {}", cost_mixed);
     }
 
     #[test]

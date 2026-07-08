@@ -14,10 +14,11 @@ import type {
   XunfeiMultiStatus,
   XunfeiAccountStatus,
   AinaibaCreditResponse,
-  OpenCodeQuotaStatus,
   KimiQuotaStatus,
+  OpenCodeQuotaStatus,
   CommandCodeQuotaStatus,
   OllamaQuotaStatus,
+  MeituanQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
 
@@ -406,20 +407,15 @@ function KimiCard({
   loading,
   highlightId,
   subscriptionSettings,
-  suffix,
 }: {
   status: KimiQuotaStatus | null;
   loading: boolean;
   highlightId: string | null;
   subscriptionSettings: SubscriptionSettings | null;
-  suffix?: string;
 }) {
-  const cardId = suffix === "EX" ? "quota-kimi-ex" : "quota-kimi";
+  const cardId = "quota-kimi";
   const flash = useHighlightFlash(highlightId, cardId);
-  const label = suffix === "EX" ? "Kimi Code (EX)" : "Kimi Code";
-  const monthlyStartDay = suffix === "EX"
-    ? subscriptionSettings?.kimi_ex_monthly_start_day
-    : subscriptionSettings?.kimi_monthly_start_day;
+  const monthlyStartDay = subscriptionSettings?.kimi_monthly_start_day ?? null;
   const cycleCountdown = monthlyStartDay
     ? buildCycleCountdown(
         computeNextBillingDate(monthlyStartDay)
@@ -434,7 +430,7 @@ function KimiCard({
       <CardHeader
         active={!!status?.available}
         loading={loading}
-        name={label}
+        name="Kimi Code"
         href="https://kimi.com"
         suffix="kimi.com"
         cycleCountdown={cycleCountdown}
@@ -482,86 +478,6 @@ function KimiCard({
         </>
       ) : (
         <p className="text-[11px] text-slate-400 italic">获取失败</p>
-      )}
-    </CardShell>
-  );
-}
-
-function OpenCodeCard({
-  status,
-  loading,
-  highlightId,
-  cardKey,
-  suffix,
-}: {
-  status: OpenCodeQuotaStatus | null;
-  loading: boolean;
-  highlightId: string | null;
-  cardKey: string;
-  suffix?: string;
-}) {
-  const cardId = `quota-opencode-${cardKey}`;
-  const flash = useHighlightFlash(highlightId, cardId);
-  const exLabel = suffix === "ex" ? " (EX)" : "";
-  const monthlyEntry = status?.data?.entries.find(
-    (entry) => entry.usage_type === "Monthly"
-  );
-  const cycleCountdown = buildCycleCountdown(monthlyEntry?.reset_at ?? null);
-  return (
-    <CardShell
-      id={cardId}
-      available={!!status?.available}
-      highlight={flash}
-    >
-      <CardHeader
-        active={!!status?.available}
-        loading={loading}
-        name={`OpenCode-go${exLabel}`}
-        href="https://opencode.ai"
-        suffix="opencode.ai"
-        cycleCountdown={cycleCountdown}
-      />
-      {loading ? (
-        <SkeletonBars />
-      ) : status?.available && status.data && status.data.entries.length > 0 ? (
-        <div className="space-y-1.5">
-          {status.data.entries.map((entry) => {
-            const scope =
-              entry.usage_type === "Rolling"
-                ? "滚动"
-                : entry.usage_type === "Weekly"
-                  ? "周"
-                  : entry.usage_type === "Monthly"
-                    ? "月"
-                    : entry.usage_type;
-            return (
-              <div key={entry.usage_type}>
-                <div className="flex justify-between text-[10px] text-slate-500">
-                  <span>{scope}</span>
-                  <span>
-                    {entry.percentage}% · {entry.resets_in}
-                  </span>
-                </div>
-                <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      entry.percentage > 80
-                        ? "bg-rose-500"
-                        : entry.percentage > 50
-                          ? "bg-amber-500"
-                          : "bg-emerald-500"
-                    }`}
-                    style={{ width: `${Math.min(entry.percentage, 100)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="text-[11px] text-slate-400 italic">
-          {status?.error || "获取失败"}
-        </p>
       )}
     </CardShell>
   );
@@ -803,6 +719,91 @@ function OllamaCard({
   );
 }
 
+function OpenCodeCard({
+  status,
+  loading,
+  highlightId,
+  suffix,
+}: {
+  status: OpenCodeQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+  suffix?: string;
+}) {
+  const cardId = suffix === "EX" ? "quota-opencode-ex" : "quota-opencode-primary";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const label = `OpenCode-go${suffix === "EX" ? " EX" : ""}`;
+
+  // Nearest reset for cycle countdown
+  const sortedEntries = status?.data?.entries
+    ? [...status.data.entries].sort((a, b) => {
+        const aAt = a.reset_at ? new Date(a.reset_at).getTime() : Infinity;
+        const bAt = b.reset_at ? new Date(b.reset_at).getTime() : Infinity;
+        return aAt - bAt;
+      })
+    : [];
+  const nearestReset = sortedEntries[0]?.reset_at ?? null;
+  const cycleCountdown = buildCycleCountdown(nearestReset);
+
+  const workspaceUrl = status?.data?.workspace_url ?? null;
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name={label}
+        href={workspaceUrl ?? "https://opencode.ai"}
+        suffix="opencode.ai"
+        cycleCountdown={cycleCountdown}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && status.data ? (
+        <div className="space-y-1.5">
+          {status.data.entries.map((entry) => {
+            const scope =
+              entry.usage_type === "Rolling"
+                ? "滚动"
+                : entry.usage_type === "Weekly"
+                  ? "周"
+                  : entry.usage_type === "Monthly"
+                    ? "月"
+                    : entry.usage_type;
+            return (
+              <div key={entry.usage_type}>
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>{scope}</span>
+                  <span>
+                    {entry.percentage}%
+                    {entry.resets_in && ` · 剩余 ${entry.resets_in}`}
+                  </span>
+                </div>
+                <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      entry.percentage > 80
+                        ? "bg-rose-500"
+                        : entry.percentage > 50
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${Math.min(entry.percentage, 100)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function SkeletonBars() {
   return (
     <div className="space-y-1.5">
@@ -811,6 +812,127 @@ function SkeletonBars() {
       <div className="h-3 w-2/3 bg-slate-100 rounded animate-pulse" />
       <div className="h-1 w-full bg-slate-100 rounded animate-pulse" />
     </div>
+  );
+}
+
+function MeituanCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: MeituanQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-meituan";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+
+  const activePacks = data?.packs.filter((p) => p.status_code === 2) ?? [];
+  const hasActive = (activePacks.length ?? 0) > 0;
+
+  // Nearest expiry from active packs
+  const nearestExpiry = activePacks
+    .map((p) => p.valid_end_date_text)
+    .sort()[0];
+
+  // Sum across active packs for overall stats
+  const totalRemain = activePacks.reduce((s, p) => s + p.remain_token_amount, 0);
+  const totalAmount = activePacks.reduce((s, p) => s + p.total_token_amount, 0);
+  const totalUsed = activePacks.reduce((s, p) => s + p.used_token_amount, 0);
+  const overallPct = totalAmount > 0 ? Math.round((totalUsed / totalAmount) * 100) : 0;
+
+  return (
+    <CardShell id={cardId} available={!!status?.available && hasActive} highlight={flash}>
+      <CardHeader
+        active={!!status?.available && hasActive}
+        loading={loading}
+        name="美团 LongCat"
+        href="https://longcat.chat/platform/usage"
+        suffix="longcat.chat"
+        cycleCountdown={nearestExpiry ? buildCycleCountdown(nearestExpiry) : null}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data && data.packs.length > 0 ? (
+        <div className="space-y-2">
+          {/* Overall summary when multiple active packs */}
+          {activePacks.length > 1 && (
+            <div className="space-y-1 pb-2 border-b border-slate-100">
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>合计 {formatNumber(totalRemain)} 剩余</span>
+                <span>{overallPct}% 已消耗</span>
+              </div>
+              <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${barColor(totalUsed, totalAmount)}`}
+                  style={{ width: `${Math.min(overallPct, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Per-pack details */}
+          {data.packs.map((pack, i) => {
+            const isActive = pack.status_code === 2;
+            return (
+              <div
+                key={i}
+                className={i > 0 ? "pt-2 border-t border-slate-100" : ""}
+              >
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
+                  <span className="font-bold text-slate-800 truncate max-w-[55%]" title={pack.package_name}>
+                    {pack.source_type_text}
+                  </span>
+                  <span
+                    className={`px-1 py-0 rounded-full text-[10px] font-medium ${
+                      isActive
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {isActive ? "有效" : pack.status_text}
+                  </span>
+                  {pack.applicable_models.length > 0 && (
+                    <span className="text-slate-400 text-[10px]">
+                      {pack.applicable_models.join(", ")}
+                    </span>
+                  )}
+                </div>
+                {isActive && (
+                  <div className="space-y-1">
+                    <ProgressBar
+                      label="用量"
+                      used={pack.used_token_amount}
+                      limit={pack.total_token_amount}
+                    />
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1.5 text-[10px] text-slate-500">
+                  {isActive && (
+                    <span>
+                      剩余 {formatNumber(pack.remain_token_amount)} / {formatNumber(pack.total_token_amount)}
+                    </span>
+                  )}
+                  <span>到期 {pack.valid_end_date_text}</span>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* 7-day usage */}
+          {data.recent_7d_tokens > 0 && (
+            <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-400">
+              近7天消耗 {formatNumber(data.recent_7d_tokens)}
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
   );
 }
 
@@ -847,25 +969,17 @@ export const QuotasSection = memo(function QuotasSection({
           highlightId={highlightCardId}
           subscriptionSettings={subscriptionSettings}
         />
-        <KimiCard
-          status={quota?.kimi_ex ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-          subscriptionSettings={subscriptionSettings}
-          suffix="EX"
-        />
+
         <OpenCodeCard
           status={quota?.opencode_go ?? null}
           loading={quotaLoading}
           highlightId={highlightCardId}
-          cardKey="primary"
         />
         <OpenCodeCard
           status={quota?.opencode_go_ex ?? null}
           loading={quotaLoading}
           highlightId={highlightCardId}
-          cardKey="ex"
-          suffix="ex"
+          suffix="EX"
         />
         <CommandCodeCard
           status={quota?.commandcode ?? null}
@@ -874,6 +988,11 @@ export const QuotasSection = memo(function QuotasSection({
         />
         <OllamaCard
           status={quota?.ollama ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
+        />
+        <MeituanCard
+          status={quota?.meituan ?? null}
           loading={quotaLoading}
           highlightId={highlightCardId}
         />

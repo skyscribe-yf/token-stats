@@ -175,6 +175,7 @@ pub struct QuotaResponse {
     pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,
     pub commandcode: Option<CommandCodeQuotaStatus>,
     pub ollama: Option<OllamaQuotaStatus>,
+    pub meituan: Option<MeituanQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,5 +284,41 @@ pub struct OllamaQuotaData {
 pub struct OllamaQuotaStatus {
     pub available: bool,
     pub data: Option<OllamaQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── Meituan LongCat types ─────────────────────────────────────────────────────
+
+/// Single Meituan token resource pack.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeituanTokenPack {
+    pub package_name: String,
+    pub source_type_text: String,
+    pub source_type_code: i64,
+    pub status_text: String,
+    pub status_code: i64,
+    pub total_token_amount: i64,
+    pub used_token_amount: i64,
+    pub remain_token_amount: i64,
+    pub usage_percent: i64,
+    pub valid_start_time: String,
+    pub valid_end_date_text: String,
+    pub applicable_models: Vec<String>,
+}
+
+/// Meituan LongCat quota data for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeituanQuotaData {
+    pub packs: Vec<MeituanTokenPack>,
+    pub active_count: i64,
+    /// Total tokens consumed in the last 7 days.
+    pub recent_7d_tokens: i64,
+}
+
+/// Meituan quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeituanQuotaStatus {
+    pub available: bool,
+    pub data: Option<MeituanQuotaData>,
     pub error: Option<String>,
 }

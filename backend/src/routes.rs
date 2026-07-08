@@ -244,6 +244,7 @@ pub async fn get_quota() -> impl IntoResponse {
         xiaomi_mimo_result,
         commandcode_result,
         ollama_result,
+        meituan_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -252,6 +253,7 @@ pub async fn get_quota() -> impl IntoResponse {
         fetcher.fetch_xiaomi_mimo_quota(),
         fetcher.fetch_commandcode_quota(),
         fetcher.fetch_ollama_quota(),
+        fetcher.fetch_meituan_quota(),
     );
 
     let response = QuotaResponse {
@@ -262,6 +264,7 @@ pub async fn get_quota() -> impl IntoResponse {
         xiaomi_mimo: Some(xiaomi_mimo_result),
         commandcode: Some(commandcode_result),
         ollama: Some(ollama_result),
+        meituan: Some(meituan_result),
     };
 
     Json(response)

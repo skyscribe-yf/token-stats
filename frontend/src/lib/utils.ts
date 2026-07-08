@@ -165,6 +165,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   "xiaomi-mimo-tp": "#f43f5e", // rose-500
   qoder: "#14b8a6",       // teal-500
   "qoder-cn": "#0d9488",   // teal-600
+  meituan: "#facc15",      // yellow-400
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -182,6 +183,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   openai: "#06b6d4",       // cyan-500
   commandcode: "#f472b6",  // pink-400
   qoder: "#14b8a6",       // teal-500
+  meituan: "#facc15",      // yellow-400
 };
 
 export function getVendorColor(vendor: string): string {
@@ -198,6 +200,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   "xiaomi-mimo-tp": "Xiaomi MiMo TP",
   qoder: "Qoder",
   "qoder-cn": "Qoder CN",
+  meituan: "美团 LongCat",
 };
 
 export function getSourceColor(source: string): string {

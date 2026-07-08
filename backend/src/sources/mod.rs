@@ -105,6 +105,7 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         "spark-x2" | "spark-x2-flash" => "xunfei".to_string(),
         "qwen3.6-35b" | "qwen3.5-35b" | "qwen3.5-397b" | "qwen3-coder-next" => "qwen".to_string(),
         "minimax-m2.5" => "minimax".to_string(),
+        "LongCat-2.0" => "meituan".to_string(),
         _ if model.starts_with("claude-") => "anthropic".to_string(),
         _ => model.to_string(),
     }
@@ -322,6 +323,7 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
     all_records
 }
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

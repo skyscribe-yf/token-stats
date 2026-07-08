@@ -233,6 +233,7 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `OPENCODE_GO_AUTH_COOKIE` | unset | OpenCode-go `auth` cookie value (required for quota display) |
 | `XAI_API_KEY` | unset | Ainaiba/XAI API key for credit balance display (Bearer token passed to `api-xai.ainaibahub.com`) |
 | `OLLAMA_AUTH_COOKIE` | unset | Ollama cloud session cookie (`__Secure-session=...`) for quota card display |
+| `MEITUAN_AUTH_COOKIE` | unset | Meituan LongCat `passport_token_key` cookie value for quota card display |
 
 ---
 
