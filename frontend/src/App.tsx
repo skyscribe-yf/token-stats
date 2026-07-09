@@ -544,39 +544,38 @@ export default function App() {
     }
   }, 30_000, [appliedRange.from, appliedRange.to, tzOffset]);
 
+  // Mount-time fetch — poll interval doesn't fire until 30s later
+  useEffect(() => {
+    fetchQuota().then(setQuota).catch(() => {}).finally(() => setQuotaLoading(false));
+    fetchXunfei().then(setXunfei).catch(() => {}).finally(() => setXunfeiLoading(false));
+    fetchAinaibaCredit().then(setAinaibaCredit).catch(() => {}).finally(() => setAinaibaCreditLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Quota polling — visibility-aware
   useVisibleInterval(async () => {
     try {
-      const q = await fetchQuota();
-      setQuota(q);
+      setQuota(await fetchQuota());
     } catch {
       /* optional */
-    } finally {
-      setQuotaLoading(false);
     }
   }, 30_000, []);
 
   // Xunfei polling — visibility-aware
   useVisibleInterval(async () => {
     try {
-      const x = await fetchXunfei();
-      setXunfei(x);
+      setXunfei(await fetchXunfei());
     } catch {
       /* optional */
-    } finally {
-      setXunfeiLoading(false);
     }
   }, 30_000, []);
 
   // Ainaiba credit polling — visibility-aware
   useVisibleInterval(async () => {
     try {
-      const x = await fetchAinaibaCredit();
-      setAinaibaCredit(x);
+      setAinaibaCredit(await fetchAinaibaCredit());
     } catch {
       /* optional */
-    } finally {
-      setAinaibaCreditLoading(false);
     }
   }, 30_000, []);
 

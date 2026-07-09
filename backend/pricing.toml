@@ -88,7 +88,7 @@ holidays = [
 
 # 模型价格（USD per 1_000_000 tokens）
 # 用于 codex/claude-code 等无原始 cost 的源，从 token 用量计算
-# cache_write 对 OpenAI 模型等于 input（首次缓存按正常输入计费）
+# OpenAI cache_write 因模型而异；GPT-5.6 为 input 的 1.25 倍
 # 对 Anthropic 模型约为 input * 1.25（5 分钟缓存）
 [[model]]
 name = "gpt-5.5"
@@ -104,6 +104,52 @@ input = 10.00
 output = 45.00
 cache_read = 1.00
 cache_write = 10.00
+
+# GPT-5.6：短上下文官方价格；cache_write = input × 1.25
+[[model]]
+name = "gpt-5.6-sol"
+input = 5.00
+output = 30.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "gpt-5.6-sol"
+tier_threshold = 272000
+input = 10.00
+output = 45.00
+cache_read = 1.00
+cache_write = 12.50
+
+[[model]]
+name = "gpt-5.6-terra"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 3.125
+
+[[model]]
+name = "gpt-5.6-terra"
+tier_threshold = 272000
+input = 5.00
+output = 22.50
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "gpt-5.6-luna"
+input = 1.00
+output = 6.00
+cache_read = 0.10
+cache_write = 1.25
+
+[[model]]
+name = "gpt-5.6-luna"
+tier_threshold = 272000
+input = 2.00
+output = 9.00
+cache_read = 0.20
+cache_write = 2.50
 
 [[model]]
 name = "gpt-5.4"

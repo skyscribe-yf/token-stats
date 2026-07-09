@@ -929,6 +929,35 @@ mod tests {
     }
 
     #[test]
+    fn project_pricing_toml_has_gpt_5_6_base_and_long_context_tiers() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        let expected = [
+            ("gpt-5.6-sol", None, 5.0, 30.0, 0.5, 6.25),
+            ("gpt-5.6-sol", Some(272_000), 10.0, 45.0, 1.0, 12.5),
+            ("gpt-5.6-terra", None, 2.5, 15.0, 0.25, 3.125),
+            ("gpt-5.6-terra", Some(272_000), 5.0, 22.5, 0.5, 6.25),
+            ("gpt-5.6-luna", None, 1.0, 6.0, 0.1, 1.25),
+            ("gpt-5.6-luna", Some(272_000), 2.0, 9.0, 0.2, 2.5),
+        ];
+
+        for (name, tier_threshold, input, output, cache_read, cache_write) in expected {
+            assert!(
+                cfg.model.iter().any(|model| {
+                    model.name == name
+                        && model.tier_threshold == tier_threshold
+                        && (model.input - input).abs() < f64::EPSILON
+                        && (model.output - output).abs() < f64::EPSILON
+                        && (model.cache_read - cache_read).abs() < f64::EPSILON
+                        && (model.cache_write - cache_write).abs() < f64::EPSILON
+                }),
+                "missing or incorrect {name} tier {tier_threshold:?}"
+            );
+        }
+    }
+
+    #[test]
     fn kimi_cli_zero_cost_uses_per_token_estimate() {
         let _guard = pricing_test_guard();
         // kimi-cli records have cost=0 and provider="kimi"
