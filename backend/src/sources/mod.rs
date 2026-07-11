@@ -7,6 +7,7 @@
 mod ccswitch;
 mod claude_code;
 mod codex;
+mod grok_cli;
 mod kimi_cli;
 mod kimi_code;
 mod opencode;
@@ -23,6 +24,8 @@ use std::sync::OnceLock;
 pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
 pub use codex::CodexSource;
+pub(crate) use grok_cli::grok_usage_log_path;
+pub use grok_cli::GrokCliSource;
 pub use kimi_cli::KimiCliSource;
 pub use kimi_code::KimiCodeSource;
 pub use opencode::OpenCodeSource;
@@ -94,7 +97,9 @@ pub(crate) fn parse_iso_timestamp(ts: &str) -> (String, String) {
 /// Used as a fallback when the provider field is missing or generic.
 pub(crate) fn resolve_provider_from_model(model: &str) -> String {
     match model {
-        "kimi-for-coding" | "kimi-k2" | "kimi-k2.6" | "kimi-k2.5" | "kimi-k2.7" => "kimi".to_string(),
+        "kimi-for-coding" | "kimi-k2" | "kimi-k2.6" | "kimi-k2.5" | "kimi-k2.7" => {
+            "kimi".to_string()
+        }
         "astron-code-latest" => "xunfei".to_string(),
         "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
         "deepseek-v4-pro" | "deepseek-v4-flash" | "deepseek-v3.2" => "deepseek".to_string(),
@@ -187,6 +192,7 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
             Box::new(KimiCodeSource),
             Box::new(QoderSource),
             Box::new(QoderCnSource),
+            Box::new(GrokCliSource),
         ];
         if std::env::var("USE_CC_SWITCH").is_ok() {
             v.push(Box::new(CcSwitchSource));
@@ -420,7 +426,10 @@ mod tests {
     fn normalize_strips_thinking_level_suffixes() {
         assert_eq!(normalize_model_name("gpt-5.5:xhigh"), "gpt-5.5");
         assert_eq!(normalize_model_name("gpt-5.5:high"), "gpt-5.5");
-        assert_eq!(normalize_model_name("deepseek-v4-pro:xhigh"), "deepseek-v4-pro");
+        assert_eq!(
+            normalize_model_name("deepseek-v4-pro:xhigh"),
+            "deepseek-v4-pro"
+        );
         assert_eq!(normalize_model_name("kimi-k2.6:high"), "kimi-k2.6");
         assert_eq!(normalize_model_name("kimi-k2.6:xhigh"), "kimi-k2.6");
     }
@@ -430,7 +439,10 @@ mod tests {
         // Model names with colons that aren't thinking levels (e.g. qoder models)
         // should not be stripped
         let unknown = normalize_model_name("some-model:unknown");
-        assert_eq!(unknown, "some-model:unknown", "unknown colon suffix preserved");
+        assert_eq!(
+            unknown, "some-model:unknown",
+            "unknown colon suffix preserved"
+        );
     }
 
     #[test]
@@ -560,10 +572,16 @@ mod tests {
         }
 
         assert_eq!(renamed, 2, "exactly 2 records should be renamed");
-        assert_eq!(records[0].model, "kimi-for-coding", "before cutoff: unchanged");
+        assert_eq!(
+            records[0].model, "kimi-for-coding",
+            "before cutoff: unchanged"
+        );
         assert_eq!(records[1].model, "kimi-k2.7", "at cutoff: renamed");
         assert_eq!(records[2].model, "kimi-k2.7", "after cutoff: renamed");
-        assert_eq!(records[3].model, "kimi-for-coding", "non-kimi provider: unchanged");
+        assert_eq!(
+            records[3].model, "kimi-for-coding",
+            "non-kimi provider: unchanged"
+        );
         assert_eq!(records[4].model, "kimi-k2.7", "already k2.7: unchanged");
     }
 }

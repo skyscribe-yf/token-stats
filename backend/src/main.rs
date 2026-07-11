@@ -8,6 +8,7 @@ mod aggregator;
 mod ainaiba;
 mod app;
 mod config;
+mod grok_proxy;
 mod models;
 mod pricing;
 mod quota;
@@ -75,6 +76,7 @@ async fn main() {
     );
 
     pricing::init();
+    grok_proxy::spawn();
     let state = app::AppState::new();
     state.spawn_refresh_task();
 

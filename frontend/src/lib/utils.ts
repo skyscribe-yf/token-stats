@@ -166,6 +166,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   qoder: "#14b8a6",       // teal-500
   "qoder-cn": "#0d9488",   // teal-600
   meituan: "#facc15",      // yellow-400
+  "grok-cli": "#e11d48",  // rose-600
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -201,6 +202,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   qoder: "Qoder",
   "qoder-cn": "Qoder CN",
   meituan: "美团 LongCat",
+  "grok-cli": "Grok CLI",
 };
 
 export function getSourceColor(source: string): string {
