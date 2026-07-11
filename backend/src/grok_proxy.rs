@@ -165,7 +165,13 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
     };
     let mut headers = parts.headers;
     headers.remove(header::HOST);
-    let upstream = match reqwest::Client::new()
+    // ponytail: per-request client mirrors prior pattern; gzip decompression is
+    // required because YAI Router returns gzip-compressed SSE and bytes_stream()
+    // would otherwise hand us compressed bytes the usage parser cannot read.
+    let upstream = match reqwest::Client::builder()
+        .gzip(true)
+        .build()
+        .unwrap_or_default()
         .request(parts.method, url)
         .headers(headers)
         .body(body)
@@ -201,20 +207,35 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                     Some((Err(error), (upstream, captured, failed, config, is_sse)))
                 }
                 None => {
-                    if !failed {
+                    if failed {
+                        tracing::info!(
+                            "grok-proxy stream-end: FAILED flag set, {} bytes, is_sse={}",
+                            captured.len(),
+                            is_sse
+                        );
+                        None
+                    } else {
                         let record = if is_sse {
                             parse_sse_usage_record(&captured, Utc::now())
                         } else {
                             parse_usage_record(&captured, Utc::now())
                         };
+                        tracing::info!(
+                            "grok-proxy stream-end: {} bytes, is_sse={}, parsed={}, content-type-headers-captured-bytes-first64={}",
+                            captured.len(),
+                            is_sse,
+                            record.is_some(),
+                            std::str::from_utf8(&captured.get(..64).unwrap_or(&captured))
+                                .unwrap_or("<non-utf8>")
+                        );
                         if let Some(record) = record {
                             if let Err(error) = append_usage_record(&config.usage_log_path, &record)
                             {
                                 tracing::warn!("Could not append Grok usage record: {error}");
                             }
                         }
+                        None
                     }
-                    None
                 }
             }
         },
@@ -222,7 +243,12 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
 
     let mut response = Response::builder().status(status);
     for (name, value) in &headers {
-        if !is_hop_by_hop_header(name) && name != header::CONTENT_LENGTH {
+        // Drop Content-Encoding too: reqwest already decompressed the body, so
+        // forwarding it would make the client try to gunzip plaintext.
+        if !is_hop_by_hop_header(name)
+            && name != header::CONTENT_LENGTH
+            && name != header::CONTENT_ENCODING {
+            response = response.header(name, value);
             response = response.header(name, value);
         }
     }
@@ -324,6 +350,57 @@ mod tests {
             to_bytes(response.into_body(), usize::MAX).await.unwrap(),
             response_json
         );
+        assert_eq!(
+            std::fs::read_to_string(log_path).unwrap().lines().count(),
+            1
+        );
+    }
+
+    // Regression: YAI Router returns gzip-compressed SSE. The proxy must
+    // transparently decompress before parsing usage, otherwise bytes_stream()
+    // hands the parser compressed bytes and nothing gets recorded.
+    #[tokio::test]
+    async fn records_usage_from_gzip_compressed_sse_upstream() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let upstream = MockServer::start().await;
+        let sse = "event: response.completed\n\
+            data: {\"response\":{\"model\":\"grok-4.5\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(sse.as_bytes()).unwrap();
+        let gzipped = encoder.finish().unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-encoding", "gzip")
+                    .set_body_raw(gzipped, "text/event-stream"),
+            )
+            .mount(&upstream)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+
+        let response = proxy_response(
+            ProxyConfig::new(upstream.uri(), log_path.clone()),
+            Request::post("/v1/responses")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // Client receives decompressed SSE plaintext (Content-Encoding stripped).
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("response.completed")
+        );
+        // Proxy parsed the decompressed terminal event and recorded one line.
         assert_eq!(
             std::fs::read_to_string(log_path).unwrap().lines().count(),
             1

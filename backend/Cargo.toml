@@ -14,7 +14,7 @@ tracing = "0.1"
 flexi_logger = { version = "0.31", features = ["trc"] }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip"] }
 futures-util = "0.3"
 scraper = "0.22"
 toml = "0.8"
@@ -23,6 +23,7 @@ toml = "0.8"
 wiremock = "0.6"
 temp-env = "0.3"
 tempfile = "3"
+flate2 = "1"
 
 [profile.release]
 opt-level = 3
