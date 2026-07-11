@@ -1,0 +1,17 @@
+[Unit]
+Description=Token Stats Grok Usage Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=skyscribe
+WorkingDirectory=/home/skyscribe/srcs/token-stats/backend
+Environment="RUST_LOG=info"
+Environment="GROK_PROXY_PORT=3434"
+ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend --grok-proxy-only
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

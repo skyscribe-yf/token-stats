@@ -95,16 +95,23 @@ echo ""
 echo "🔧 Setting up systemd service..."
 
 SERVICE_FILE="$NGINX_DIR/token-stats@.service"
+PROXY_SERVICE_FILE="$NGINX_DIR/token-stats-grok-proxy.service"
 TMP_SERVICE="/tmp/token-stats@.service"
+TMP_PROXY_SERVICE="/tmp/token-stats-grok-proxy.service"
 
 sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
     -e "s|User=skyscribe|User=$(whoami)|g" \
     "$SERVICE_FILE" > "$TMP_SERVICE"
+sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
+    -e "s|User=skyscribe|User=$(whoami)|g" \
+    "$PROXY_SERVICE_FILE" > "$TMP_PROXY_SERVICE"
 
 if [ -d /etc/systemd/system ]; then
     sudo cp "$TMP_SERVICE" /etc/systemd/system/token-stats@.service
+    sudo cp "$TMP_PROXY_SERVICE" /etc/systemd/system/token-stats-grok-proxy.service
     sudo systemctl daemon-reload
-    echo "✅ Systemd template service installed"
+    sudo systemctl enable --now token-stats-grok-proxy.service
+    echo "✅ Systemd dashboard template and Grok proxy service installed"
     echo ""
     echo "   Start the service: sudo systemctl start token-stats@3000"
     echo "   Enable on boot:    sudo systemctl enable token-stats@3000"

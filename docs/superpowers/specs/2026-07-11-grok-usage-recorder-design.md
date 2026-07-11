@@ -10,7 +10,7 @@ Grok CLI session files under `~/.grok/sessions` contain cumulative context count
 
 ## Selected Approach
 
-The dashboard backend starts a second Axum listener on `127.0.0.1:${GROK_PROXY_PORT:-3434}`. Grok is configured to use this loopback URL as its model base URL. The proxy forwards requests to `GROK_UPSTREAM_BASE_URL`, defaulting to `https://api.yairouter.com`.
+A dedicated `token-stats-grok-proxy.service` starts the dashboard binary with `--grok-proxy-only` and owns `127.0.0.1:${GROK_PROXY_PORT:-3434}`. Dashboard instances do not start proxy listeners, so the stable Grok endpoint survives blue-green dashboard swaps. Grok is configured to use this loopback URL as its model base URL. The proxy forwards requests to `GROK_UPSTREAM_BASE_URL`, defaulting to `https://api.yairouter.com`.
 
 The proxy preserves the client's authorization header and does not store API keys. It streams upstream responses through unchanged. For a non-stream response or a terminal SSE `response.completed` event, it extracts only the model, completion timestamp, and API usage fields and appends one JSONL record to `~/.token-stats/grok-usage.jsonl`.
 
@@ -41,6 +41,8 @@ The frontend adds a Grok CLI label and source color. Existing filters and vendor
 - `GROK_PROXY_PORT`: loopback listener port, default `3434`
 - `GROK_UPSTREAM_BASE_URL`: upstream API base URL, default `https://api.yairouter.com`
 - `GROK_USAGE_LOG_PATH`: usage JSONL path, default `~/.token-stats/grok-usage.jsonl`
+
+`setup.sh` installs and starts the service. `deploy.sh` restarts it after the prior dashboard instance releases port `3434`.
 
 Grok's `models_base_url` changes to `http://127.0.0.1:3434/v1`; its existing API key remains in Grok configuration and is forwarded upstream.
 

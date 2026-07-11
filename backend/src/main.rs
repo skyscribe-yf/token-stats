@@ -32,6 +32,25 @@ struct Args {
     /// Log level (trace, debug, info, warn, error).  Also reads RUST_LOG env.
     #[arg(short = 'l', long = "log-level", default_value = "info")]
     log_level: String,
+
+    /// Run only the loopback Grok usage recorder.
+    #[arg(long)]
+    grok_proxy_only: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    #[test]
+    fn parses_grok_proxy_only_mode() {
+        let args = Args::try_parse_from(["token-stats-backend", "--grok-proxy-only"])
+            .expect("proxy-only flag should parse");
+
+        assert!(args.grok_proxy_only);
+    }
 }
 
 fn init_logging(log_level: &str) {
@@ -76,7 +95,13 @@ async fn main() {
     );
 
     pricing::init();
-    grok_proxy::spawn();
+    if args.grok_proxy_only {
+        grok_proxy::serve()
+            .await
+            .expect("Grok usage proxy stopped unexpectedly");
+        return;
+    }
+
     let state = app::AppState::new();
     state.spawn_refresh_task();
 

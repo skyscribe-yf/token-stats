@@ -188,8 +188,9 @@ echo "✅ Static files deployed"
 echo ""
 
 # ── 4. Install template service file ──────────────────────────────────
-echo "📋 Installing systemd template service..."
+echo "📋 Installing systemd services..."
 sudo cp "$PROJECT_DIR/nginx/token-stats@.service" /etc/systemd/system/token-stats@.service
+sudo cp "$PROJECT_DIR/nginx/token-stats-grok-proxy.service" /etc/systemd/system/token-stats-grok-proxy.service
 
 # ── 5. Inject environment variables for new instance ──────────────────
 NEW_INSTANCE="token-stats@$NEW_PORT"
@@ -342,10 +343,15 @@ for p in "${ACTIVE_PORTS[@]}"; do
 done
 echo ""
 
-# ── 11. Enable new instance for boot ──────────────────────────────────
+# ── 11. Start stable Grok proxy after old dashboard releases port 3434 ─
+echo "🟢 Restarting stable Grok usage proxy..."
+sudo systemctl restart token-stats-grok-proxy.service
+sudo systemctl enable token-stats-grok-proxy.service
+
+# ── 12. Enable new instance for boot ──────────────────────────────────
 sudo systemctl enable "$NEW_INSTANCE"
 
-# ── 12. Verify ────────────────────────────────────────────────────────
+# ── 13. Verify ────────────────────────────────────────────────────────
 echo "🧪 Verifying deployment..."
 sleep 1
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/token-stats/ 2>/dev/null || echo "000")

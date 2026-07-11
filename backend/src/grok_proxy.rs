@@ -247,26 +247,15 @@ fn build_router(config: ProxyConfig) -> Router {
         .with_state(config)
 }
 
-pub fn spawn() {
+pub async fn serve() -> std::io::Result<()> {
     let port = std::env::var("GROK_PROXY_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(3434);
-    let config = ProxyConfig::from_env();
-    tokio::spawn(async move {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        let listener = match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                tracing::error!("Could not bind Grok proxy on {addr}: {error}");
-                return;
-            }
-        };
-        tracing::info!("Grok usage proxy listening on http://{addr}");
-        if let Err(error) = axum::serve(listener, build_router(config)).await {
-            tracing::error!("Grok proxy stopped: {error}");
-        }
-    });
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("Grok usage proxy listening on http://{addr}");
+    axum::serve(listener, build_router(ProxyConfig::from_env())).await
 }
 
 #[cfg(test)]
