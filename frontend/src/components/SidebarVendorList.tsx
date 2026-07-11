@@ -1,4 +1,4 @@
-import { getVendorColor } from "../lib/utils";
+import { getVendorColor, getVendorLabel } from "../lib/utils";
 
 const SUBSCRIPTION_VENDORS = ["kimi", "xunfei", "opencode-go", "opencode"];
 
@@ -102,7 +102,7 @@ function VendorRow({
         className="w-2 h-2 rounded-full shrink-0"
         style={{ background: getVendorColor(vendor) }}
       />
-      <span className="truncate">{vendor}</span>
+      <span className="truncate">{getVendorLabel(vendor)}</span>
     </label>
   );
 }

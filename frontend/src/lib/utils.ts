@@ -191,6 +191,28 @@ export function getVendorColor(vendor: string): string {
   return VENDOR_COLORS[vendor] || "#94a3b8";
 }
 
+/** Display labels for vendors whose canonical (backend merge) name differs from
+ *  the user-facing brand. The backend still emits the canonical name; this map
+ *  only changes what is rendered. */
+export const VENDOR_LABELS: Record<string, string> = {
+  ainaba: "Yairouter",
+  xai: "Yairouter",
+};
+
+export function getVendorLabel(vendor: string | undefined): string {
+  if (!vendor) return "";
+  return VENDOR_LABELS[vendor] || vendor;
+}
+
+/** Relabel the vendor prefix of a `vendor/model` composite key, preserving
+ *  the model suffix. Bare keys (no slash) are treated as a vendor name. */
+export function getVendorModelLabel(key: string | undefined): string {
+  if (!key) return "";
+  const idx = key.indexOf("/");
+  if (idx === -1) return getVendorLabel(key);
+  return getVendorLabel(key.slice(0, idx)) + "/" + key.slice(idx + 1);
+}
+
 export const SOURCE_LABELS: Record<string, string> = {
   pi: "Pi",
   "claude-code": "Claude Code",

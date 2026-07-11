@@ -25,6 +25,7 @@ import {
   getSourceColor,
   getSourceLabel,
   getVendorColor,
+  getVendorLabel,
 } from "../../lib/utils";
 import type { StatsResponse, RpmAnalysis } from "../../api";
 
@@ -105,7 +106,7 @@ function VendorBreakdownTooltip({
   const p = payload[0];
   return (
     <div className="bg-white border border-slate-200 rounded-lg shadow-lg p-2 text-xs">
-      <p className="font-semibold text-slate-700 mb-0.5">{p.payload?.name}</p>
+      <p className="font-semibold text-slate-700 mb-0.5">{getVendorLabel(p.payload?.name)}</p>
       <p className="text-slate-600">
         {metric === "cost"
           ? formatCost(Number(p.value ?? 0))
@@ -518,6 +519,7 @@ export const UsageSection = React.memo(function UsageSection({
                 dataKey="name"
                 tick={{ fontSize: 10, fill: "#64748b" }}
                 width={80}
+                tickFormatter={getVendorLabel}
               />
               <Tooltip
                 content={<VendorBreakdownTooltip metric={vendorBreakdownMetric} />}

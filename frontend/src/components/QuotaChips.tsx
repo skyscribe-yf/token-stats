@@ -158,7 +158,7 @@ function buildQuotaChips(
         chips.push({
           id: `ainaiba-balance-${i}`,
           cardId: "quota-ainaiba",
-          vendor: "Ainaiba",
+          vendor: "Yairouter",
           scope: `卡${i + 1}`,
           display: `¥${(card.balance ?? card.amount).toFixed(2)}`,
           pct: null,
@@ -169,7 +169,7 @@ function buildQuotaChips(
       chips.push({
         id: "ainaiba-balance",
         cardId: "quota-ainaiba",
-        vendor: "Ainaiba",
+        vendor: "Yairouter",
         scope: "余",
         display: `¥${a.balance.toFixed(2)}`,
         pct: null,

@@ -10,6 +10,7 @@ import {
   Legend,
 } from "recharts";
 import { X } from "lucide-react";
+import { getVendorLabel, getVendorModelLabel } from "../lib/utils";
 import type { TpsAnalysis } from "../api";
 
 // Generate distinct colors for models
@@ -250,7 +251,7 @@ export const TpsChart = memo(function TpsChart({ tpsData, loading }: TpsChartPro
                   className="w-2 h-2 rounded-full"
                   style={{ background: isSelected ? color : "#94a3b8" }}
                 />
-                {model}
+                {getVendorModelLabel(model)}
                 {isSelected && (
                   <X className="w-2.5 h-2.5 ml-0.5 opacity-60" />
                 )}
@@ -336,7 +337,7 @@ export const TpsChart = memo(function TpsChart({ tpsData, loading }: TpsChartPro
                         }}
                       />
                       <span style={{ color: "#64748b" }}>
-                        {(() => { const parts = String(entry.name).split("/"); return parts[0] + " / " + parts[1]; })()}:
+                        {(() => { const parts = String(entry.name).split("/"); return getVendorLabel(parts[0]) + " / " + parts.slice(1).join("/"); })()}:
                       </span>
                       <span style={{ fontWeight: 500, color: "#334155" }}>
                         {Number(entry.value).toFixed(1)} TPS
@@ -349,7 +350,7 @@ export const TpsChart = memo(function TpsChart({ tpsData, loading }: TpsChartPro
           />
           <Legend
             wrapperStyle={{ fontSize: 10 }}
-            formatter={(value: string) => value}
+            formatter={(value: string) => getVendorModelLabel(value)}
           />
           {Array.from(modelColorMap.entries()).map(([model, color]) => (
             <>

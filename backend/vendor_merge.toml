@@ -9,7 +9,7 @@ providers = ["kimi", "kimi-coding", "kimi-code"]
 
 [[vendor_group]]
 name = "ainaba"
-providers = ["openai", "ainaiba"]
+providers = ["openai", "ainaiba", "xai"]
 
 [[vendor_group]]
 name = "ollama"

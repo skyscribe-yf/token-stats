@@ -24,6 +24,7 @@ import {
   formatTime,
   getSourceColor,
   getSourceLabel,
+  getVendorLabel,
 } from "../../lib/utils";
 import {
   buildPivotTree,
@@ -440,7 +441,7 @@ export const RequestsSection = memo(function RequestsSection({
                             style={{ background: getSourceColor(provider) }}
                           />
                           <span className="font-bold text-slate-800">
-                            {provider}
+                            {getVendorLabel(provider)}
                           </span>
                         </div>
                       </td>
@@ -944,7 +945,7 @@ export const RequestsSection = memo(function RequestsSection({
                       className="text-xs font-medium"
                       style={{ color: getSourceColor(r.provider) }}
                     >
-                      {r.provider}
+                      {getVendorLabel(r.provider)}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-slate-600">

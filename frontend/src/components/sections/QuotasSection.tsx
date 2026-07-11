@@ -294,7 +294,7 @@ function AinaibaCard({
       <CardHeader
         active={!!status?.available}
         loading={loading}
-        name="Ainaiba"
+        name="Yairouter"
         suffix="api.yairouter"
         cycleCountdown={cycleCountdown}
       />

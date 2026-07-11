@@ -815,9 +815,9 @@ export default function App() {
       if (abRatio <= 0.2) {
         alerts.push({
           id: "ainaiba_quota_low",
-          provider: "Ainaiba",
+          provider: "Yairouter",
           type: "quota_low",
-          message: "Ainaiba 额度余量不足",
+          message: "Yairouter 额度余量不足",
           detail: `剩余 ${(abRatio * 100).toFixed(0)}%，建议切换至其他模型`,
         });
       }
@@ -827,9 +827,9 @@ export default function App() {
       if (isWithin24Hours(ainaibaCredit.data.expires_at)) {
         alerts.push({
           id: "ainaiba_expiring",
-          provider: "Ainaiba",
+          provider: "Yairouter",
           type: "expiring_soon",
-          message: "Ainaiba 额度即将到期",
+          message: "Yairouter 额度即将到期",
           detail: `到期日: ${ainaibaCredit.data.expires_at.slice(0, 10)}`,
         });
       }
