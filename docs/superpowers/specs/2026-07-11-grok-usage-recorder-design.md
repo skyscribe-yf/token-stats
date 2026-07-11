@@ -42,7 +42,7 @@ The frontend adds a Grok CLI label and source color. Existing filters and vendor
 - `GROK_UPSTREAM_BASE_URL`: upstream API base URL, default `https://api.yairouter.com`
 - `GROK_USAGE_LOG_PATH`: usage JSONL path, default `~/.token-stats/grok-usage.jsonl`
 
-Grok's `models_base_url` changes to `http://127.0.0.1:3434`; its existing API key remains in Grok configuration and is forwarded upstream.
+Grok's `models_base_url` changes to `http://127.0.0.1:3434/v1`; its existing API key remains in Grok configuration and is forwarded upstream.
 
 ## Error Handling
 
