@@ -168,6 +168,8 @@ pub fn normalize_model_name(model: &str) -> String {
         "xop3qwencodernext" => "qwen3-coder-next".to_string(),
         // MiniMax family
         "xminimaxm25" => "minimax-m2.5".to_string(),
+        // Grok: -build is a preview variant of the same base model
+        "grok-4.5-build" => "grok-4.5".to_string(),
         _ => model.to_string(),
     }
 }
@@ -394,6 +396,13 @@ mod tests {
         assert_eq!(normalize_model_name("gpt-5.5"), "gpt-5.5");
         assert_eq!(normalize_model_name("deepseek-v4-pro"), "deepseek-v4-pro");
         assert_eq!(normalize_model_name("kimi-for-coding"), "kimi-for-coding");
+    }
+
+    #[test]
+    fn normalize_model_name_merges_grok_build_variant() {
+        assert_eq!(normalize_model_name("grok-4.5-build"), "grok-4.5");
+        // Base model is unchanged
+        assert_eq!(normalize_model_name("grok-4.5"), "grok-4.5");
     }
 
     #[test]
