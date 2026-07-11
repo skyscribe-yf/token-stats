@@ -1,0 +1,125 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="google" content="notranslate"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/><meta name="format-detection" content="telephone=no"/><link rel="icon" href="https://s3plus.meituan.net/aigc-media-resources/longcat/yeqian-logo.svg"/><title translate="no">LongCatAI · API开放平台</title><meta name="description" content="API 接入、Token 购买、产品反馈，LongCat AI 能力触手可及。"/><meta property="og:type" content="website"/><meta property="og:title" content="LongCatAI · API开放平台"/><meta property="og:description" content="API 接入、Token 购买、产品反馈，LongCat AI 能力触手可及。"/><meta property="og:image" content="https://s3plus.meituan.net/aigc-media-resources/longcat/cat-logo.png"/><meta name="twitter:card" content="summary"/><meta name="twitter:title" content="LongCatAI · API开放平台"/><meta name="twitter:description" content="API 接入、Token 购买、产品反馈，LongCat AI 能力触手可及。"/><link rel="dns-prefetch" href="//lx.meituan.net"/><link rel="dns-prefetch" href="//lx1.meituan.net"/><link rel="dns-prefetch" href="//plx.meituan.com"/><link rel="dns-prefetch" href="//analytics.meituan.net"/><link rel="dns-prefetch" href="//wreport.meituan.net"/><link rel="dns-prefetch" href="//report.meituan.com"/><script>'use strict';
+      !(function (u, d) {
+        var t = 'owl',
+          e = '_Owl_',
+          n = 'Owl',
+          r = 'start',
+          c = 'error',
+          p = 'on' + c,
+          f = u[p],
+          h = 'addEventListener',
+          l = 'attachEvent',
+          v = 'isReady',
+          b = 'dataSet';
+        ((u[t] =
+          u[t] ||
+          function () {
+            try {
+              u[t].q = u[t].q || [];
+              var e = [].slice.call(arguments);
+              e[0] === r ? (u[n] && u[n][r] ? u[n][r](e[1]) : u[t].q.unshift(e)) : u[t].q.push(e);
+            } catch (e) {}
+          }),
+          (u[e] = u[e] || {
+            preTasks: [],
+            pageData: [],
+            use: function (e, t) {
+              this[v] ? u[n][e](t) : this.preTasks.push({ api: e, data: [t] });
+            },
+            run: function (t) {
+              if (!(t = this).runned) {
+                ((t.runned = !0),
+                  (t[b] = []),
+                  (u[p] = function () {
+                    (t[v] || t[b].push({ type: 'jsError', data: arguments }), f && f.apply(u, arguments));
+                  }),
+                  u[h] &&
+                    u[h]('unhandledrejection', function (e) {
+                      t[v] || t[b].push({ type: 'jsError', data: [e] });
+                    }));
+                var e = function (e) {
+                  !t[v] && e && t[b].push({ type: 'resError', data: [e] });
+                };
+                u[h] ? u[h](c, e, !0) : u[l] && u[l](p, e);
+                var n = 'MutationObserver',
+                  r = u[n] || u['WebKit' + n] || u['Moz' + n],
+                  a = u.performance || u.WebKitPerformance,
+                  s = 'disableMutaObserver';
+                if (r && a && a.now)
+                  try {
+                    var i = -1,
+                      o = u.navigator.userAgent;
+                    (-1 < o.indexOf('compatible') && -1 < o.indexOf('MSIE')
+                      ? (new RegExp('MSIE (\\d+\\.\\d+);').test(o), (i = parseFloat(RegExp.$1)))
+                      : -1 < o.indexOf('Trident') && -1 < o.indexOf('rv:11.0') && (i = 11),
+                      -1 !== i && i <= 11
+                        ? (t[s] = !0)
+                        : (t.observer = new r(function (e) {
+                            t.pageData.push({
+                              mutations: e,
+                              startTime: a.now(),
+                            });
+                          })).observe(d, { childList: !0, subtree: !0 }));
+                  } catch (e) {}
+                else t[s] = !0;
+              }
+            },
+          }),
+          u[e].runned || u[e].run());
+      })(window, document);</script><script>(function () {
+        var userAgent = navigator.userAgent;
+        var isMobileDevice = /iPhone|iPad|iPod|Android|Mobile|BlackBerry|webOS|Windows Phone/i.test(userAgent);
+        function updateHtmlClasses() {
+          var htmlElement = document.documentElement;
+          htmlElement.classList.remove('mobile', 'is-ios', 'is-iphone', 'is-android');
+          var isSmallScreen = window.innerWidth < 820;
+          if (isMobileDevice || isSmallScreen) {
+            htmlElement.classList.add('mobile');
+          }
+          if (/iPhone/.test(userAgent)) {
+            htmlElement.classList.add('is-ios', 'is-iphone');
+          } else if (/iPad|iPod/.test(userAgent)) {
+            htmlElement.classList.add('is-ios');
+          } else if (/Android/.test(userAgent)) {
+            htmlElement.classList.add('is-android');
+          }
+        }
+        updateHtmlClasses();
+        var resizeTimer;
+        window.addEventListener('resize', function () {
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(updateHtmlClasses, 100);
+        });
+        window.updateHtmlClasses = updateHtmlClasses;
+      })();</script><script>// 灵犀自执行函数代码开始（以下这部分不能动）
+      !(function (win, doc, ns) {
+        win['_MeiTuanALogObject'] = ns;
+        if (!win[ns]) {
+          var _LX = function () {
+            var t = function () {
+              var inst = function () {
+                inst.q.push([arguments, +new Date()]);
+              };
+              inst.q = [];
+              t.q.push([arguments, inst]);
+              return inst;
+            };
+            t.q = [];
+            t.t = +new Date();
+            _LX.q.push([arguments, t]);
+            return t;
+          };
+          _LX.q = _LX.q || [];
+          _LX.l = +new Date();
+          win[ns] = _LX;
+        }
+      })(window, document, 'LXAnalytics');
+      // 灵犀种子代码结束（以上这部分不能动)
+      // 灵犀初始化配置
+      LXAnalytics('config', {
+        defaultCategory: 'smartassistant', // 页面默认通道
+        appName: 'longcat-web', // 页面应用名
+        isDev: 'production' !== 'production',
+        onVisibilityChangeAutoPV: false,
+        onWindowFocusAutoPV: false,
+      });</script><script src="//lx.meituan.net/lx.5.min.js" async></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/1792.a9128d4a6fda95899042.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/5893.3372c0a7e795731aacc2.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/7027.3343fad0cc0203535a74.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/530.11ce686a6e317ff1175e.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/5242.f31e16929b60f24261aa.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/8922.ebb4cb00daeef05ce49c.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/5675.171aed6e83fad6c8a25c.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/2525.07c5316ed494993b9e5b.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/5891.d7165a8afe748d852221.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/1731.de46a00f6587feb81a50.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/4077.e926c39e30456cbac68d.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/6415.d121629520e42525d44c.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/6498.7767af074dffe3f0f548.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/2475.694e70cb9fe71be0e18e.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/7741.6ca59ef6bca2888f5c08.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/8818.c374b29295b8460b8770.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/3307.96d08412182ac4ab3fe7.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/3563.69015797be12635da22b.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/8705.298353feeec7b10d1bed.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/2196.88d518fa7ce2eef23a19.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/9373.5fc9fe0a84f438ac9431.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/7598.26007882b2fe3777d31b.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/8498.c0299d7f4156fc434c30.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/2557.0c9a4cd69fdeea776606.js"></script><script defer="defer" src="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/js/index.5e65a22ce99dde6a7733.js"></script><link href="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/css/9585.65772bc5ab038f57256c.css" rel="stylesheet"><link href="//s3.meituan.net/static-prod01/com.sankuai.friday.longcat.platform/css/index.5095808488533f730bc4.css" rel="stylesheet"></head><body><script crossorigin="anonymous" src="https://s3.meituan.net/mnpm-cdn/@mtfe-mt-apm-web-1.14.1/owl_1.14.1.min.js"></script><script>window.__BUNDLE_MD5__ = '45eaa0445b5f_20260702-15:49:40';</script><script src="//res.wx.qq.com/open/js/jweixin-1.6.0.js"></script><div id="app"></div></body></html>

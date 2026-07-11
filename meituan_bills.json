@@ -1,0 +1,1 @@
+{"code":0,"msg":"success","data":{"total":1,"pageNo":1,"pageSize":12,"bills":[{"billMonth":"2026-07","totalTokens":95848516,"prepaidTokens":1229636,"paygoTokens":0,"paygoCostCent":0,"paygoRechargeCent":0,"paygoCost":{"primary":{"currency":"CNY","amount":"0.00"},"secondary":null},"paygoRecharge":{"primary":{"currency":"CNY","amount":"0.00"},"secondary":null}}]}}

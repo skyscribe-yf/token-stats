@@ -1,0 +1,1 @@
+{"code":0,"msg":"success","data":{"paygoBalanceCent":0,"paygoStatus":"NORMAL","rechargeEnabled":true,"statusTip":"账户余额已耗尽，请及时充值以确保 API 正常使用","paygoBalance":{"primary":{"currency":"CNY","amount":"0.00"},"secondary":null},"exchangeRate":6.8}}
