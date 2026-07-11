@@ -194,6 +194,24 @@ output = 5.00
 cache_read = 0.10
 cache_write = 1.25
 
+# Yairouter Grok 4.5: effective USD/M values that reproduce the observed
+# CNY credit deduction with usd_to_cny = 6.82. The rate doubles once total
+# input (uncached input + cache read + cache write) reaches 200K tokens.
+# cache_write is deliberately omitted: it was zero in all measured requests
+# and xAI does not document a separate cache-write price.
+[[model]]
+name = "grok-4.5"
+input = 2.052785924
+output = 6.158357771
+cache_read = 0.513196481
+
+[[model]]
+name = "grok-4.5"
+tier_threshold = 200000
+input = 4.105571848
+output = 12.316715543
+cache_read = 1.026392962
+
 # DeepSeek 模型价格（USD per 1_000_000 tokens）
 # 官方定价（CNY）：v4-pro input=4, cache_read=0.4, output=16
 #                     v4-flash input=1, cache_read=0.1, output=4
