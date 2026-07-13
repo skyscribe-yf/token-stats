@@ -15,23 +15,54 @@ const GROK_SOURCE: &str = "grok-cli";
 
 #[derive(Clone)]
 pub struct ProxyConfig {
-    upstream_base_url: String,
+    yai_upstream_base_url: String,
+    xai_upstream_base_url: String,
     usage_log_path: PathBuf,
 }
 
+#[derive(Clone)]
+struct ResolvedRoute {
+    upstream_base_url: String,
+    provider: &'static str,
+    canonical_model: &'static str,
+}
+
 impl ProxyConfig {
+    #[cfg(test)]
     fn new(upstream_base_url: String, usage_log_path: PathBuf) -> Self {
         Self {
-            upstream_base_url: upstream_base_url.trim_end_matches('/').to_string(),
+            yai_upstream_base_url: upstream_base_url.trim_end_matches('/').to_string(),
+            xai_upstream_base_url: "https://api.x.ai".to_string(),
             usage_log_path,
         }
     }
 
     fn from_env() -> Self {
-        let upstream_base_url = std::env::var("GROK_UPSTREAM_BASE_URL")
+        let yai_upstream_base_url = std::env::var("GROK_YAI_UPSTREAM_BASE_URL")
+            .or_else(|_| std::env::var("GROK_UPSTREAM_BASE_URL"))
             .unwrap_or_else(|_| "https://api.yairouter.com".to_string());
+        let xai_upstream_base_url = std::env::var("GROK_XAI_UPSTREAM_BASE_URL")
+            .unwrap_or_else(|_| "https://api.x.ai".to_string());
         let usage_log_path = crate::sources::grok_usage_log_path();
-        Self::new(upstream_base_url, usage_log_path)
+        Self {
+            yai_upstream_base_url: yai_upstream_base_url.trim_end_matches('/').to_string(),
+            xai_upstream_base_url: xai_upstream_base_url.trim_end_matches('/').to_string(),
+            usage_log_path,
+        }
+    }
+
+    fn resolve_route(&self, model: &str) -> Option<ResolvedRoute> {
+        let (upstream_base_url, provider) = match model {
+            "grok-4.5-yai" => (&self.yai_upstream_base_url, "yai-router"),
+            "grok-4.5-xai" => (&self.xai_upstream_base_url, "xai-official"),
+            _ => return None,
+        };
+
+        Some(ResolvedRoute {
+            upstream_base_url: upstream_base_url.clone(),
+            provider,
+            canonical_model: "grok-4.5",
+        })
     }
 }
 
@@ -40,14 +71,11 @@ struct ResponsePayload {
     #[serde(default)]
     response: Option<ResponseData>,
     #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
     usage: Option<Usage>,
 }
 
 #[derive(Deserialize)]
 struct ResponseData {
-    model: String,
     usage: Usage,
 }
 
@@ -67,7 +95,12 @@ struct InputTokenDetails {
     cache_write_tokens: i64,
 }
 
-fn parse_sse_usage_record(body: &[u8], recorded_at: DateTime<Utc>) -> Option<TokenRecord> {
+fn parse_sse_usage_record(
+    body: &[u8],
+    recorded_at: DateTime<Utc>,
+    provider: &str,
+    canonical_model: &str,
+) -> Option<TokenRecord> {
     let body = std::str::from_utf8(body).ok()?;
     for frame in body.split("\n\n") {
         if !frame
@@ -77,24 +110,20 @@ fn parse_sse_usage_record(body: &[u8], recorded_at: DateTime<Utc>) -> Option<Tok
             continue;
         }
         if let Some(data) = frame.lines().find_map(|line| line.strip_prefix("data: ")) {
-            return parse_usage_record(data.as_bytes(), recorded_at);
+            return parse_usage_record(data.as_bytes(), recorded_at, provider, canonical_model);
         }
     }
     None
 }
 
-fn parse_usage_record(body: &[u8], recorded_at: DateTime<Utc>) -> Option<TokenRecord> {
-    let ResponsePayload {
-        response,
-        model,
-        usage,
-    } = serde_json::from_slice(body).ok()?;
-    let response = response.or_else(|| {
-        Some(ResponseData {
-            model: model?,
-            usage: usage?,
-        })
-    })?;
+fn parse_usage_record(
+    body: &[u8],
+    recorded_at: DateTime<Utc>,
+    provider: &str,
+    canonical_model: &str,
+) -> Option<TokenRecord> {
+    let ResponsePayload { response, usage } = serde_json::from_slice(body).ok()?;
+    let response = response.or_else(|| Some(ResponseData { usage: usage? }))?;
     let cache_read_tokens = response.usage.input_tokens_details.cached_tokens;
     let cache_write_tokens = response.usage.input_tokens_details.cache_write_tokens;
     let input_tokens =
@@ -104,9 +133,9 @@ fn parse_usage_record(body: &[u8], recorded_at: DateTime<Utc>) -> Option<TokenRe
         date: recorded_at.format("%Y-%m-%d").to_string(),
         time: recorded_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         api_key_prefix: String::new(),
-        provider: "xai".to_string(),
+        provider: provider.to_string(),
         original_provider: None,
-        model: response.model,
+        model: canonical_model.to_string(),
         source: GROK_SOURCE.to_string(),
         input_tokens,
         output_tokens: response.usage.output_tokens,
@@ -155,7 +184,6 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
         .path_and_query()
         .map(|value| value.as_str())
         .unwrap_or("/v1/responses");
-    let url = format!("{}{}", config.upstream_base_url, path_and_query);
     let body = match to_bytes(body, usize::MAX).await {
         Ok(body) => body,
         Err(error) => {
@@ -163,6 +191,28 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
             return StatusCode::BAD_REQUEST.into_response();
         }
     };
+    let mut request_body: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!("Could not parse Grok proxy request JSON: {error}");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+    let Some(model) = request_body.get("model").and_then(|value| value.as_str()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(route) = config.resolve_route(model) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    request_body["model"] = serde_json::Value::String(route.canonical_model.to_string());
+    let body = match serde_json::to_vec(&request_body) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!("Could not serialize Grok proxy request JSON: {error}");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+    let url = format!("{}{}", route.upstream_base_url, path_and_query);
     let mut headers = parts.headers;
     headers.remove(header::HOST);
     // ponytail: per-request client mirrors prior pattern; gzip decompression is
@@ -192,19 +242,30 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/event-stream"));
     let stream = stream::unfold(
-        (upstream.bytes_stream(), Vec::new(), false, config, is_sse),
-        |(mut upstream, mut captured, mut failed, config, is_sse)| async move {
+        (
+            upstream.bytes_stream(),
+            Vec::new(),
+            false,
+            config,
+            is_sse,
+            route.provider,
+            route.canonical_model,
+        ),
+        |(mut upstream, mut captured, mut failed, config, is_sse, provider, canonical_model)| async move {
             match upstream.next().await {
                 Some(Ok(chunk)) => {
                     captured.extend_from_slice(&chunk);
                     Some((
                         Ok::<_, reqwest::Error>(chunk),
-                        (upstream, captured, failed, config, is_sse),
+                        (upstream, captured, failed, config, is_sse, provider, canonical_model),
                     ))
                 }
                 Some(Err(error)) => {
                     failed = true;
-                    Some((Err(error), (upstream, captured, failed, config, is_sse)))
+                    Some((
+                        Err(error),
+                        (upstream, captured, failed, config, is_sse, provider, canonical_model),
+                    ))
                 }
                 None => {
                     if failed {
@@ -216,16 +277,16 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                         None
                     } else {
                         let record = if is_sse {
-                            parse_sse_usage_record(&captured, Utc::now())
+                            parse_sse_usage_record(&captured, Utc::now(), provider, canonical_model)
                         } else {
-                            parse_usage_record(&captured, Utc::now())
+                            parse_usage_record(&captured, Utc::now(), provider, canonical_model)
                         };
                         tracing::info!(
                             "grok-proxy stream-end: {} bytes, is_sse={}, parsed={}, content-type-headers-captured-bytes-first64={}",
                             captured.len(),
                             is_sse,
                             record.is_some(),
-                            std::str::from_utf8(&captured.get(..64).unwrap_or(&captured))
+                            std::str::from_utf8(captured.get(..64).unwrap_or(&captured))
                                 .unwrap_or("<non-utf8>")
                         );
                         if let Some(record) = record {
@@ -286,6 +347,7 @@ pub async fn serve() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::TokenRecord;
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -304,10 +366,12 @@ mod tests {
         let record = parse_usage_record(
             br#"{"model":"grok-4.5","usage":{"input_tokens":120,"output_tokens":30,"input_tokens_details":{"cached_tokens":40}}}"#,
             Utc::now(),
+            "yai-router",
+            "grok-4.5",
         )
         .expect("usage record");
 
-        assert_eq!(record.provider, "xai");
+        assert_eq!(record.provider, "yai-router");
         assert_eq!(record.input_tokens, 80);
         assert_eq!(record.cache_read_tokens, 40);
         assert_eq!(record.output_tokens, 30);
@@ -319,6 +383,8 @@ mod tests {
         let record = super::parse_sse_usage_record(
             b"event: response.completed\ndata: {\"response\":{\"model\":\"grok-4.5\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n",
             Utc::now(),
+            "yai-router",
+            "grok-4.5",
         )
         .expect("usage record");
 
@@ -328,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn forwards_response_and_records_terminal_usage() {
         let upstream = MockServer::start().await;
-        let response_json = r#"{"model":"grok-4.5","usage":{"input_tokens":10,"output_tokens":2}}"#;
+        let response_json = r#"{"model":"grok-4.5-provider-version","usage":{"input_tokens":10,"output_tokens":2}}"#;
         Mock::given(method("POST"))
             .and(path("/v1/responses"))
             .respond_with(ResponseTemplate::new(200).set_body_string(response_json))
@@ -338,9 +404,13 @@ mod tests {
         let log_path = dir.path().join("grok-usage.jsonl");
 
         let response = proxy_response(
-            ProxyConfig::new(upstream.uri(), log_path.clone()),
+            ProxyConfig {
+                yai_upstream_base_url: upstream.uri(),
+                xai_upstream_base_url: upstream.uri(),
+                usage_log_path: log_path.clone(),
+            },
             Request::post("/v1/responses")
-                .body(Body::from("{}"))
+                .body(Body::from(r#"{"model":"grok-4.5-xai"}"#))
                 .unwrap(),
         )
         .await;
@@ -351,9 +421,131 @@ mod tests {
             response_json
         );
         assert_eq!(
-            std::fs::read_to_string(log_path).unwrap().lines().count(),
+            std::fs::read_to_string(&log_path).unwrap().lines().count(),
             1
         );
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(&log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "xai-official");
+        assert_eq!(record.model, "grok-4.5");
+    }
+
+    #[tokio::test]
+    async fn routes_official_alias_to_xai_and_rewrites_the_model() {
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.5","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&xai)
+            .await;
+        let dir = tempdir().unwrap();
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                usage_log_path: dir.path().join("grok-usage.jsonl"),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer official-key")
+                .body(Body::from(r#"{"model":"grok-4.5-xai"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(yai.received_requests().await.unwrap().is_empty());
+        let requests = xai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.5");
+        assert_eq!(
+            requests[0]
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer official-key"
+        );
+    }
+
+    #[tokio::test]
+    async fn routes_yai_alias_to_yai_and_records_its_provider() {
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.5-provider-version","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&yai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer yai-key")
+                .body(Body::from(r#"{"model":"grok-4.5-yai"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(xai.received_requests().await.unwrap().is_empty());
+        let requests = yai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.5");
+        assert_eq!(
+            requests[0]
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer yai-key"
+        );
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "yai-router");
+        assert_eq!(record.model, "grok-4.5");
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_model_alias_without_forwarding() {
+        let upstream = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let response = proxy_response(
+            ProxyConfig::new(upstream.uri(), dir.path().join("grok-usage.jsonl")),
+            Request::post("/v1/responses")
+                .body(Body::from(r#"{"model":"unknown-model"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(upstream.received_requests().await.unwrap().is_empty());
     }
 
     // Regression: YAI Router returns gzip-compressed SSE. The proxy must
@@ -387,7 +579,7 @@ mod tests {
         let response = proxy_response(
             ProxyConfig::new(upstream.uri(), log_path.clone()),
             Request::post("/v1/responses")
-                .body(Body::from("{}"))
+                .body(Body::from(r#"{"model":"grok-4.5-yai"}"#))
                 .unwrap(),
         )
         .await;
