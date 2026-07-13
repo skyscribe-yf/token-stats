@@ -809,9 +809,13 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         }
     }
 
-    // 6. Derived sources without original cost: codex, claude-code, kimi-code, etc.
+    // 6. Derived sources without original cost: codex, claude-code, kimi-code, Grok CLI, etc.
     //    Compute from per-model token rates. pricing.toml model prices are in USD.
-    if record.source == "codex" || record.source == "claude-code" || record.source == "kimi-code" {
+    if record.source == "codex"
+        || record.source == "claude-code"
+        || record.source == "kimi-code"
+        || record.source == "grok-cli"
+    {
         if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
             let usd = mp.compute_usd(
                 record.input_tokens,
@@ -1077,6 +1081,39 @@ mod tests {
         let record = make_record("pi", "openai", "gpt-5.5", 1_000_000, 0.0);
         let cost = display_cost(&record);
         assert_eq!(cost, 0.0, "non-kimi zero-cost record should return 0");
+    }
+
+    #[test]
+    fn grok_cli_zero_cost_uses_grok_model_pricing() {
+        let _guard = pricing_test_guard();
+        let previous_config = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.82
+rate_date = "2026-05-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 68.2
+
+[[model]]
+name = "grok-4.5"
+input = 2.0
+output = 6.0
+cache_read = 0.5
+cache_write = 0.0
+"#,
+        );
+        let record = make_record("grok-cli", "xai-official", "grok-4.5", 1_000_000, 0.0);
+
+        assert!(
+            display_cost(&record) > 0.0,
+            "Grok CLI records should derive cost from pricing.toml"
+        );
+        restore_pricing_env(previous_config);
     }
 
     #[test]
