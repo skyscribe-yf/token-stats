@@ -188,12 +188,11 @@ fn record_matches_bound(
 }
 
 pub fn paginate_requests(
-    mut records: Vec<&TokenRecord>,
+    records: Vec<&TokenRecord>,
     page: usize,
     limit: usize,
     tz: Option<&FixedOffset>,
 ) -> PaginatedRequests {
-    records.retain(|record| record.source != "grok-cli");
     let total = records.len();
     // Guard: avoid divide-by-zero and negative start index
     let page = page.max(1);
@@ -1407,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_records_are_excluded_from_paginated_requests() {
+    fn grok_records_are_included_in_paginated_requests() {
         let records = vec![
             record("grok-cli", "xai", "grok-4.5", "2026-07-11T10:00:00Z", 10),
             record("pi", "openai", "gpt-5.5", "2026-07-11T11:00:00Z", 10),
@@ -1415,8 +1414,8 @@ mod tests {
 
         let page = paginate_requests(vec![&records[0], &records[1]], 1, 50, None);
 
-        assert_eq!(page.total, 1);
-        assert_eq!(page.data[0].source, "pi");
+        assert_eq!(page.total, 2);
+        assert!(page.data.iter().any(|request| request.source == "grok-cli"));
     }
 
     fn local_dt(

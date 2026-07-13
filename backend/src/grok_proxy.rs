@@ -308,7 +308,8 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
         // forwarding it would make the client try to gunzip plaintext.
         if !is_hop_by_hop_header(name)
             && name != header::CONTENT_LENGTH
-            && name != header::CONTENT_ENCODING {
+            && name != header::CONTENT_ENCODING
+        {
             response = response.header(name, value);
             response = response.header(name, value);
         }
@@ -587,11 +588,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         // Client receives decompressed SSE plaintext (Content-Encoding stripped).
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(
-            std::str::from_utf8(&body)
-                .unwrap()
-                .contains("response.completed")
-        );
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("response.completed"));
         // Proxy parsed the decompressed terminal event and recorded one line.
         assert_eq!(
             std::fs::read_to_string(log_path).unwrap().lines().count(),

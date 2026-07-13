@@ -962,6 +962,28 @@ mod tests {
     }
 
     #[test]
+    fn grok_cli_zero_cost_uses_configured_high_tier_price() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // 500K uncached input reaches the 200K Grok tier. The canonical
+        // ainaba provider applies its current 20x subscription divisor.
+        let record = make_record("grok-cli", "ainaba", "grok-4.5", 1_000_000, 0.0);
+        let cost = display_cost(&record);
+        let expected = 2.8;
+
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "grok-cli high-tier cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
     fn kimi_cli_zero_cost_uses_per_token_estimate() {
         let _guard = pricing_test_guard();
         // kimi-cli records have cost=0 and provider="kimi"

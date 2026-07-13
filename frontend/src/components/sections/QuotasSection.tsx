@@ -828,8 +828,13 @@ function MeituanCard({
   const flash = useHighlightFlash(highlightId, cardId);
   const data = status?.data;
 
-  const activePacks = data?.packs.filter((p) => p.status_code === 2) ?? [];
-  const hasActive = (activePacks.length ?? 0) > 0;
+  // Only show packs with remaining credits; hide burned-out packs
+  const remainingPacks = data?.packs.filter((p) => p.remain_token_amount > 0) ?? [];
+  const activePacks = remainingPacks.filter((p) => p.status_code === 2);
+  const hasActive = activePacks.length > 0;
+
+  // Hide card entirely when all packs are burned out (not loading)
+  if (!loading && remainingPacks.length === 0) return null;
 
   // Nearest expiry from active packs
   const nearestExpiry = activePacks
@@ -873,7 +878,7 @@ function MeituanCard({
           )}
 
           {/* Per-pack details */}
-          {data.packs.map((pack, i) => {
+          {remainingPacks.map((pack, i) => {
             const isActive = pack.status_code === 2;
             return (
               <div
