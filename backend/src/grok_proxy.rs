@@ -17,6 +17,7 @@ const GROK_SOURCE: &str = "grok-cli";
 pub struct ProxyConfig {
     yai_upstream_base_url: String,
     xai_upstream_base_url: String,
+    xai_network_proxy: Option<String>,
     usage_log_path: PathBuf,
 }
 
@@ -25,6 +26,7 @@ struct ResolvedRoute {
     upstream_base_url: String,
     provider: &'static str,
     canonical_model: &'static str,
+    network_proxy: Option<String>,
 }
 
 impl ProxyConfig {
@@ -33,6 +35,7 @@ impl ProxyConfig {
         Self {
             yai_upstream_base_url: upstream_base_url.trim_end_matches('/').to_string(),
             xai_upstream_base_url: "https://api.x.ai".to_string(),
+            xai_network_proxy: None,
             usage_log_path,
         }
     }
@@ -43,18 +46,26 @@ impl ProxyConfig {
             .unwrap_or_else(|_| "https://api.yairouter.com".to_string());
         let xai_upstream_base_url = std::env::var("GROK_XAI_UPSTREAM_BASE_URL")
             .unwrap_or_else(|_| "https://api.x.ai".to_string());
+        let xai_network_proxy = std::env::var("GROK_XAI_NETWORK_PROXY")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
         let usage_log_path = crate::sources::grok_usage_log_path();
         Self {
             yai_upstream_base_url: yai_upstream_base_url.trim_end_matches('/').to_string(),
             xai_upstream_base_url: xai_upstream_base_url.trim_end_matches('/').to_string(),
+            xai_network_proxy,
             usage_log_path,
         }
     }
 
     fn resolve_route(&self, model: &str) -> Option<ResolvedRoute> {
-        let (upstream_base_url, provider) = match model {
-            "grok-4.5-yai" => (&self.yai_upstream_base_url, "yai-router"),
-            "grok-4.5-xai" => (&self.xai_upstream_base_url, "xai-official"),
+        let (upstream_base_url, provider, network_proxy) = match model {
+            "grok-4.5-yai" => (&self.yai_upstream_base_url, "yai-router", None),
+            "grok-4.5-xai" => (
+                &self.xai_upstream_base_url,
+                "xai-official",
+                self.xai_network_proxy.clone(),
+            ),
             _ => return None,
         };
 
@@ -62,6 +73,7 @@ impl ProxyConfig {
             upstream_base_url: upstream_base_url.clone(),
             provider,
             canonical_model: "grok-4.5",
+            network_proxy,
         })
     }
 }
@@ -218,10 +230,25 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
     // ponytail: per-request client mirrors prior pattern; gzip decompression is
     // required because YAI Router returns gzip-compressed SSE and bytes_stream()
     // would otherwise hand us compressed bytes the usage parser cannot read.
-    let upstream = match reqwest::Client::builder()
-        .gzip(true)
-        .build()
-        .unwrap_or_default()
+    let mut client_builder = reqwest::Client::builder().gzip(true);
+    if let Some(proxy_url) = route.network_proxy.as_deref() {
+        let proxy = match reqwest::Proxy::https(proxy_url) {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                tracing::warn!("Invalid xAI network proxy URL: {error}");
+                return StatusCode::BAD_GATEWAY.into_response();
+            }
+        };
+        client_builder = client_builder.proxy(proxy);
+    }
+    let client = match client_builder.build() {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!("Could not create Grok proxy HTTP client: {error}");
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    };
+    let upstream = match client
         .request(parts.method, url)
         .headers(headers)
         .body(body)
@@ -408,6 +435,7 @@ mod tests {
             ProxyConfig {
                 yai_upstream_base_url: upstream.uri(),
                 xai_upstream_base_url: upstream.uri(),
+                xai_network_proxy: None,
                 usage_log_path: log_path.clone(),
             },
             Request::post("/v1/responses")
@@ -453,6 +481,7 @@ mod tests {
             ProxyConfig {
                 yai_upstream_base_url: yai.uri(),
                 xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
                 usage_log_path: dir.path().join("grok-usage.jsonl"),
             },
             Request::post("/v1/responses")
@@ -496,6 +525,7 @@ mod tests {
             ProxyConfig {
                 yai_upstream_base_url: yai.uri(),
                 xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
                 usage_log_path: log_path.clone(),
             },
             Request::post("/v1/responses")
