@@ -3,7 +3,7 @@ use crate::ainaiba::fetch_ainaiba_credit;
 use crate::app::AppState;
 use crate::models::*;
 use crate::pricing;
-use crate::quota::{QuotaFetcher, QuotaResponse};
+use crate::quota::QuotaResponse;
 use crate::settings;
 use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
@@ -233,8 +233,8 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
     })
 }
 
-pub async fn get_quota() -> impl IntoResponse {
-    let fetcher = QuotaFetcher::new();
+pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let fetcher = &state.quota_fetcher;
 
     let (
         kimi_result,
@@ -245,6 +245,8 @@ pub async fn get_quota() -> impl IntoResponse {
         commandcode_result,
         ollama_result,
         meituan_result,
+        fenno_result,
+        fenno_ex_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -254,6 +256,8 @@ pub async fn get_quota() -> impl IntoResponse {
         fetcher.fetch_commandcode_quota(),
         fetcher.fetch_ollama_quota(),
         fetcher.fetch_meituan_quota(),
+        fetcher.fetch_fenno_quota(),
+        fetcher.fetch_fenno_quota_ex(),
     );
 
     let response = QuotaResponse {
@@ -265,6 +269,8 @@ pub async fn get_quota() -> impl IntoResponse {
         commandcode: Some(commandcode_result),
         ollama: Some(ollama_result),
         meituan: Some(meituan_result),
+        fenno: Some(fenno_result),
+        fenno_ex: Some(fenno_ex_result),
     };
 
     Json(response)

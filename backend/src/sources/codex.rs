@@ -66,9 +66,29 @@ impl CodexSource {
                 Ok(f) => f,
                 Err(_) => continue,
             };
-            let mut session_model = "gpt-5.5".to_string();
-            let reader = BufReader::new(file);
-            for line in reader.lines().map_while(Result::ok) {
+            // Pre-scan to discover the model from turn_context events.
+            // Forked subagent sessions replay parent token_count events before
+            // any turn_context appears, so a naive sequential parse would assign
+            // a wrong hardcoded default model.
+            let lines: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
+            let mut session_model = lines
+                .iter()
+                .find_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .and_then(|obj| {
+                            if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
+                                obj.get("payload")
+                                    .and_then(|p| p.get("model"))
+                                    .and_then(|m| m.as_str())
+                                    .map(String::from)
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            for line in &lines {
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -248,5 +268,47 @@ mod tests {
         let models: Vec<_> = records.iter().map(|record| record.model.as_str()).collect();
 
         assert_eq!(models, ["gpt-5.6-terra", "gpt-5.6-sol"]);
+    }
+
+    #[test]
+    fn resolves_model_for_token_count_before_turn_context() {
+        // Forked subagent sessions replay parent token_count events before
+        // any turn_context appears. The pre-scan must find the model from
+        // later turn_context events and not fall back to a hardcoded default.
+        let dir = tempdir().unwrap();
+        let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let mk_count = |ts: &str, cum_input: i64| {
+            format!("{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{usage},\"total_token_usage\":{{\"input_tokens\":{cum_input},\"cached_input_tokens\":80,\"output_tokens\":10,\"reasoning_output_tokens\":2,\"total_tokens\":110}}}}}}}}")
+        };
+        // token_count events (with different cumulative totals) appear BEFORE turn_context
+        let replayed1 = mk_count("2026-07-10T10:00:00Z", 100);
+        let replayed2 = mk_count("2026-07-10T10:01:00Z", 200);
+        let turn_ctx = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#.to_string();
+        let own_count = mk_count("2026-07-10T10:02:00Z", 300);
+        fs::write(
+            dir.path().join("rollout-forked.jsonl"),
+            format!("{replayed1}\n{replayed2}\n{turn_ctx}\n{own_count}\n"),
+        )
+        .unwrap();
+
+        let records = CodexSource::parse(dir.path());
+        assert_eq!(records.len(), 3);
+        for record in &records {
+            assert_eq!(
+                record.model, "gpt-5.6-terra",
+                "Records replayed before turn_context must still get the correct model"
+            );
+        }
+    }
+
+    #[test]
+    fn falls_back_to_unknown_when_no_turn_context_exists() {
+        let dir = tempdir().unwrap();
+        let event = r#"{"timestamp":"2026-07-10T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50,"cached_input_tokens":20,"output_tokens":5,"reasoning_output_tokens":1,"total_tokens":55}}}}"#;
+        fs::write(dir.path().join("rollout-no-context.jsonl"), event).unwrap();
+
+        let records = CodexSource::parse(dir.path());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].model, "unknown");
     }
 }

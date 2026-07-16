@@ -330,6 +330,8 @@ export interface QuotaResponse {
   commandcode: CommandCodeQuotaStatus | null;
   ollama: OllamaQuotaStatus | null;
   meituan: MeituanQuotaStatus | null;
+  fenno: FennoQuotaStatus | null;
+  fenno_ex: FennoQuotaStatus | null;
 }
 
 // ─── Ollama Quota ───────────────────────────────────────────────────────────
@@ -383,6 +385,38 @@ export interface MeituanQuotaData {
 export interface MeituanQuotaStatus {
   available: boolean;
   data: MeituanQuotaData | null;
+  error: string | null;
+}
+
+// ─── Fenno Subscription Quota ───────────────────────────────────────────────
+
+export interface FennoSubscriptionGroup {
+  name: string;
+  platform: string;
+  daily_limit_usd: number | null;
+  weekly_limit_usd: number | null;
+  monthly_limit_usd: number | null;
+}
+
+export interface FennoSubscription {
+  status: string;
+  expires_at: string | null;
+  daily_usage_usd: number;
+  weekly_usage_usd: number;
+  monthly_usage_usd: number;
+  daily_window_start: string | null;
+  weekly_window_start: string | null;
+  monthly_window_start: string | null;
+  group: FennoSubscriptionGroup;
+}
+
+export interface FennoQuotaData {
+  subscriptions: FennoSubscription[];
+}
+
+export interface FennoQuotaStatus {
+  available: boolean;
+  data: FennoQuotaData | null;
   error: string | null;
 }
 

@@ -1,7 +1,7 @@
 //! Ainaiba (XAI) credit balance fetcher.
 //!
 //! Queries the Yairouter dashboard API at `api.yairouter.com` using
-//! the `XAI_API_KEY` environment variable.
+//! the `YAI_API_KEY` environment variable.
 //!
 //! The platform may have multiple credit balance entries ("到账卡")
 //! with different purchase rates. This module reads all entries and
@@ -74,13 +74,13 @@ pub struct AinaibaCreditData {
 /// Calls both `/dashboard/info` (account + credit balance) and
 /// `/dashboard/live` (daily/monthly usage) concurrently.
 pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
-    let api_key = match std::env::var("XAI_API_KEY") {
+    let api_key = match std::env::var("YAI_API_KEY") {
         Ok(key) if !key.is_empty() => key,
         _ => {
             return AinaibaCreditResponse {
                 available: false,
                 data: None,
-                error: Some("XAI_API_KEY not configured".to_string()),
+                error: Some("YAI_API_KEY not configured".to_string()),
             };
         }
     };

@@ -228,11 +228,11 @@ else
     echo "⚠️  OpenCode-go EX credentials not set"
 fi
 
-if [ -n "${XAI_API_KEY:-}" ]; then
-    inject_env_dropin "$NEW_INSTANCE" "XAI_API_KEY" "$XAI_API_KEY"
-    echo "✅ Injected XAI_API_KEY"
+if [ -n "${YAI_API_KEY:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "YAI_API_KEY" "$YAI_API_KEY"
+    echo "✅ Injected YAI_API_KEY"
 else
-    echo "⚠️  XAI_API_KEY not set"
+    echo "⚠️  YAI_API_KEY not set"
 fi
 
 if [ -n "${XIAOMI_MIMO_SERVICE_TOKEN:-}" ]; then
@@ -268,6 +268,44 @@ if [ -n "${MEITUAN_AUTH_COOKIE:-}" ]; then
     echo "✅ Injected MEITUAN_AUTH_COOKIE"
 else
     echo "⚠️  MEITUAN_AUTH_COOKIE not set"
+fi
+
+if [ -n "${FENNO_AUTH_TOKEN:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "FENNO_AUTH_TOKEN" "$FENNO_AUTH_TOKEN"
+    echo "✅ Injected FENNO_AUTH_TOKEN"
+else
+    echo "⚠️  FENNO_AUTH_TOKEN not set (using persisted Fenno auth state if available)"
+fi
+
+if [ -n "${FENNO_REFRESH_TOKEN:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "FENNO_REFRESH_TOKEN" "$FENNO_REFRESH_TOKEN"
+    echo "✅ Injected FENNO_REFRESH_TOKEN"
+else
+    echo "⚠️  FENNO_REFRESH_TOKEN not set (using persisted Fenno auth state if available)"
+fi
+
+if [ -n "${FENNO_AUTH_STATE_PATH:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "FENNO_AUTH_STATE_PATH" "$FENNO_AUTH_STATE_PATH"
+    echo "✅ Injected FENNO_AUTH_STATE_PATH"
+fi
+
+if [ -n "${FENNO_AUTH_TOKEN_EX:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "FENNO_AUTH_TOKEN_EX" "$FENNO_AUTH_TOKEN_EX"
+    echo "✅ Injected FENNO_AUTH_TOKEN_EX"
+else
+    echo "⚠️  FENNO_AUTH_TOKEN_EX not set"
+fi
+
+if [ -n "${FENNO_REFRESH_TOKEN_EX:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "FENNO_REFRESH_TOKEN_EX" "$FENNO_REFRESH_TOKEN_EX"
+    echo "✅ Injected FENNO_REFRESH_TOKEN_EX"
+else
+    echo "⚠️  FENNO_REFRESH_TOKEN_EX not set"
+fi
+
+if [ -n "${FENNO_AUTH_STATE_PATH_EX:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "FENNO_AUTH_STATE_PATH_EX" "$FENNO_AUTH_STATE_PATH_EX"
+    echo "✅ Injected FENNO_AUTH_STATE_PATH_EX"
 fi
 
 sudo systemctl daemon-reload

@@ -3,6 +3,7 @@
 //! Owns shared state, background data refresh, and router assembly.
 
 use crate::models::TokenRecord;
+use crate::quota::QuotaFetcher;
 use crate::routes;
 use crate::sources::load_all_sources;
 use axum::{
@@ -21,6 +22,7 @@ use tower_http::services::ServeDir;
 #[derive(Clone)]
 pub struct AppState {
     pub records: Arc<RwLock<Vec<TokenRecord>>>,
+    pub quota_fetcher: Arc<QuotaFetcher>,
 }
 
 impl AppState {
@@ -30,6 +32,7 @@ impl AppState {
         tracing::info!("Initial load: {} records", records.len());
         Self {
             records: Arc::new(RwLock::new(records)),
+            quota_fetcher: Arc::new(QuotaFetcher::new()),
         }
     }
 

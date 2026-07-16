@@ -952,7 +952,7 @@ export default function App() {
   const handleSubscriptionGroupToggle = useCallback(
     (selectAll: boolean) => {
       const subVendors = filters.vendors.filter((v) =>
-        ["kimi", "xunfei", "opencode-go", "opencode"].includes(v)
+        ["kimi", "xunfei", "opencode-go", "opencode", "fenno"].includes(v)
       );
       setSelectedVendors((prev) => {
         const next = new Set(prev);
@@ -970,7 +970,7 @@ export default function App() {
   const handleVendorGroupToggle = useCallback(
     (selectAll: boolean) => {
       const regularVendors = filters.vendors.filter(
-        (v) => !["kimi", "xunfei", "opencode-go", "opencode"].includes(v)
+        (v) => !["kimi", "xunfei", "opencode-go", "opencode", "fenno"].includes(v)
       );
       setSelectedVendors((prev) => {
         const next = new Set(prev);

@@ -45,7 +45,7 @@ function getApiKeyPrefix(ctx: any): string {
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "DEEPSEEK_API_KEY",
-    "XAI_API_KEY",
+    "YAI_API_KEY",
   ]) {
     const val = process.env[env];
     if (val) {

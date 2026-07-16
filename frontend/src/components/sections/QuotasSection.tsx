@@ -19,8 +19,10 @@ import type {
   CommandCodeQuotaStatus,
   OllamaQuotaStatus,
   MeituanQuotaStatus,
+  FennoQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
+import { remainingQuota } from "../../lib/fennoQuota";
 
 interface QuotasSectionProps {
   quota: QuotaResponse | null;
@@ -584,6 +586,126 @@ function CommandCodeCard({
   );
 }
 
+function FennoCard({
+  status,
+  loading,
+  highlightId,
+  suffix,
+}: {
+  status: FennoQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+  suffix?: string;
+}) {
+  const cardId = suffix === "EX" ? "quota-fenno-ex" : "quota-fenno";
+  const label = `Fenno${suffix === "EX" ? " EX" : ""}`;
+  const flash = useHighlightFlash(highlightId, cardId);
+  const subscriptions = status?.data?.subscriptions ?? [];
+  const activeSubscriptions = subscriptions.filter(
+    (subscription) => subscription.status === "active",
+  );
+  const nearestExpiry = activeSubscriptions
+    .map((subscription) => subscription.expires_at)
+    .filter((expiresAt): expiresAt is string => expiresAt != null)
+    .sort()[0];
+  const cycleCountdown = buildCycleCountdown(nearestExpiry ?? null);
+
+  return (
+    <CardShell
+      id={cardId}
+      available={!!status?.available && activeSubscriptions.length > 0}
+      highlight={flash}
+    >
+      <CardHeader
+        active={!!status?.available && activeSubscriptions.length > 0}
+        loading={loading}
+        name={label}
+        href="https://api.fenno.ai/subscriptions"
+        suffix="fenno.ai"
+        cycleCountdown={cycleCountdown}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && status.data ? (
+        activeSubscriptions.length > 0 ? (
+          <div className="space-y-2">
+            {activeSubscriptions.map((subscription, index) => {
+              const weeklyRemaining = remainingQuota(
+                subscription.group.weekly_limit_usd,
+                subscription.weekly_usage_usd,
+              );
+              const monthlyRemaining = remainingQuota(
+                subscription.group.monthly_limit_usd,
+                subscription.monthly_usage_usd,
+              );
+
+              return (
+                <div
+                  key={`${subscription.group.name}-${subscription.expires_at ?? index}`}
+                  className={index > 0 ? "pt-2 border-t border-slate-100" : ""}
+                >
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
+                    <span className="font-bold text-slate-800">
+                      {subscription.group.name || "Fenno subscription"}
+                    </span>
+                    <span className="px-1 py-0 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                      有效
+                    </span>
+                    <span className="text-slate-400">
+                      {subscription.group.platform}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {subscription.group.weekly_limit_usd != null && (
+                      <div>
+                        <div className="flex justify-between text-[10px] text-slate-500">
+                          <span>周额度</span>
+                          <span>${weeklyRemaining?.toFixed(2)} 剩余</span>
+                        </div>
+                        <ProgressBar
+                          label="已用"
+                          used={subscription.weekly_usage_usd}
+                          limit={subscription.group.weekly_limit_usd}
+                        />
+                      </div>
+                    )}
+                    {subscription.group.monthly_limit_usd != null ? (
+                      <div>
+                        <div className="flex justify-between text-[10px] text-slate-500">
+                          <span>月额度</span>
+                          <span>${monthlyRemaining?.toFixed(2)} 剩余</span>
+                        </div>
+                        <ProgressBar
+                          label="已用"
+                          used={subscription.monthly_usage_usd}
+                          limit={subscription.group.monthly_limit_usd}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-500">月额度不限</div>
+                    )}
+                  </div>
+                  {subscription.expires_at && (
+                    <div className="mt-1.5 text-[10px] text-slate-500">
+                      到期 {subscription.expires_at.replace("T", " ").slice(0, 19)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-[11px] text-slate-400 italic">暂无有效订阅</p>
+        )
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function OllamaCard({
   status,
   loading,
@@ -904,7 +1026,7 @@ function MeituanCard({
                     </span>
                   )}
                 </div>
-                {isActive && (
+                {isActive && (pack.usage_percent > 0 || pack.used_token_amount > 0) && (
                   <div className="space-y-1">
                     <ProgressBar
                       label="用量"
@@ -990,6 +1112,17 @@ export const QuotasSection = memo(function QuotasSection({
           status={quota?.commandcode ?? null}
           loading={quotaLoading}
           highlightId={highlightCardId}
+        />
+        <FennoCard
+          status={quota?.fenno ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
+        />
+        <FennoCard
+          status={quota?.fenno_ex ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
+          suffix="EX"
         />
         <OllamaCard
           status={quota?.ollama ?? null}

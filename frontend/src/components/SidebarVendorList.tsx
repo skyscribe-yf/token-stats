@@ -1,6 +1,6 @@
 import { getVendorColor, getVendorLabel } from "../lib/utils";
 
-const SUBSCRIPTION_VENDORS = ["kimi", "xunfei", "opencode-go", "opencode"];
+const SUBSCRIPTION_VENDORS = ["kimi", "xunfei", "opencode-go", "opencode", "fenno"];
 
 interface SidebarVendorListProps {
   vendors: string[];

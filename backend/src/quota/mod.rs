@@ -5,6 +5,7 @@
 //! - **OpenCode-go**: Usage via direct HTTP request to workspace dashboard (HTML parsing)
 
 pub mod commandcode;
+pub mod fenno;
 pub mod kimi;
 pub mod meituan;
 pub mod ollama;
@@ -13,8 +14,8 @@ pub mod types;
 pub mod xiaomi_mimo;
 
 pub use types::{
-    CommandCodeQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus,
-    OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus,
+    CommandCodeQuotaStatus, FennoQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus,
+    OllamaQuotaStatus, OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus,
 };
 
 use serde::de;
@@ -91,12 +92,17 @@ pub(crate) fn truncate_error_body(body: &str) -> String {
 /// Quota fetcher with injectable HTTP client for testability.
 pub struct QuotaFetcher {
     pub client: reqwest::Client,
+    pub fenno_auth: fenno::FennoAuthManager,
+    pub fenno_ex_auth: fenno::FennoAuthManager,
 }
 
 impl QuotaFetcher {
     pub fn new() -> Self {
+        let client = reqwest::Client::new();
         Self {
-            client: reqwest::Client::new(),
+            fenno_auth: fenno::FennoAuthManager::new(client.clone()),
+            fenno_ex_auth: fenno::FennoAuthManager::new_ex(client.clone()),
+            client,
         }
     }
 
@@ -138,6 +144,16 @@ impl QuotaFetcher {
     /// Fetch Meituan LongCat token pack quota info.
     pub async fn fetch_meituan_quota(&self) -> MeituanQuotaStatus {
         meituan::fetch_meituan_quota(&self.client).await
+    }
+
+    /// Fetch Fenno active subscription usage and limits.
+    pub async fn fetch_fenno_quota(&self) -> FennoQuotaStatus {
+        fenno::fetch_fenno_quota(&self.fenno_auth).await
+    }
+
+    /// Fetch Fenno **EX** (second account) subscription usage and limits.
+    pub async fn fetch_fenno_quota_ex(&self) -> FennoQuotaStatus {
+        fenno::fetch_fenno_quota(&self.fenno_ex_auth).await
     }
 }
 

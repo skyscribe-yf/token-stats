@@ -227,6 +227,10 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
     let url = format!("{}{}", route.upstream_base_url, path_and_query);
     let mut headers = parts.headers;
     headers.remove(header::HOST);
+    // The alias is replaced with the canonical upstream model above, which
+    // changes the serialized body's size. Let reqwest calculate Content-Length
+    // from the rewritten body rather than forwarding Grok CLI's stale value.
+    headers.remove(header::CONTENT_LENGTH);
     // ponytail: per-request client mirrors prior pattern; gzip decompression is
     // required because YAI Router returns gzip-compressed SSE and bytes_stream()
     // would otherwise hand us compressed bytes the usage parser cannot read.
@@ -257,7 +261,13 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
     {
         Ok(response) => response,
         Err(error) => {
-            tracing::warn!("Grok proxy upstream request failed: {error}");
+            let mut error_chain = vec![error.to_string()];
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                error_chain.push(cause.to_string());
+                source = cause.source();
+            }
+            tracing::warn!(?error_chain, "Grok proxy upstream request failed");
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
@@ -284,14 +294,30 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                     captured.extend_from_slice(&chunk);
                     Some((
                         Ok::<_, reqwest::Error>(chunk),
-                        (upstream, captured, failed, config, is_sse, provider, canonical_model),
+                        (
+                            upstream,
+                            captured,
+                            failed,
+                            config,
+                            is_sse,
+                            provider,
+                            canonical_model,
+                        ),
                     ))
                 }
                 Some(Err(error)) => {
                     failed = true;
                     Some((
                         Err(error),
-                        (upstream, captured, failed, config, is_sse, provider, canonical_model),
+                        (
+                            upstream,
+                            captured,
+                            failed,
+                            config,
+                            is_sse,
+                            provider,
+                            canonical_model,
+                        ),
                     ))
                 }
                 None => {
@@ -530,6 +556,7 @@ mod tests {
             },
             Request::post("/v1/responses")
                 .header("authorization", "Bearer yai-key")
+                .header("content-length", r#"{"model":"grok-4.5-yai"}"#.len())
                 .body(Body::from(r#"{"model":"grok-4.5-yai"}"#))
                 .unwrap(),
         )

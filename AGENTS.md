@@ -33,6 +33,7 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 
 ### Quota Data Sources
 - **OpenCode-go subscription**: Fetched directly via HTTP to the workspace dashboard (`https://opencode.ai/workspace/{id}/go`) using `reqwest` + `scraper` for HTML parsing. Reads `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE` from environment variables. Extracts Rolling/Weekly/Monthly usage percentages and reset timers from the `<div data-slot="usage">` element.
+- **Fenno subscription**: Fetched from `https://api.fenno.ai/api/v1/subscriptions/active` with a bearer access token. `FENNO_AUTH_TOKEN` and `FENNO_REFRESH_TOKEN` bootstrap the auth manager; rotated credentials are persisted to `FENNO_AUTH_STATE_PATH` (default `~/.config/token-stats/fenno-auth.json`) and refreshed automatically.
 
 ### Frontend (`frontend/`)
 - Vite + React 19 + TypeScript
@@ -231,9 +232,12 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `VENDOR_MERGE_CONFIG` | auto-detect | Override vendor merge config path (see below) |
 | `OPENCODE_GO_WORKSPACE_ID` | unset | OpenCode-go workspace ID (required for quota display) |
 | `OPENCODE_GO_AUTH_COOKIE` | unset | OpenCode-go `auth` cookie value (required for quota display) |
-| `XAI_API_KEY` | unset | Ainaiba/XAI API key for credit balance display (Bearer token passed to `api-xai.ainaibahub.com`) |
+| `YAI_API_KEY` | unset | Ainaiba/XAI API key for credit balance display (Bearer token passed to `api-xai.ainaibahub.com`) |
 | `OLLAMA_AUTH_COOKIE` | unset | Ollama cloud session cookie (`__Secure-session=...`) for quota card display |
 | `MEITUAN_AUTH_COOKIE` | unset | Meituan LongCat `passport_token_key` cookie value for quota card display |
+| `FENNO_AUTH_TOKEN` | unset | Initial Fenno dashboard access JWT; used only to bootstrap quota authentication |
+| `FENNO_REFRESH_TOKEN` | unset | Initial Fenno rotating refresh token; refreshed credentials are persisted automatically |
+| `FENNO_AUTH_STATE_PATH` | `~/.config/token-stats/fenno-auth.json` | Optional private state-file path for the rotated Fenno credential pair |
 
 ---
 

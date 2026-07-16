@@ -185,6 +185,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   commandcode: "#f472b6",  // pink-400
   qoder: "#14b8a6",       // teal-500
   meituan: "#facc15",      // yellow-400
+  fenno: "#0ea5e9",        // sky-500
 };
 
 export function getVendorColor(vendor: string): string {
@@ -197,6 +198,7 @@ export function getVendorColor(vendor: string): string {
 export const VENDOR_LABELS: Record<string, string> = {
   ainaba: "Yairouter",
   xai: "Yairouter",
+  fenno: "Fenno",
 };
 
 export function getVendorLabel(vendor: string | undefined): string {

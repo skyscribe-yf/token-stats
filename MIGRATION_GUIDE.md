@@ -60,7 +60,7 @@ api_key = "YOUR_XUNFEI_API_KEY_HERE"
 [providers.ainaiba]
 type = "openai_responses"
 base_url = "https://api-xai.ainaibahub.com/v1"
-api_key = "YOUR_XAI_API_KEY_HERE"
+api_key = "YOUR_YAI_API_KEY_HERE"
 
 # ============================================================
 # MODEL ALIASES

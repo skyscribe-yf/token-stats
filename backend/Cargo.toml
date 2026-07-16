@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip"] }
 futures-util = "0.3"
+fs2 = "0.4"
 scraper = "0.22"
 toml = "0.8"
 

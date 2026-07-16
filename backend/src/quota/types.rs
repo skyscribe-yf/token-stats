@@ -176,6 +176,8 @@ pub struct QuotaResponse {
     pub commandcode: Option<CommandCodeQuotaStatus>,
     pub ollama: Option<OllamaQuotaStatus>,
     pub meituan: Option<MeituanQuotaStatus>,
+    pub fenno: Option<FennoQuotaStatus>,
+    pub fenno_ex: Option<FennoQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +191,56 @@ pub struct KimiQuotaStatus {
 pub struct OpenCodeQuotaStatus {
     pub available: bool,
     pub data: Option<QuotaOpenCode>,
+    pub error: Option<String>,
+}
+
+// ─── Fenno subscription types ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FennoSubscriptionGroup {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default)]
+    pub daily_limit_usd: Option<f64>,
+    #[serde(default)]
+    pub weekly_limit_usd: Option<f64>,
+    #[serde(default)]
+    pub monthly_limit_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FennoSubscription {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub daily_usage_usd: f64,
+    #[serde(default)]
+    pub weekly_usage_usd: f64,
+    #[serde(default)]
+    pub monthly_usage_usd: f64,
+    #[serde(default)]
+    pub daily_window_start: Option<String>,
+    #[serde(default)]
+    pub weekly_window_start: Option<String>,
+    #[serde(default)]
+    pub monthly_window_start: Option<String>,
+    #[serde(default)]
+    pub group: FennoSubscriptionGroup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FennoQuotaData {
+    pub subscriptions: Vec<FennoSubscription>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FennoQuotaStatus {
+    pub available: bool,
+    pub data: Option<FennoQuotaData>,
     pub error: Option<String>,
 }
 
