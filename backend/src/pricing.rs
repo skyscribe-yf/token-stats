@@ -29,10 +29,55 @@ pub struct AinabaSegment {
     pub divisor: f64,
 }
 
+/// Kimi API list price in CNY per 1M tokens. Subscription estimates apply a
+/// user-selected multiplier to this raw API equivalent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KimiApiModelPrice {
+    pub name: String,
+    pub input: f64,
+    pub cache_read: f64,
+    pub output: f64,
+}
+
+fn default_kimi_subscription_multiplier() -> f64 {
+    20.0
+}
+
+fn default_kimi_api_models() -> Vec<KimiApiModelPrice> {
+    vec![
+        KimiApiModelPrice {
+            name: "kimi-k3".to_string(),
+            input: 20.0,
+            cache_read: 2.0,
+            output: 100.0,
+        },
+        KimiApiModelPrice {
+            name: "kimi-k2.6".to_string(),
+            input: 6.5,
+            cache_read: 1.1,
+            output: 27.0,
+        },
+        KimiApiModelPrice {
+            name: "kimi-k2.7".to_string(),
+            input: 6.5,
+            cache_read: 1.3,
+            output: 27.0,
+        },
+    ]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
+    /// Legacy flat Kimi rate, retained solely to parse existing pricing files.
+    #[serde(default)]
     pub kimi_per_token: f64,
+    /// Actual subscription cost = raw Kimi API equivalent / this multiplier.
+    #[serde(default = "default_kimi_subscription_multiplier")]
+    pub kimi_subscription_multiplier: f64,
+    /// Kimi API prices in CNY per 1M tokens.
+    #[serde(default = "default_kimi_api_models")]
+    pub kimi_api_models: Vec<KimiApiModelPrice>,
     #[serde(default)]
     pub xiaomi_mimo_tp_per_token: f64,
     pub opencode_divisor: f64,
@@ -152,6 +197,8 @@ impl Default for PricingConfig {
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
                 kimi_per_token: 199.0 / 2_800_000_000.0,
+                kimi_subscription_multiplier: default_kimi_subscription_multiplier(),
+                kimi_api_models: default_kimi_api_models(),
                 // 99 CNY subscription, dashboard 672.26M tokens ≈ 84% usage
                 // effective per-token = 99 * 0.84 / 672_260_000 ≈ 0.0000001237
                 xiaomi_mimo_tp_per_token: 0.0000001237,
@@ -274,16 +321,35 @@ impl ModelPrice {
 struct PricingState {
     config: PricingConfig,
     model_map: HashMap<String, ModelPrice>,
+    kimi_api_model_map: HashMap<String, KimiApiModelPrice>,
 }
 
 impl PricingState {
     fn new(config: PricingConfig) -> Self {
         let model_map = config.build_model_map();
-        Self { config, model_map }
+        let kimi_api_model_map = config
+            .special
+            .kimi_api_models
+            .iter()
+            .cloned()
+            .map(|price| (price.name.clone(), price))
+            .collect();
+        Self {
+            config,
+            model_map,
+            kimi_api_model_map,
+        }
     }
 
     fn reload(&mut self, config: PricingConfig) {
         self.model_map = config.build_model_map();
+        self.kimi_api_model_map = config
+            .special
+            .kimi_api_models
+            .iter()
+            .cloned()
+            .map(|price| (price.name.clone(), price))
+            .collect();
         self.config = config;
     }
 }
@@ -343,7 +409,9 @@ fn load_config_from_file(path: &std::path::Path) -> PricingConfig {
 /// Initialize global pricing state from the config file (called once at startup).
 pub fn init() {
     let path = config_path();
-    let config = load_config_from_file(&path);
+    let mut config = load_config_from_file(&path);
+    config.special.kimi_subscription_multiplier =
+        crate::settings::load_subscription_settings().kimi_subscription_multiplier;
     let mut state = state_cell().lock().unwrap();
     *state = PricingState::new(config);
 }
@@ -351,7 +419,9 @@ pub fn init() {
 /// Reload pricing configuration from disk without restarting the server.
 pub fn reload() {
     let path = config_path();
-    let config = load_config_from_file(&path);
+    let mut config = load_config_from_file(&path);
+    config.special.kimi_subscription_multiplier =
+        crate::settings::load_subscription_settings().kimi_subscription_multiplier;
     let mut state = state_cell().lock().unwrap();
     state.reload(config);
     tracing::info!("Pricing configuration reloaded from {:?}", path);
@@ -360,6 +430,16 @@ pub fn reload() {
 /// Return a clone of the current pricing configuration (for the API endpoint).
 pub fn get_config() -> PricingConfig {
     state_cell().lock().unwrap().config.clone()
+}
+
+/// Update the live Kimi subscription multiplier after persisted settings change.
+pub fn set_kimi_subscription_multiplier(multiplier: f64) {
+    state_cell()
+        .lock()
+        .unwrap()
+        .config
+        .special
+        .kimi_subscription_multiplier = multiplier;
 }
 
 // ── Model price resolution ───────────────────────────────────────────────────
@@ -425,6 +505,36 @@ fn resolve_model_price<'a>(
     }
 
     None
+}
+
+fn resolve_kimi_api_price<'a>(
+    state: &'a PricingState,
+    model: &str,
+) -> Option<&'a KimiApiModelPrice> {
+    let model_lower = model.to_lowercase();
+    if model_lower.contains("kimi-k3") {
+        return state.kimi_api_model_map.get("kimi-k3");
+    }
+    if model_lower.contains("kimi-k2.6") {
+        return state.kimi_api_model_map.get("kimi-k2.6");
+    }
+    if model_lower.contains("kimi-k2.7") {
+        return state.kimi_api_model_map.get("kimi-k2.7");
+    }
+    state.kimi_api_model_map.get("kimi-k2.7")
+}
+
+fn compute_kimi_subscription_cost(
+    state: &PricingState,
+    record: &TokenRecord,
+    multiplier: f64,
+) -> Option<f64> {
+    let price = resolve_kimi_api_price(state, &record.model)?;
+    let raw_api_cost = (record.input_tokens as f64 * price.input
+        + record.cache_read_tokens as f64 * price.cache_read
+        + record.output_tokens as f64 * price.output)
+        / 1_000_000.0;
+    Some(raw_api_cost / multiplier)
 }
 
 /// Normalize a Command Code model name to the `cc:` prefix used in pricing.toml.
@@ -661,12 +771,14 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         return cfg.special.xunfei_per_call;
     }
 
-    // 2. Kimi provider with zero stored cost: per-token estimate in CNY.
-    //    Provider aliases such as "kimi-code" are merged to the canonical
-    //    "kimi" vendor before pricing, so all zero-cost kimi records share
-    //    the same subscription estimate regardless of source.
+    // 2. Kimi provider with zero stored cost: model-aware API-equivalent CNY
+    //    cost divided by the subscription multiplier. Cache writes are free.
     if record.provider == "kimi" && record.cost == 0.0 {
-        return record.total_tokens as f64 * cfg.special.kimi_per_token;
+        if let Some(cost) =
+            compute_kimi_subscription_cost(&state, record, cfg.special.kimi_subscription_multiplier)
+        {
+            return cost;
+        }
     }
 
     // 2b. Xiaomi MiMo provider with zero stored cost: per-token estimate in CNY
@@ -758,11 +870,15 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         }
 
         // 4b2. kimi-coding Pi provider: subscription model, same as kimi-code.
-        //     The stored cost is the API list price (USD), not the actual
-        //     subscription cost. Use kimi_per_token estimate instead.
+        //     The stored cost is an API list price, not the actual subscription
+        //     cost. Recompute from token counts and apply the multiplier.
         //     (original_provider preserved by vendor merge from "kimi-coding" → "kimi")
         if effective_provider == "kimi-coding" {
-            return record.total_tokens as f64 * cfg.special.kimi_per_token;
+            if let Some(cost) =
+                compute_kimi_subscription_cost(&state, record, cfg.special.kimi_subscription_multiplier)
+            {
+                return cost;
+            }
         }
 
         // 4c. Other Pi providers: cost is in USD, convert to CNY
@@ -984,12 +1100,12 @@ mod tests {
     }
 
     #[test]
-    fn kimi_cli_zero_cost_uses_per_token_estimate() {
+    fn kimi_cli_zero_cost_uses_model_aware_subscription_estimate() {
         let _guard = pricing_test_guard();
         // kimi-cli records have cost=0 and provider="kimi"
         let record = make_record("kimi-cli", "kimi", "kimi-k2.6", 1_000_000, 0.0);
         let cost = display_cost(&record);
-        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        let expected = (500_000.0 * 6.5 + 500_000.0 * 27.0) / 1_000_000.0 / 20.0;
         assert!(
             cost > 0.0,
             "kimi-cli record should have non-zero cost, got {}",
@@ -1004,12 +1120,12 @@ mod tests {
     }
 
     #[test]
-    fn pi_kimi_zero_cost_uses_per_token_estimate() {
+    fn pi_kimi_zero_cost_uses_model_aware_subscription_estimate() {
         let _guard = pricing_test_guard();
-        // Pi-sourced kimi records with cost=0 should use the same formula
+        // Pi-sourced kimi records with cost=0 should use the same formula.
         let record = make_record("pi", "kimi", "kimi-k2.6", 1_000_000, 0.0);
         let cost = display_cost(&record);
-        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
+        let expected = (500_000.0 * 6.5 + 500_000.0 * 27.0) / 1_000_000.0 / 20.0;
         assert!(
             cost > 0.0,
             "pi kimi record should have non-zero cost, got {}",
@@ -1024,26 +1140,18 @@ mod tests {
     }
 
     #[test]
-    fn kimi_coding_subscription_uses_per_token_estimate() {
+    fn kimi_coding_subscription_uses_model_aware_subscription_estimate() {
         let _guard = pricing_test_guard();
         // Records from kimi-coding provider (subscription) with cost>0 should
-        // use kimi_per_token estimate, NOT the stored USD cost.
+        // use the model-aware subscription estimate, NOT the stored API cost.
         // This matches kimi-code behavior (same subscription model).
         let mut record = make_record("pi", "kimi", "kimi-for-coding", 1_000_000, 0.05);
         record.original_provider = Some("kimi-coding".to_string());
         let cost = display_cost(&record);
-        let expected = 1_000_000.0 * PricingConfig::default().special.kimi_per_token;
-        // The subscription estimate should be significantly lower than USD*6.82
-        let usd_cny = 0.05 * PricingConfig::default().usd_to_cny; // 0.341
-        assert!(
-            expected < usd_cny,
-            "kimi_per_token estimate ({}) should be < USD*CNY ({})",
-            expected,
-            usd_cny
-        );
+        let expected = (500_000.0 * 6.5 + 500_000.0 * 27.0) / 1_000_000.0 / 20.0;
         assert!(
             (cost - expected).abs() < 1e-9,
-            "kimi-coding should use per-token estimate, expected {}, got {}",
+            "kimi-coding should use model-aware estimate, expected {}, got {}",
             expected,
             cost
         );
@@ -2013,13 +2121,13 @@ cache_write = 2.50
     }
 
     #[test]
-    fn kimi_code_kimi_provider_uses_same_per_token_estimate() {
+    fn kimi_code_kimi_provider_uses_model_aware_subscription_rates() {
         let _guard = pricing_test_guard();
-        // kimi-code records merged to provider="kimi" should follow the same
-        // subscription estimate as other kimi zero-cost records.
+        // kimi-code records merged to provider="kimi" use their model's raw
+        // API equivalent, then apply the subscription multiplier.
         let record = make_record("kimi-code", "kimi", "kimi-k2.6", 170_000, 0.0);
         let cost = display_cost(&record);
-        let expected = 170_000.0 * PricingConfig::default().special.kimi_per_token;
+        let expected = (85_000.0 * 6.5 + 85_000.0 * 27.0) / 1_000_000.0 / 20.0;
         assert!(
             cost > 0.0,
             "kimi-code/kimi-k2.6 should have non-zero cost, got {}",
@@ -2032,19 +2140,64 @@ cache_write = 2.50
             cost
         );
 
-        // kimi-code/kimi-for-coding should resolve to the same kimi estimate.
-        let record2 = make_record("kimi-code", "kimi", "kimi-for-coding", 170_000, 0.0);
+        // kimi-for-coding is an alias without a dedicated rate and falls back
+        // to K2.7 Code, including its ¥1.30/M cache-hit rate.
+        let mut record2 = make_record("kimi-code", "kimi", "kimi-for-coding", 1_170_000, 0.0);
+        record2.input_tokens = 85_000;
+        record2.output_tokens = 85_000;
+        record2.cache_read_tokens = 1_000_000;
         let cost2 = display_cost(&record2);
+        let expected2 = (85_000.0 * 6.5 + 1_000_000.0 * 1.3 + 85_000.0 * 27.0) / 1_000_000.0 / 20.0;
         assert!(
             cost2 > 0.0,
             "kimi-code/kimi-for-coding should have non-zero cost, got {}",
             cost2
         );
         assert!(
-            (cost2 - expected).abs() < 1e-9,
+            (cost2 - expected2).abs() < 1e-9,
             "kimi-code/kimi-for-coding cost: expected {}, got {}",
-            expected,
+            expected2,
             cost2
+        );
+    }
+
+    #[test]
+    fn kimi_subscription_cost_uses_k2_6_api_rates_and_excludes_cache_writes() {
+        let _guard = pricing_test_guard();
+        let mut record = make_record("kimi-code", "kimi", "kimi-k2.6", 10_000_000, 0.0);
+        record.input_tokens = 1_000_000;
+        record.cache_read_tokens = 2_000_000;
+        record.output_tokens = 3_000_000;
+        record.cache_write_tokens = 4_000_000;
+
+        let cost = display_cost(&record);
+        // Raw API equivalent: ¥6.50 input + ¥2.20 cache-hit + ¥81 output.
+        // Subscription estimate: raw API equivalent ÷ 20. Cache writes are free.
+        let expected = (6.5 + 2.0 * 1.1 + 3.0 * 27.0) / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "K2.6 subscription cost: expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
+    fn kimi_subscription_cost_uses_k3_api_rates() {
+        let _guard = pricing_test_guard();
+        let mut record = make_record("kimi-cli", "kimi", "kimi-k3", 3_000_000, 0.0);
+        record.input_tokens = 1_000_000;
+        record.cache_read_tokens = 1_000_000;
+        record.output_tokens = 1_000_000;
+
+        let cost = display_cost(&record);
+        // Raw API equivalent: ¥20 input + ¥2 cache-hit + ¥100 output, then ÷ 20.
+        let expected = (20.0 + 2.0 + 100.0) / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "K3 subscription cost: expected {}, got {}",
+            expected,
+            cost
         );
     }
 

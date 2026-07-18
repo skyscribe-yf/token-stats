@@ -224,7 +224,7 @@ impl KimiCodeSource {
     /// model name patterns.
     fn resolve_provider(model: &str) -> String {
         match model {
-            "kimi-for-coding" | "kimi-k2" | "kimi-k2.5" | "kimi-k2.6" | "kimi-k2.7" => "kimi".to_string(),
+            "kimi-for-coding" | "kimi-k2" | "kimi-k2.5" | "kimi-k2.6" | "kimi-k2.7" | "k3" => "kimi".to_string(),
             "astron-code-latest" => "xunfei".to_string(),
             "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
             "deepseek-v4-pro" | "deepseek-v4-flash" => "deepseek".to_string(),

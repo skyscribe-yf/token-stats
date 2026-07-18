@@ -1,4 +1,5 @@
 {
-  "kimi_monthly_start_day": 9,
-  "kimi_ex_monthly_start_day": 6
+  "kimi_monthly_start_day": 8,
+  "kimi_ex_monthly_start_day": 6,
+  "kimi_subscription_multiplier": 18.0
 }

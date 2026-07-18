@@ -112,13 +112,30 @@ fn default_advanced_models() -> Vec<String> {
 ///
 /// Tracks user-configurable subscription parameters like billing cycle start dates
 /// so the dashboard can compute expiration alerts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionSettings {
     /// Day of month (1–28) when the Kimi monthly subscription renews.
     /// `None` means the user has not configured it yet.
     pub kimi_monthly_start_day: Option<u8>,
     /// Day of month (1–28) when the EX Kimi monthly subscription renews.
     pub kimi_ex_monthly_start_day: Option<u8>,
+    /// Subscription estimate: raw Kimi API equivalent divided by this value.
+    #[serde(default = "default_kimi_subscription_multiplier")]
+    pub kimi_subscription_multiplier: f64,
+}
+
+fn default_kimi_subscription_multiplier() -> f64 {
+    20.0
+}
+
+impl Default for SubscriptionSettings {
+    fn default() -> Self {
+        Self {
+            kimi_monthly_start_day: None,
+            kimi_ex_monthly_start_day: None,
+            kimi_subscription_multiplier: default_kimi_subscription_multiplier(),
+        }
+    }
 }
 
 /// Return the path to the subscription settings JSON file.
@@ -170,7 +187,7 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
         }
     };
 
-    let settings: SubscriptionSettings = match serde_json::from_str(&content) {
+    let mut settings: SubscriptionSettings = match serde_json::from_str(&content) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("Failed to parse subscription settings: {}", e);
@@ -185,10 +202,7 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
                 "Invalid kimi_monthly_start_day {} in settings file, ignoring",
                 day
             );
-            return SubscriptionSettings {
-                kimi_monthly_start_day: None,
-                kimi_ex_monthly_start_day: settings.kimi_ex_monthly_start_day,
-            };
+            settings.kimi_monthly_start_day = None;
         }
     }
 
@@ -199,11 +213,15 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
                 "Invalid kimi_ex_monthly_start_day {} in settings file, ignoring",
                 day
             );
-            return SubscriptionSettings {
-                kimi_monthly_start_day: settings.kimi_monthly_start_day,
-                kimi_ex_monthly_start_day: None,
-            };
+            settings.kimi_ex_monthly_start_day = None;
         }
+    }
+
+    if !settings.kimi_subscription_multiplier.is_finite()
+        || settings.kimi_subscription_multiplier <= 0.0
+    {
+        tracing::warn!("Invalid kimi_subscription_multiplier in settings file, using default");
+        settings.kimi_subscription_multiplier = default_kimi_subscription_multiplier();
     }
 
     tracing::info!("Loaded subscription settings from {:?}", path);
@@ -291,6 +309,7 @@ mod tests {
     fn subscription_settings_default_has_none() {
         let settings = SubscriptionSettings::default();
         assert!(settings.kimi_monthly_start_day.is_none());
+        assert_eq!(settings.kimi_subscription_multiplier, 20.0);
     }
 
     #[test]
@@ -308,6 +327,7 @@ mod tests {
         let original = SubscriptionSettings {
             kimi_monthly_start_day: Some(15),
             kimi_ex_monthly_start_day: None,
+            kimi_subscription_multiplier: 20.0,
         };
         let content = serde_json::to_string_pretty(&original).unwrap();
         std::fs::write(&path, content).unwrap();

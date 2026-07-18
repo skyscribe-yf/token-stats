@@ -660,9 +660,18 @@ export interface AinabaSegment {
   divisor: number;
 }
 
+export interface KimiApiModelPrice {
+  name: string;
+  input: number;
+  cache_read: number;
+  output: number;
+}
+
 export interface SpecialPricing {
   xunfei_per_call: number;
   kimi_per_token: number;
+  kimi_subscription_multiplier: number;
+  kimi_api_models: KimiApiModelPrice[];
   xiaomi_mimo_tp_per_token: number;
   opencode_divisor: number;
   ainaba_divisor: number;
@@ -729,6 +738,7 @@ export async function saveAdvancedModels(models: string[]): Promise<{ success: b
 export interface SubscriptionSettings {
   kimi_monthly_start_day: number | null;
   kimi_ex_monthly_start_day: number | null;
+  kimi_subscription_multiplier: number;
 }
 
 export async function fetchSubscriptionSettings(): Promise<SubscriptionSettings> {

@@ -71,6 +71,28 @@ impl CodexSource {
             // any turn_context appears, so a naive sequential parse would assign
             // a wrong hardcoded default model.
             let lines: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
+            // The Codex CLI records the active configured profile on the session
+            // metadata. A model can be served by multiple profiles, so using the
+            // model alone cannot reliably identify the billing provider.
+            let session_provider = lines
+                .iter()
+                .find_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .and_then(|obj| {
+                            if obj.get("type").and_then(|t| t.as_str()) == Some("session_meta") {
+                                obj.get("payload")
+                                    .and_then(|p| p.get("model_provider"))
+                                    .and_then(|provider| provider.as_str())
+                                    .filter(|provider| !provider.is_empty())
+                                    .map(String::from)
+                            } else {
+                                None
+                            }
+                        })
+                })
+                // Older rollout files did not include the profile metadata.
+                .unwrap_or_else(|| "openai".to_string());
             let mut session_model = lines
                 .iter()
                 .find_map(|line| {
@@ -155,6 +177,7 @@ impl CodexSource {
                     // Codex replays token_count events with new timestamps when
                     // session histories are copied or forwarded to subagents.
                     let usage_key = (
+                        session_provider.clone(),
                         session_model.clone(),
                         input_tokens,
                         cached_input_tokens,
@@ -181,7 +204,7 @@ impl CodexSource {
                         date,
                         time,
                         api_key_prefix: "N/A".to_string(),
-                        provider: "openai".to_string(),
+                        provider: session_provider.clone(),
                         original_provider: None,
                         model: session_model.clone(),
                         source: "codex".to_string(),
@@ -249,6 +272,49 @@ mod tests {
         fs::write(dir.path().join("rollout-a.jsonl"), lines.join("\n")).unwrap();
 
         assert_eq!(CodexSource::parse(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn assigns_provider_from_session_profile() {
+        let dir = tempdir().unwrap();
+        let session_meta = r#"{"type":"session_meta","payload":{"model_provider":"fenno"}}"#;
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
+        let event = r#"{"timestamp":"2026-07-10T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"total_tokens":110}}}}"#;
+        fs::write(
+            dir.path().join("rollout-fenno.jsonl"),
+            format!("{session_meta}\n{context}\n{event}\n"),
+        )
+        .unwrap();
+
+        let records = CodexSource::parse(dir.path());
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].provider, "fenno");
+    }
+
+    #[test]
+    fn preserves_identical_usage_from_different_session_profiles() {
+        let dir = tempdir().unwrap();
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
+        let event = r#"{"timestamp":"2026-07-10T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"total_tokens":110}}}}"#;
+
+        for provider in ["fenno", "xai"] {
+            let session_meta =
+                format!(r#"{{"type":"session_meta","payload":{{"model_provider":"{provider}"}}}}"#);
+            fs::write(
+                dir.path().join(format!("rollout-{provider}.jsonl")),
+                format!("{session_meta}\n{context}\n{event}\n"),
+            )
+            .unwrap();
+        }
+
+        let mut providers: Vec<_> = CodexSource::parse(dir.path())
+            .into_iter()
+            .map(|record| record.provider)
+            .collect();
+        providers.sort();
+
+        assert_eq!(providers, ["fenno", "xai"]);
     }
 
     #[test]

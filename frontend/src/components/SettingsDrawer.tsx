@@ -81,7 +81,11 @@ export function SettingsDrawer({
               onChange={(e) => {
                 const v = e.target.value ? parseInt(e.target.value) : null;
                 onSubscriptionSettingsChange({
-                  ...(subscriptionSettings ?? { kimi_monthly_start_day: null, kimi_ex_monthly_start_day: null }),
+                  ...(subscriptionSettings ?? {
+                    kimi_monthly_start_day: null,
+                    kimi_ex_monthly_start_day: null,
+                    kimi_subscription_multiplier: 20,
+                  }),
                   kimi_monthly_start_day: v,
                 });
               }}
@@ -101,6 +105,30 @@ export function SettingsDrawer({
           {subSavedAt && (
             <p className="mt-1 text-[10px] text-emerald-600">已保存</p>
           )}
+          <label className="block text-[10px] text-slate-500 mt-2 mb-1">
+            Kimi API 原价折算倍率
+          </label>
+          <input
+            type="number"
+            min={0.1}
+            step={0.1}
+            value={subscriptionSettings?.kimi_subscription_multiplier ?? 20}
+            onChange={(e) => {
+              const multiplier = e.currentTarget.valueAsNumber;
+              if (!Number.isFinite(multiplier)) return;
+              onSubscriptionSettingsChange({
+                ...(subscriptionSettings ?? {
+                  kimi_monthly_start_day: null,
+                  kimi_ex_monthly_start_day: null,
+                  kimi_subscription_multiplier: 20,
+                }),
+                kimi_subscription_multiplier: multiplier,
+              });
+            }}
+            className="w-full px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-primary-500 outline-none"
+            aria-label="Kimi API 原价折算倍率"
+          />
+          <p className="mt-1 text-[10px] text-slate-400">实际成本 = API 原价 ÷ 倍率</p>
         </section>
 
         {/* 计价逻辑 */}
@@ -126,8 +154,9 @@ export function SettingsDrawer({
                     讯飞: 每次 ¥{pricingConfig.special.xunfei_per_call.toFixed(6)}
                   </li>
                   <li>
-                    Kimi CLI: 每 Token ¥
-                    {pricingConfig.special.kimi_per_token.toExponential(3)}
+                    Kimi: 模型 API 原价 ÷
+                    {subscriptionSettings?.kimi_subscription_multiplier ?? pricingConfig.special.kimi_subscription_multiplier}
+                    （cache write 免费）
                   </li>
                   <li>
                     Xiaomi MiMo TP: 每 Token ¥

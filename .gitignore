@@ -22,3 +22,8 @@ setup-docker-mirror.sh
 .worktrees/
 .pi/
 .qoder
+.pi-subagents/
+.planning/
+longcat_js/
+*.new
+2525.*.js

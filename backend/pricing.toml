@@ -8,8 +8,18 @@ rate_date = "2026-05-20"
 # 讯飞订阅：199 元 / 90000 次调用
 xunfei_per_call = 0.002211111111
 
-# Kimi CLI：199 元 / 28 亿 Token（2_800_000_000）
+# Kimi legacy flat rate (kept only for compatibility; no longer used)
 kimi_per_token = 0.000000071071429
+
+# Kimi 订阅：实际成本 = 对应模型 API 原价 ÷ 此倍率；前端可调整并持久化。
+kimi_subscription_multiplier = 20.0
+
+# Kimi API 原价（CNY / 1M tokens）；cache write 免费。
+kimi_api_models = [
+    { name = "kimi-k3", input = 20.0, cache_read = 2.0, output = 100.0 },
+    { name = "kimi-k2.6", input = 6.5, cache_read = 1.1, output = 27.0 },
+    { name = "kimi-k2.7", input = 6.5, cache_read = 1.3, output = 27.0 },
+]
 
 # Xiaomi MiMo TP：99 元套餐
 # 实测：dashboard 672.26M tokens ≈ 套餐使用 84%

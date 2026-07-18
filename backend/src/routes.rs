@@ -353,8 +353,17 @@ pub async fn update_subscription_settings(
             }));
         }
     }
+    if !body.kimi_subscription_multiplier.is_finite() || body.kimi_subscription_multiplier <= 0.0 {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": "kimi_subscription_multiplier must be a positive finite number"
+        }));
+    }
     match settings::save_subscription_settings(&body) {
-        Ok(()) => Json(serde_json::json!({ "success": true })),
+        Ok(()) => {
+            pricing::set_kimi_subscription_multiplier(body.kimi_subscription_multiplier);
+            Json(serde_json::json!({ "success": true }))
+        }
         Err(e) => {
             tracing::warn!("Failed to save subscription settings: {}", e);
             Json(serde_json::json!({ "success": false, "error": "Failed to save settings" }))

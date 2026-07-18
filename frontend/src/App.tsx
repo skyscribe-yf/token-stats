@@ -1037,7 +1037,8 @@ export default function App() {
   const handleSaveSubscriptionSettings = useCallback(async () => {
     if (!subscriptionSettings) return;
     await saveSubscriptionSettings(subscriptionSettings);
-  }, [subscriptionSettings]);
+    await loadData();
+  }, [subscriptionSettings, loadData]);
 
   const handleExport = useCallback(async () => {
     setExportError(null);

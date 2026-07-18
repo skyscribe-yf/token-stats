@@ -151,7 +151,8 @@ pub fn normalize_model_name(model: &str) -> String {
         "xopglm5" => "glm-5".to_string(),
         "xopglm51" => "glm-5.1".to_string(),
         "xopglmv47flash" => "glm-4.7-flash".to_string(),
-        // Kimi family
+        // Kimi family — also normalizes short alias "k3" to full "kimi-k3"
+        "k3" => "kimi-k3".to_string(),
         "xopkimik26" => "kimi-k2.6".to_string(),
         "xopkimik25" => "kimi-k2.5".to_string(),
         // DeepSeek family
