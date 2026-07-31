@@ -332,6 +332,7 @@ export interface QuotaResponse {
   meituan: MeituanQuotaStatus | null;
   fenno: FennoQuotaStatus | null;
   fenno_ex: FennoQuotaStatus | null;
+  grok: GrokQuotaStatus | null;
 }
 
 // ─── Ollama Quota ───────────────────────────────────────────────────────────
@@ -417,6 +418,36 @@ export interface FennoQuotaData {
 export interface FennoQuotaStatus {
   available: boolean;
   data: FennoQuotaData | null;
+  error: string | null;
+}
+
+// ─── Grok / XAI Quota ────────────────────────────────────────────────────────
+
+export interface GrokQuotaData {
+  user_id: string;
+  team_id: string;
+  zdr_status: string;
+  total_calls: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_tokens: number;
+  estimated_cost_cny: number;
+  weekly_usage_percent?: number;
+  weekly_remaining_percent?: number;
+  weekly_period_start?: string;
+  weekly_reset_at?: string | null;
+  weekly_breakdown?: GrokQuotaBreakdown[];
+}
+
+export interface GrokQuotaBreakdown {
+  product: string;
+  usage_percent: number;
+}
+
+export interface GrokQuotaStatus {
+  available: boolean;
+  data: GrokQuotaData | null;
   error: string | null;
 }
 
@@ -739,6 +770,7 @@ export interface SubscriptionSettings {
   kimi_monthly_start_day: number | null;
   kimi_ex_monthly_start_day: number | null;
   kimi_subscription_multiplier: number;
+  grok_divisor: number;
 }
 
 export async function fetchSubscriptionSettings(): Promise<SubscriptionSettings> {

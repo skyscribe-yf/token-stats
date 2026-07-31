@@ -236,6 +236,16 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
 pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let fetcher = &state.quota_fetcher;
 
+    // Snapshot grok-cli records for token aggregation
+    let grok_records: Vec<crate::models::TokenRecord> = {
+        let records = state.records.read().await;
+        records
+            .iter()
+            .filter(|r| r.source == "grok-cli")
+            .cloned()
+            .collect()
+    };
+
     let (
         kimi_result,
         kimi_ex_result,
@@ -247,6 +257,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         meituan_result,
         fenno_result,
         fenno_ex_result,
+        grok_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -258,6 +269,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fetcher.fetch_meituan_quota(),
         fetcher.fetch_fenno_quota(),
         fetcher.fetch_fenno_quota_ex(),
+        fetcher.fetch_grok_quota(&grok_records),
     );
 
     let response = QuotaResponse {
@@ -271,6 +283,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         meituan: Some(meituan_result),
         fenno: Some(fenno_result),
         fenno_ex: Some(fenno_ex_result),
+        grok: Some(grok_result),
     };
 
     Json(response)
@@ -359,9 +372,16 @@ pub async fn update_subscription_settings(
             "error": "kimi_subscription_multiplier must be a positive finite number"
         }));
     }
+    if !body.grok_divisor.is_finite() || body.grok_divisor <= 0.0 {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": "grok_divisor must be a positive finite number"
+        }));
+    }
     match settings::save_subscription_settings(&body) {
         Ok(()) => {
             pricing::set_kimi_subscription_multiplier(body.kimi_subscription_multiplier);
+            pricing::set_grok_divisor(body.grok_divisor);
             Json(serde_json::json!({ "success": true }))
         }
         Err(e) => {

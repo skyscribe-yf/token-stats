@@ -1,5 +1,6 @@
 {
   "kimi_monthly_start_day": 8,
   "kimi_ex_monthly_start_day": 6,
-  "kimi_subscription_multiplier": 18.0
+  "kimi_subscription_multiplier": 13.0,
+  "grok_divisor": 265.98
 }

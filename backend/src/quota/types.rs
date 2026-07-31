@@ -178,6 +178,7 @@ pub struct QuotaResponse {
     pub meituan: Option<MeituanQuotaStatus>,
     pub fenno: Option<FennoQuotaStatus>,
     pub fenno_ex: Option<FennoQuotaStatus>,
+    pub grok: Option<GrokQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,5 +373,58 @@ pub struct MeituanQuotaData {
 pub struct MeituanQuotaStatus {
     pub available: bool,
     pub data: Option<MeituanQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── Grok / XAI types ────────────────────────────────────────────────────────
+
+/// Grok (XAI) account and usage data for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrokQuotaData {
+    pub user_id: String,
+    pub team_id: String,
+    pub zdr_status: String,
+    /// Aggregated token usage from grok-cli data source.
+    #[serde(default)]
+    pub total_calls: i64,
+    #[serde(default)]
+    pub total_input_tokens: i64,
+    #[serde(default)]
+    pub total_output_tokens: i64,
+    #[serde(default)]
+    pub total_cache_read_tokens: i64,
+    #[serde(default)]
+    pub total_tokens: i64,
+    /// Estimated subscription spend in CNY.
+    #[serde(default)]
+    pub estimated_cost_cny: f64,
+    /// Percentage used by the weekly SuperGrok pool returned by grok.com.
+    #[serde(default)]
+    pub weekly_usage_percent: f64,
+    /// Percentage remaining in the weekly SuperGrok pool returned by grok.com.
+    #[serde(default)]
+    pub weekly_remaining_percent: f64,
+    /// Start of the current weekly quota window.
+    #[serde(default)]
+    pub weekly_period_start: String,
+    /// End of the current weekly quota window.
+    #[serde(default)]
+    pub weekly_reset_at: Option<String>,
+    /// Product-level usage rows returned by the Grok billing endpoint.
+    #[serde(default)]
+    pub weekly_breakdown: Vec<GrokQuotaBreakdown>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrokQuotaBreakdown {
+    pub product: String,
+    pub usage_percent: f64,
+}
+
+/// Grok quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrokQuotaStatus {
+    pub available: bool,
+    pub data: Option<GrokQuotaData>,
     pub error: Option<String>,
 }

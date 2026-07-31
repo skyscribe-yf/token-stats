@@ -10,7 +10,7 @@
 //! using the current `pricing.toml` configuration.
 
 use crate::models::TokenRecord;
-use chrono::{Datelike, FixedOffset, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -108,10 +108,20 @@ pub struct SpecialPricing {
     /// Derived from: 38M tokens / 13% ≈ 292,307,692
     #[serde(default)]
     pub ollama_cloud_empirical_weekly_quota: i64,
+    /// Grok (XAI / Super Grok) subscription discount.
+    /// 50 RMB → 3 months → ~$1,950 API value ($150/week × 13 weeks).
+    /// Actual cost = API computed cost in CNY / this divisor.
+    /// Default: $1,950 × 6.82 / 50 = 266
+    #[serde(default = "default_grok_divisor")]
+    pub grok_divisor: f64,
     /// Off-peak (波谷) pricing configuration for xunfei/xunfei-ex.
     /// If `None`, no off-peak discount is applied (always full price).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xunfei_off_peak: Option<XunfeiOffPeakConfig>,
+}
+
+fn default_grok_divisor() -> f64 {
+    1950.0 * 6.82 / 50.0
 }
 
 fn default_fenno_divisor() -> f64 {
@@ -178,6 +188,14 @@ pub struct ModelPriceConfig {
     /// None = base tier (threshold 0). Some(128000) = applies when total_input >= 128K.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier_threshold: Option<i64>,
+    /// Optional RFC3339 timestamp marking when this price entry becomes effective.
+    /// Entries without `effective_from` are the baseline (apply to all records).
+    /// Entries with `effective_from` apply only to records whose time >= effective_from.
+    /// Used for time-segmented pricing, e.g. official price reductions that take
+    /// effect at a specific moment. When multiple time segments match a record,
+    /// the one with the latest effective_from wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +229,7 @@ impl Default for PricingConfig {
                 meituan_per_token: default_meituan_per_token(),
                 ollama_cloud_empirical_per_token: 0.0000001077,
                 ollama_cloud_empirical_weekly_quota: 292307692,
+                grok_divisor: default_grok_divisor(),
                 xunfei_off_peak: None,
             },
             model: Vec::new(),
@@ -226,29 +245,10 @@ impl PricingConfig {
         for m in &self.model {
             groups.entry(m.name.clone()).or_default().push(m);
         }
-        // Build ModelPrice from each group
+        // Build ModelPrice from each group (time-segment + tier validation inside)
         groups
             .into_iter()
-            .map(|(name, configs)| {
-                let base_count = configs
-                    .iter()
-                    .filter(|c| c.tier_threshold.is_none())
-                    .count();
-                if base_count > 1 {
-                    tracing::warn!(
-                        "Model '{}' has {} base-tier entries, using last one",
-                        name,
-                        base_count
-                    );
-                } else if base_count == 0 {
-                    tracing::warn!(
-                        "Model '{}' has no base-tier entry (all entries specify tier_threshold); \
-                         inputs below the lowest threshold will use that tier's rates",
-                        name
-                    );
-                }
-                (name, ModelPrice::from_configs(&configs))
-            })
+            .map(|(name, configs)| (name, ModelPrice::from_configs(&configs)))
             .collect()
     }
 }
@@ -262,29 +262,18 @@ struct PriceTier {
     cache_write: f64,
 }
 
+/// A time segment of a model's pricing. Holds the token-count tiers that apply
+/// to records whose time falls in this segment.
 #[derive(Debug, Clone)]
-struct ModelPrice {
-    /// Price tiers sorted by threshold ascending. First tier has threshold=0 (base).
+struct TimeSegment {
+    /// When this price segment takes effect. `None` = baseline (oldest rates)
+    /// that applies to every record unless a later dated segment overrides it.
+    effective_from: Option<DateTime<FixedOffset>>,
+    /// Token-count tiers sorted by threshold ascending (first = base, threshold 0).
     tiers: Vec<PriceTier>,
 }
 
-impl ModelPrice {
-    /// Build from a slice of ModelPriceConfig entries sharing the same name.
-    fn from_configs(configs: &[&ModelPriceConfig]) -> Self {
-        let mut tiers: Vec<PriceTier> = configs
-            .iter()
-            .map(|c| PriceTier {
-                threshold: c.tier_threshold.unwrap_or(0),
-                input: c.input,
-                output: c.output,
-                cache_read: c.cache_read,
-                cache_write: c.cache_write,
-            })
-            .collect();
-        tiers.sort_by_key(|t| t.threshold);
-        Self { tiers }
-    }
-
+impl TimeSegment {
     /// Select the appropriate tier based on total input tokens.
     /// Total input = input_tokens + cache_read_tokens + cache_write_tokens.
     /// Returns the last tier whose threshold <= total_input.
@@ -299,17 +288,104 @@ impl ModelPrice {
         }
         selected
     }
+}
 
-    /// Compute cost in USD for the given token counts.
+#[derive(Debug, Clone)]
+struct ModelPrice {
+    /// Time segments sorted by effective_from ascending (None/baseline first).
+    /// For a given record, the latest segment whose effective_from <= record
+    /// time wins; the baseline (None) segment applies when no dated segment
+    /// qualifies yet.
+    segments: Vec<TimeSegment>,
+}
+
+impl ModelPrice {
+    /// Build from a slice of ModelPriceConfig entries sharing the same name.
+    /// Entries are grouped by `effective_from` into time segments; within each
+    /// segment, tiers are sorted by token-count threshold.
+    fn from_configs(configs: &[&ModelPriceConfig]) -> Self {
+        // Group configs by their effective_from string (None = baseline).
+        let mut groups: HashMap<Option<String>, Vec<&ModelPriceConfig>> = HashMap::new();
+        for c in configs {
+            groups.entry(c.effective_from.clone()).or_default().push(c);
+        }
+
+        let mut segments: Vec<TimeSegment> = groups
+            .into_iter()
+            .map(|(eff_from, cfgs)| {
+                // Warn if a single time segment defines multiple base tiers.
+                let base_count = cfgs.iter().filter(|c| c.tier_threshold.is_none()).count();
+                if base_count > 1 {
+                    tracing::warn!(
+                        "Model time segment {:?} has {} base-tier entries, using last one",
+                        eff_from,
+                        base_count
+                    );
+                } else if base_count == 0 {
+                    tracing::warn!(
+                        "Model time segment {:?} has no base-tier entry; inputs below the \
+                         lowest threshold will use that tier's rates",
+                        eff_from
+                    );
+                }
+                let mut tiers: Vec<PriceTier> = cfgs
+                    .iter()
+                    .map(|c| PriceTier {
+                        threshold: c.tier_threshold.unwrap_or(0),
+                        input: c.input,
+                        output: c.output,
+                        cache_read: c.cache_read,
+                        cache_write: c.cache_write,
+                    })
+                    .collect();
+                tiers.sort_by_key(|t| t.threshold);
+                let effective_from = eff_from
+                    .as_ref()
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+                TimeSegment { effective_from, tiers }
+            })
+            .collect();
+        // None (baseline) sorts first as -inf, then dated segments by time.
+        segments.sort_by_key(|s| s.effective_from.map(|dt| dt.timestamp()).unwrap_or(i64::MIN));
+        Self { segments }
+    }
+
+    /// Select the time segment for a record. `record_time` is the parsed RFC3339
+    /// timestamp, or None if unparseable (in which case the baseline segment is
+    /// used as a conservative default).
+    fn select_segment(&self, record_time: Option<DateTime<FixedOffset>>) -> &TimeSegment {
+        let mut chosen: Option<&TimeSegment> = None;
+        for seg in &self.segments {
+            let qualifies = match (&seg.effective_from, record_time) {
+                (None, _) => true, // baseline always qualifies
+                (Some(from), Some(rt)) => rt >= *from,
+                (Some(_), None) => false, // can't compare without a record time
+            };
+            if qualifies {
+                // Segments are sorted ascending, so the last qualifying one is
+                // the latest applicable time segment.
+                chosen = Some(seg);
+            }
+        }
+        // If nothing qualified (record predates all dated segments and there
+        // is no baseline), fall back to the earliest segment.
+        chosen.unwrap_or_else(|| &self.segments[0])
+    }
+
+    /// Compute cost in USD for the given token counts at the record's time.
+    /// `record_time` is the raw RFC3339 timestamp string from the record.
     fn compute_usd(
         &self,
         input_tokens: i64,
         output_tokens: i64,
         cache_read_tokens: i64,
         cache_write_tokens: i64,
+        record_time: &str,
     ) -> f64 {
+        let rt = DateTime::parse_from_rfc3339(record_time).ok();
+        let seg = self.select_segment(rt);
         let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
-        let tier = self.select_tier(total_input);
+        let tier = seg.select_tier(total_input);
         input_tokens as f64 * tier.input / 1_000_000.0
             + output_tokens as f64 * tier.output / 1_000_000.0
             + cache_read_tokens as f64 * tier.cache_read / 1_000_000.0
@@ -410,8 +486,9 @@ fn load_config_from_file(path: &std::path::Path) -> PricingConfig {
 pub fn init() {
     let path = config_path();
     let mut config = load_config_from_file(&path);
-    config.special.kimi_subscription_multiplier =
-        crate::settings::load_subscription_settings().kimi_subscription_multiplier;
+    let ss = crate::settings::load_subscription_settings();
+    config.special.kimi_subscription_multiplier = ss.kimi_subscription_multiplier;
+    config.special.grok_divisor = ss.grok_divisor;
     let mut state = state_cell().lock().unwrap();
     *state = PricingState::new(config);
 }
@@ -420,8 +497,9 @@ pub fn init() {
 pub fn reload() {
     let path = config_path();
     let mut config = load_config_from_file(&path);
-    config.special.kimi_subscription_multiplier =
-        crate::settings::load_subscription_settings().kimi_subscription_multiplier;
+    let ss = crate::settings::load_subscription_settings();
+    config.special.kimi_subscription_multiplier = ss.kimi_subscription_multiplier;
+    config.special.grok_divisor = ss.grok_divisor;
     let mut state = state_cell().lock().unwrap();
     state.reload(config);
     tracing::info!("Pricing configuration reloaded from {:?}", path);
@@ -440,6 +518,15 @@ pub fn set_kimi_subscription_multiplier(multiplier: f64) {
         .config
         .special
         .kimi_subscription_multiplier = multiplier;
+}
+
+pub fn set_grok_divisor(divisor: f64) {
+    state_cell()
+        .lock()
+        .unwrap()
+        .config
+        .special
+        .grok_divisor = divisor;
 }
 
 // ── Model price resolution ───────────────────────────────────────────────────
@@ -512,7 +599,7 @@ fn resolve_kimi_api_price<'a>(
     model: &str,
 ) -> Option<&'a KimiApiModelPrice> {
     let model_lower = model.to_lowercase();
-    if model_lower.contains("kimi-k3") {
+    if model_lower.contains("kimi-k3") || model_lower.contains("k3-256k") {
         return state.kimi_api_model_map.get("kimi-k3");
     }
     if model_lower.contains("kimi-k2.6") {
@@ -726,6 +813,13 @@ fn get_ainaba_divisor(special: &SpecialPricing, record_time: &str) -> f64 {
     special.ainaba_divisor
 }
 
+/// Whether a model name belongs to the OpenAI GPT family (gpt-5.5, gpt-5.4,
+/// gpt-5.6-sol/terra/luna, etc.). Used to scope provider-specific recomputation
+/// (e.g. Fenno) to GPT models, where official price reductions apply.
+fn is_gpt_family(model: &str) -> bool {
+    model.to_lowercase().contains("gpt")
+}
+
 /// Compute the display cost (CNY) for a single record based on the current
 /// pricing configuration.
 ///
@@ -819,6 +913,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                 record.output_tokens,
                 record.cache_read_tokens,
                 record.cache_write_tokens,
+                &record.time,
             );
             return usd * cfg.usd_to_cny / cfg.special.commandcode_divisor;
         }
@@ -826,8 +921,9 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
 
     // 4b. Ollama Cloud (subscription): empirical per-token estimate in CNY.
     //     Applies to both "ollama" and vendor-merged "ollama-cloud" records.
-    //     Uses the same per-token rate as the quota card cost estimation.
-    if record.provider == "ollama" && record.cost == 0.0 {
+    //     Always uses the empirical subscription rate regardless of stored cost,
+    //     because Ollama is a flat $20/mo subscription, not pay-per-token.
+    if record.provider == "ollama" {
         return record.total_tokens as f64 * cfg.special.ollama_cloud_empirical_per_token;
     }
 
@@ -853,8 +949,30 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                     record.output_tokens,
                     record.cache_read_tokens,
                     record.cache_write_tokens,
+                    &record.time,
                 );
                 return usd * cfg.usd_to_cny / get_ainaba_divisor(&cfg.special, &record.time);
+            }
+        }
+
+        // Fenno subscription: like Ainaba, recompute GPT models from token
+        // counts so time-segmented official prices (e.g. the 2026-07-31
+        // GPT-5.6 Terra/Luna reduction) are applied. Non-GPT Fenno models and
+        // models without a pricing.toml entry fall through to the stored-cost
+        // path below. Actual cost = official list price (USD) × usd_to_cny ÷
+        // fenno_divisor (10 CNY buys 150 USD face value).
+        if (effective_provider == "fenno" || effective_provider == "fenno-ex")
+            && is_gpt_family(&record.model)
+        {
+            if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+                let usd = mp.compute_usd(
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
+                    &record.time,
+                );
+                return usd * cfg.usd_to_cny / cfg.special.fenno_divisor;
             }
         }
 
@@ -898,7 +1016,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
 
         // Fenno subscription discount: 10 CNY buys 150 USD face value.
         // After USD→CNY conversion, divide by the effective face-value ratio.
-        if effective_provider == "fenno" {
+        if effective_provider == "fenno" || effective_provider == "fenno-ex" {
             cny /= cfg.special.fenno_divisor;
         }
 
@@ -920,6 +1038,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                 record.output_tokens,
                 record.cache_read_tokens,
                 record.cache_write_tokens,
+                &record.time,
             );
             return usd * cfg.usd_to_cny;
         }
@@ -938,6 +1057,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                 record.output_tokens,
                 record.cache_read_tokens,
                 record.cache_write_tokens,
+                &record.time,
             );
             let mut cny = usd * cfg.usd_to_cny;
             // Ainaba time-based rate: divisor depends on record timestamp
@@ -956,6 +1076,9 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             }
             if record.provider == "fenno" {
                 cny /= cfg.special.fenno_divisor;
+            }
+            if record.provider == "xai-official" || record.provider == "xai" {
+                cny /= cfg.special.grok_divisor;
             }
             return cny;
         }
@@ -2202,6 +2325,24 @@ cache_write = 2.50
     }
 
     #[test]
+    fn kimi_k3_256k_variant_uses_k3_api_rates() {
+        let _guard = pricing_test_guard();
+        let mut record = make_record("kimi-cli", "kimi", "k3-256k", 3_000_000, 0.0);
+        record.input_tokens = 1_000_000;
+        record.cache_read_tokens = 1_000_000;
+        record.output_tokens = 1_000_000;
+
+        let cost = display_cost(&record);
+        let expected = (20.0 + 2.0 + 100.0) / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "k3-256k subscription cost: expected {}, got {}",
+            expected,
+            cost
+        );
+    }
+
+    #[test]
     fn ainaba_pi_stored_cost_recomputes_high_tier_with_cached_tokens() {
         let _guard = pricing_test_guard();
         let prev_env = std::env::var("PRICING_CONFIG").ok();
@@ -2307,6 +2448,316 @@ cache_write = 5.00
         assert!(
             (cost - expected).abs() < 1e-9,
             "ainaba base-tier pi cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    // ── GPT-5.6 Terra/Luna time-segmented pricing tests ───────────────
+    //
+    // OpenAI announced a price reduction on 2026-07-30: GPT-5.6 Terra -20%,
+    // GPT-5.6 Luna -80%, effective for reseller billing at 2026-07-31 14:00
+    // CST (UTC+8). pricing.toml keeps the old prices as the baseline and adds
+    // new entries with `effective_from = "2026-07-31T14:00:00+08:00"`.
+
+    /// Build a record with explicit token counts and timestamp.
+    fn make_timed_record(
+        source: &str,
+        provider: &str,
+        model: &str,
+        time: &str,
+        input: i64,
+        output: i64,
+        cache_read: i64,
+        cache_write: i64,
+        cost: f64,
+    ) -> TokenRecord {
+        TokenRecord {
+            date: time[..10].to_string(),
+            time: time.to_string(),
+            api_key_prefix: "test".to_string(),
+            provider: provider.to_string(),
+            original_provider: None,
+            model: model.to_string(),
+            source: source.to_string(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cache_read,
+            cache_write_tokens: cache_write,
+            total_tokens: input + output + cache_read + cache_write,
+            cost,
+            ttft_ms: None,
+            tps: None,
+        }
+    }
+
+    #[test]
+    fn gpt_5_6_terra_ainaba_uses_old_price_before_cutoff() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // 13:59:59 CST = 05:59:59 UTC, just before the 14:00 CST cutoff.
+        let record = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-07-31T05:59:59Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost = display_cost(&record);
+        // Old base tier: input=$2.50/M, output=$15/M. ainaba divisor = 20.
+        // usd = 100000*2.5/1M + 10000*15/1M = 0.25 + 0.15 = 0.40
+        // cny = 0.40 * 6.82 / 20.0 = 0.1364
+        let expected = 0.40 * 6.82 / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "terra before cutoff should use old price: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn gpt_5_6_terra_ainaba_uses_new_price_after_cutoff() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // 14:00:00 CST = 06:00:00 UTC, exactly at the cutoff (>= applies new).
+        let record = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-07-31T06:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost = display_cost(&record);
+        // New base tier: input=$2.00/M, output=$12/M. ainaba divisor = 20.
+        // usd = 100000*2.0/1M + 10000*12/1M = 0.20 + 0.12 = 0.32
+        // cny = 0.32 * 6.82 / 20.0 = 0.10912
+        let expected = 0.32 * 6.82 / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "terra after cutoff should use new reduced price: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn gpt_5_6_terra_long_context_after_cutoff_uses_new_high_tier() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // total_input = 250000 + 50000 = 300000 > 272000 → high tier.
+        let record = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-07-31T06:00:00Z",
+            250_000,
+            10_000,
+            50_000,
+            0,
+            0.05,
+        );
+        let cost = display_cost(&record);
+        // New high tier: input=$4/M, output=$18/M, cache_read=$0.40/M.
+        // usd = 250000*4/1M + 50000*0.40/1M + 10000*18/1M = 1.0 + 0.02 + 0.18 = 1.20
+        // cny = 1.20 * 6.82 / 20.0 = 0.4092
+        let expected = 1.20 * 6.82 / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "terra long-context after cutoff should use new high tier: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn gpt_5_6_luna_ainaba_uses_new_price_after_cutoff() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        let record = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-luna",
+            "2026-07-31T06:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost = display_cost(&record);
+        // New base tier: input=$0.20/M, output=$1.20/M. ainaba divisor = 20.
+        // usd = 100000*0.20/1M + 10000*1.20/1M = 0.02 + 0.012 = 0.032
+        // cny = 0.032 * 6.82 / 20.0 = 0.010912
+        let expected = 0.032 * 6.82 / 20.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "luna after cutoff should use new reduced price: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn gpt_5_6_sol_unchanged_across_cutoff() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // Sol pricing was not reduced; cost must be identical before & after.
+        let before = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-sol",
+            "2026-07-31T05:59:59Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let after = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-sol",
+            "2026-07-31T06:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost_before = display_cost(&before);
+        let cost_after = display_cost(&after);
+        // Sol base: input=$5/M, output=$30/M. usd = 0.5 + 0.3 = 0.8.
+        let expected = 0.8 * 6.82 / 20.0;
+        assert!(
+            (cost_before - expected).abs() < 1e-9,
+            "sol before cutoff: expected {}, got {}",
+            expected,
+            cost_before
+        );
+        assert!(
+            (cost_after - expected).abs() < 1e-9,
+            "sol after cutoff should be unchanged: expected {}, got {}",
+            expected,
+            cost_after
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn fenno_gpt_5_6_terra_recomputes_with_time_segmented_pricing() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        let fenno_divisor = 150.0 * 6.82 / 10.0;
+
+        // Before cutoff → old terra prices.
+        let before = make_timed_record(
+            "pi",
+            "fenno",
+            "gpt-5.6-terra",
+            "2026-07-31T05:59:59Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost_before = display_cost(&before);
+        let expected_before = 0.40 * 6.82 / fenno_divisor;
+        assert!(
+            (cost_before - expected_before).abs() < 1e-9,
+            "fenno terra before cutoff should recompute at old price: expected {}, got {}",
+            expected_before,
+            cost_before
+        );
+
+        // After cutoff → new reduced terra prices.
+        let after = make_timed_record(
+            "pi",
+            "fenno",
+            "gpt-5.6-terra",
+            "2026-07-31T06:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost_after = display_cost(&after);
+        let expected_after = 0.32 * 6.82 / fenno_divisor;
+        assert!(
+            (cost_after - expected_after).abs() < 1e-9,
+            "fenno terra after cutoff should recompute at new price: expected {}, got {}",
+            expected_after,
+            cost_after
+        );
+        // New price must be lower than old.
+        assert!(
+            cost_after < cost_before,
+            "fenno terra cost should drop after cutoff: before={}, after={}",
+            cost_before,
+            cost_after
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn fenno_non_gpt_model_keeps_stored_cost_path() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // A non-GPT Fenno model (claude-sonnet-4-6) must NOT be recomputed;
+        // it falls through to the stored-cost path with the Fenno divisor.
+        let record = make_timed_record(
+            "pi",
+            "fenno",
+            "claude-sonnet-4-6",
+            "2026-07-31T06:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.05,
+        );
+        let cost = display_cost(&record);
+        let fenno_divisor = 150.0 * 6.82 / 10.0;
+        let expected = 0.05 * 6.82 / fenno_divisor;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "fenno non-GPT should use stored cost + divisor: expected {}, got {}",
             expected,
             cost
         );

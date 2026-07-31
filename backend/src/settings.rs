@@ -122,10 +122,19 @@ pub struct SubscriptionSettings {
     /// Subscription estimate: raw Kimi API equivalent divided by this value.
     #[serde(default = "default_kimi_subscription_multiplier")]
     pub kimi_subscription_multiplier: f64,
+    /// Grok (XAI / Super Grok) subscription discount divisor.
+    /// 50 RMB → 3 months → ~$1,950 API value ($150/week × 13 weeks).
+    /// Default: 1950 × 6.82 / 50 = 266
+    #[serde(default = "default_grok_divisor")]
+    pub grok_divisor: f64,
 }
 
 fn default_kimi_subscription_multiplier() -> f64 {
     20.0
+}
+
+fn default_grok_divisor() -> f64 {
+    1950.0 * 6.82 / 50.0
 }
 
 impl Default for SubscriptionSettings {
@@ -134,6 +143,7 @@ impl Default for SubscriptionSettings {
             kimi_monthly_start_day: None,
             kimi_ex_monthly_start_day: None,
             kimi_subscription_multiplier: default_kimi_subscription_multiplier(),
+            grok_divisor: default_grok_divisor(),
         }
     }
 }
@@ -222,6 +232,11 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
     {
         tracing::warn!("Invalid kimi_subscription_multiplier in settings file, using default");
         settings.kimi_subscription_multiplier = default_kimi_subscription_multiplier();
+    }
+
+    if !settings.grok_divisor.is_finite() || settings.grok_divisor <= 0.0 {
+        tracing::warn!("Invalid grok_divisor in settings file, using default");
+        settings.grok_divisor = default_grok_divisor();
     }
 
     tracing::info!("Loaded subscription settings from {:?}", path);
@@ -328,6 +343,7 @@ mod tests {
             kimi_monthly_start_day: Some(15),
             kimi_ex_monthly_start_day: None,
             kimi_subscription_multiplier: 20.0,
+            grok_divisor: 266.0,
         };
         let content = serde_json::to_string_pretty(&original).unwrap();
         std::fs::write(&path, content).unwrap();

@@ -33,7 +33,6 @@ import {
   type AinaibaCreditResponse,
   type RestoreResponse,
   type SubscriptionSettings,
-  type OpenCodeQuotaStatus,
   type RpmAnalysis,
   type TpsAnalysis,
 } from "./api";
@@ -725,48 +724,6 @@ export default function App() {
         });
       }
     }
-
-    const checkOpenCode = (
-      status: OpenCodeQuotaStatus | null | undefined,
-      label: string
-    ) => {
-      if (!status?.available || !status.data) return;
-      const suffix = label === "ex" ? " (EX)" : "";
-      for (const entry of status.data.entries) {
-        if (entry.percentage >= 80) {
-          const typeLabel =
-            entry.usage_type === "Rolling"
-              ? "滚动"
-              : entry.usage_type === "Weekly"
-                ? "周"
-                : entry.usage_type === "Monthly"
-                  ? "月"
-                  : entry.usage_type;
-          alerts.push({
-            id: `opencode_${label}_${entry.usage_type}_low`,
-            provider: `OpenCode-go${suffix}`,
-            type: "quota_low",
-            message: `OpenCode-go${suffix} ${typeLabel}限额已用 ${entry.percentage}%`,
-            detail: `重置于 ${entry.resets_in}`,
-          });
-        }
-        if (
-          entry.usage_type === "Monthly" &&
-          entry.reset_at &&
-          isWithin24Hours(entry.reset_at)
-        ) {
-          alerts.push({
-            id: `opencode_${label}_expiring`,
-            provider: `OpenCode-go${suffix}`,
-            type: "expiring_soon",
-            message: `OpenCode-go${suffix} 月度配额即将重置`,
-            detail: `重置于 ${new Date(entry.reset_at).toLocaleString()}`,
-          });
-        }
-      }
-    };
-    checkOpenCode(quota?.opencode_go, "primary");
-    checkOpenCode(quota?.opencode_go_ex, "ex");
 
     if (xunfei?.accounts) {
       for (const acc of xunfei.accounts) {

@@ -62,6 +62,12 @@ commandcode_divisor = 10.0
 # 先按 USD→CNY 换算，再除以折扣倍率：150 × 6.82 / 10 = 102.3
 fenno_divisor = 102.3
 
+# Grok / Super Grok 订阅折扣：50 CNY 购买 3 个月配额（≈$1950 API 面值）
+# 官方提供 $150/周 原始额度，3 个月 ≈ 13 周 × $150 = $1,950
+# 实际成本 = API 计算价格（CNY）÷ grok_divisor
+# 默认：$1,950 × 6.82 / 50 = 266
+grok_divisor = 266.0
+
 # ── 讯飞波谷计费配置（2026年6月18日上线） ──────────────────────────────
 # 分时段差异化计量，错峰使用即可享受优惠费率：
 #
@@ -146,6 +152,27 @@ output = 22.50
 cache_read = 0.50
 cache_write = 6.25
 
+# GPT-5.6 Terra 官方降价 20%（2026-07-30 OpenAI 公告，2026-07-31 14:00 UTC+8 起生效）
+# 新价：input $2 / output $12 / cache_read $0.20 / cache_write = input × 1.25 = $2.50
+# 长上下文档（>272K）：input $4 / output $18 / cache_read $0.40 / cache_write $5.00
+# 旧价（上方无 effective_from 的条目）作为分段基准，14:00 前的记录继续使用。
+[[model]]
+name = "gpt-5.6-terra"
+effective_from = "2026-07-31T14:00:00+08:00"
+input = 2.00
+output = 12.00
+cache_read = 0.20
+cache_write = 2.50
+
+[[model]]
+name = "gpt-5.6-terra"
+effective_from = "2026-07-31T14:00:00+08:00"
+tier_threshold = 272000
+input = 4.00
+output = 18.00
+cache_read = 0.40
+cache_write = 5.00
+
 [[model]]
 name = "gpt-5.6-luna"
 input = 1.00
@@ -160,6 +187,27 @@ input = 2.00
 output = 9.00
 cache_read = 0.20
 cache_write = 2.50
+
+# GPT-5.6 Luna 官方降价 80%（2026-07-30 OpenAI 公告，2026-07-31 14:00 UTC+8 起生效）
+# 新价：input $0.20 / output $1.20 / cache_read $0.02 / cache_write = input × 1.25 = $0.25
+# 长上下文档（>272K）：input $0.40 / output $1.80 / cache_read $0.04 / cache_write $0.50
+# 旧价（上方无 effective_from 的条目）作为分段基准，14:00 前的记录继续使用。
+[[model]]
+name = "gpt-5.6-luna"
+effective_from = "2026-07-31T14:00:00+08:00"
+input = 0.20
+output = 1.20
+cache_read = 0.02
+cache_write = 0.25
+
+[[model]]
+name = "gpt-5.6-luna"
+effective_from = "2026-07-31T14:00:00+08:00"
+tier_threshold = 272000
+input = 0.40
+output = 1.80
+cache_read = 0.04
+cache_write = 0.50
 
 [[model]]
 name = "gpt-5.4"

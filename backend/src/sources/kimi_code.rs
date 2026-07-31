@@ -166,6 +166,14 @@ impl KimiCodeSource {
                     .get("model")
                     .and_then(|v| v.as_str())
                     .unwrap_or("kimi-for-coding");
+                // Kimi Code emits "__secondary__" as a placeholder model name when a
+                // sub-agent's request is routed through the secondary backend slot
+                // without a resolved model id. Treat it as the default kimi model.
+                let raw_model = if raw_model == "__secondary__" {
+                    "kimi-k2.7"
+                } else {
+                    raw_model
+                };
                 let (provider_from_prefix, model) = match raw_model.split_once('/') {
                     Some((vendor, model_name)) => (Some(vendor.to_string()), model_name),
                     None => (None, raw_model),
@@ -264,6 +272,27 @@ mod tests {
             "anthropic"
         );
         assert_eq!(KimiCodeSource::resolve_provider("sonnet"), "anthropic");
+    }
+
+    #[test]
+    fn secondary_sentinel_resolves_to_kimi_k2_7() {
+        // Kimi Code emits "__secondary__" when the sub-agent's model is unresolved;
+        // the parser rewrites it to the default kimi model before resolving.
+        fn resolve_provider_for_raw(raw: &str) -> String {
+            let raw = if raw == "__secondary__" { "kimi-k2.7" } else { raw };
+            let (prefix, model) = match raw.split_once('/') {
+                Some((p, m)) => (Some(p), m),
+                None => (None, raw),
+            };
+            let resolved = KimiCodeSource::resolve_provider(model);
+            if resolved == "kimi" {
+                "kimi".to_string()
+            } else {
+                prefix.unwrap_or(&resolved).to_string()
+            }
+        }
+        assert_eq!(resolve_provider_for_raw("__secondary__"), "kimi");
+        assert_eq!(super::super::normalize_model_name("kimi-k2.7"), "kimi-k2.7");
     }
 
     #[test]

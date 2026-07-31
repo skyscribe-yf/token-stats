@@ -16,5 +16,9 @@ name = "ollama"
 providers = ["ollama", "ollama-cloud"]
 
 [[vendor_group]]
+name = "fenno"
+providers = ["fenno", "fenno-ex"]
+
+[[vendor_group]]
 name = "FreeModel"
 providers = ["freemodel", "FreeModel"]

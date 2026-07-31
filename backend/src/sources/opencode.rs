@@ -96,10 +96,8 @@ impl OpenCodeSource {
 
         let input_tokens = tokens.get("input").and_then(|v| v.as_i64()).unwrap_or(0);
         let output_tokens = tokens.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
-        let reasoning_tokens = tokens
-            .get("reasoning")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        // `tokens.reasoning` is a subset of `output` (OpenCode schema),
+        // intentionally not read — adding it would double-count on the bill.
         let cache = tokens.get("cache");
         let cache_read_tokens = cache
             .and_then(|c| c.get("read"))
@@ -120,7 +118,11 @@ impl OpenCodeSource {
             return None;
         }
 
-        let effective_output = output_tokens + reasoning_tokens;
+        // OpenCode schema (packages/llm/src/schema/events.ts): `output`
+        // is the inclusive total that already contains `reasoning`; the
+        // `reasoning` field is a subset breakdown, not additive. Use output
+        // directly to avoid double-counting reasoning tokens on the bill.
+        let effective_output = output_tokens;
 
         let model = obj
             .get("modelID")

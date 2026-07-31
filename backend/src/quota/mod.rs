@@ -6,6 +6,7 @@
 
 pub mod commandcode;
 pub mod fenno;
+pub mod grok;
 pub mod kimi;
 pub mod meituan;
 pub mod ollama;
@@ -14,8 +15,9 @@ pub mod types;
 pub mod xiaomi_mimo;
 
 pub use types::{
-    CommandCodeQuotaStatus, FennoQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus,
-    OllamaQuotaStatus, OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus,
+    CommandCodeQuotaStatus, FennoQuotaStatus, GrokQuotaStatus, KimiQuotaStatus,
+    MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus, QuotaResponse,
+    XiaomiMiMoQuotaStatus,
 };
 
 use serde::de;
@@ -154,6 +156,15 @@ impl QuotaFetcher {
     /// Fetch Fenno **EX** (second account) subscription usage and limits.
     pub async fn fetch_fenno_quota_ex(&self) -> FennoQuotaStatus {
         fenno::fetch_fenno_quota(&self.fenno_ex_auth).await
+    }
+
+    /// Fetch Grok / XAI subscription info and aggregated usage.
+    /// Accepts grok-cli records for token aggregation.
+    pub async fn fetch_grok_quota(
+        &self,
+        grok_records: &[crate::models::TokenRecord],
+    ) -> GrokQuotaStatus {
+        grok::fetch_grok_quota(&self.client, grok_records).await
     }
 }
 

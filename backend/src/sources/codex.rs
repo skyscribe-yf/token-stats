@@ -1,6 +1,6 @@
 use super::DataSource;
 use crate::models::TokenRecord;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -39,7 +39,7 @@ impl CodexSource {
         }
 
         let mut records = Vec::new();
-        let mut seen_usage = HashSet::new();
+        let mut seen_usage: HashMap<_, PathBuf> = HashMap::new();
 
         let entries = match super::walkdir(base_path) {
             Ok(e) => e,
@@ -174,8 +174,15 @@ impl CodexSource {
                             .unwrap_or(0)
                     };
 
-                    // Codex replays token_count events with new timestamps when
-                    // session histories are copied or forwarded to subagents.
+                    // Codex re-emits a token_count event with a fresh timestamp but
+                    // identical usage when rate-limit info refreshes (plan change,
+                    // reset window rollover) or when a session history is replayed
+                    // into a forked subagent. Within a single session cumulative
+                    // totals are monotonic, so an identical usage_key (same
+                    // last_token_usage AND same cumulative) is a re-emit of the same
+                    // billed call, not a new one — drop it. Legitimate back-to-back
+                    // calls that happen to share last_token_usage always differ in
+                    // cumulative and are preserved by the key.
                     let usage_key = (
                         session_provider.clone(),
                         session_model.clone(),
@@ -190,12 +197,16 @@ impl CodexSource {
                         cumulative_token("reasoning_output_tokens"),
                         cumulative_token("total_tokens"),
                     );
-                    if !seen_usage.insert(usage_key) {
+                    if seen_usage.insert(usage_key, path.clone()).is_some() {
                         continue;
                     }
 
                     // OpenAI convention: input_tokens includes cache; normalize
                     let effective_input = (input_tokens - cached_input_tokens).max(0);
+                    // OpenAI convention: output_tokens already includes
+                    // reasoning_output_tokens (it's a breakdown subset, not
+                    // additive). Use it directly to avoid double-counting.
+                    let total_output_tokens = output_tokens;
 
                     let ts_str = obj.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
                     let (date, time) = super::parse_iso_timestamp(ts_str);
@@ -209,10 +220,10 @@ impl CodexSource {
                         model: session_model.clone(),
                         source: "codex".to_string(),
                         input_tokens: effective_input,
-                        output_tokens,
+                        output_tokens: total_output_tokens,
                         cache_read_tokens: cached_input_tokens,
                         cache_write_tokens: 0,
-                        total_tokens: effective_input + output_tokens + cached_input_tokens,
+                        total_tokens: effective_input + total_output_tokens + cached_input_tokens,
                         cost: 0.0,
                         ttft_ms: None,
                         tps: None,
@@ -251,6 +262,8 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].input_tokens, 20);
+        // output_tokens (10) already includes reasoning (2); do not add them.
+        assert_eq!(records[0].output_tokens, 10);
         assert_eq!(records[0].cache_read_tokens, 80);
         assert_eq!(records[0].total_tokens, 110);
     }
@@ -290,6 +303,48 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].provider, "fenno");
+    }
+
+    #[test]
+    fn deduplicates_rate_limit_refresh_reemit_in_same_file() {
+        // Codex re-emits the last token_count event with a fresh timestamp but
+        // identical last_token_usage AND identical cumulative when rate-limit
+        // info refreshes (plan change / reset-window rollover). The re-emit is
+        // not a new billed call and must be dropped.
+        let dir = tempdir().unwrap();
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
+        let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let cumulative =
+            r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let mk = |ts: &str, plan: &str| {
+            let event = serde_json::json!({
+                "timestamp": ts,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": serde_json::from_str::<serde_json::Value>(usage).unwrap(),
+                        "total_token_usage": serde_json::from_str::<serde_json::Value>(cumulative).unwrap(),
+                    }
+                },
+                "rate_limits": {"plan_type": plan}
+            });
+            event.to_string()
+        };
+        fs::write(
+            dir.path().join("rollout-a.jsonl"),
+            format!(
+                "{context}\n{}\n{}\n",
+                mk("2026-07-23T06:02:56.315Z", "pro"),
+                mk("2026-07-23T06:03:29.189Z", "team"),
+            ),
+        )
+        .unwrap();
+
+        let records = CodexSource::parse(dir.path());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].output_tokens, 10);
+        assert_eq!(records[0].total_tokens, 110);
     }
 
     #[test]

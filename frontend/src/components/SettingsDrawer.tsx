@@ -85,6 +85,7 @@ export function SettingsDrawer({
                     kimi_monthly_start_day: null,
                     kimi_ex_monthly_start_day: null,
                     kimi_subscription_multiplier: 20,
+                    grok_divisor: 61.4,
                   }),
                   kimi_monthly_start_day: v,
                 });
@@ -121,6 +122,7 @@ export function SettingsDrawer({
                   kimi_monthly_start_day: null,
                   kimi_ex_monthly_start_day: null,
                   kimi_subscription_multiplier: 20,
+                  grok_divisor: 61.4,
                 }),
                 kimi_subscription_multiplier: multiplier,
               });
@@ -129,6 +131,33 @@ export function SettingsDrawer({
             aria-label="Kimi API 原价折算倍率"
           />
           <p className="mt-1 text-[10px] text-slate-400">实际成本 = API 原价 ÷ 倍率</p>
+          <label className="block text-[10px] text-slate-500 mt-2 mb-1">
+            Grok 订阅折扣除数
+          </label>
+          <input
+            type="number"
+            min={0.1}
+            step={0.1}
+            value={subscriptionSettings?.grok_divisor ?? 61.4}
+            onChange={(e) => {
+              const divisor = e.currentTarget.valueAsNumber;
+              if (!Number.isFinite(divisor)) return;
+              onSubscriptionSettingsChange({
+                ...(subscriptionSettings ?? {
+                  kimi_monthly_start_day: null,
+                  kimi_ex_monthly_start_day: null,
+                  kimi_subscription_multiplier: 20,
+                  grok_divisor: 61.4,
+                }),
+                grok_divisor: divisor,
+              });
+            }}
+            className="w-full px-2 py-1 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-primary-500 outline-none"
+            aria-label="Grok 订阅折扣除数"
+          />
+          <p className="mt-1 text-[10px] text-slate-400">
+            50元/3月 ≈ $450 API面值 ÷ 6.82汇率 ÷ 50元 = 61.4
+          </p>
         </section>
 
         {/* 计价逻辑 */}

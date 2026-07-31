@@ -15,11 +15,11 @@ import type {
   XunfeiAccountStatus,
   AinaibaCreditResponse,
   KimiQuotaStatus,
-  OpenCodeQuotaStatus,
   CommandCodeQuotaStatus,
   OllamaQuotaStatus,
   MeituanQuotaStatus,
   FennoQuotaStatus,
+  GrokQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
 import { remainingQuota } from "../../lib/fennoQuota";
@@ -327,8 +327,8 @@ function AinaibaCard({
           <div className="space-y-1.5">
             <ProgressBar
               label="已用"
-              used={status.data.credit_used}
-              limit={status.data.credit_used + status.data.balance}
+              used={status.data.credit_total - status.data.balance}
+              limit={status.data.credit_total}
             />
             <ProgressBar
               label="日限"
@@ -362,24 +362,31 @@ function AinaibaCard({
             <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700 transition-colors">
               详细用量
             </summary>
-            <div className="mt-1 grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
-              <div className="text-slate-500">
-                请求 <span className="text-slate-700">{formatCalls(status.data.daily_requests)}</span>
-              </div>
-              <div className="text-slate-500">
-                输入 <span className="text-slate-700">{formatNumber(status.data.daily_input_tokens)}</span>
-              </div>
-              <div className="text-slate-500">
-                输出 <span className="text-slate-700">{formatNumber(status.data.daily_output_tokens)}</span>
-              </div>
-              <div className="text-slate-500">
-                推理 <span className="text-slate-700">{formatNumber(status.data.daily_reasoning_tokens)}</span>
-              </div>
-              <div className="text-slate-500">
-                缓存 <span className="text-slate-700">{formatNumber(status.data.daily_cached_tokens)}</span>
-              </div>
-              <div className="text-slate-500">
-                消耗 <span className="text-slate-700">{status.data.daily_used.toFixed(2)}</span>
+            <div className="mt-1.5 space-y-1.5">
+              <ProgressBar
+                label="已用"
+                used={status.data.credit_used}
+                limit={status.data.credit_used + status.data.balance}
+              />
+              <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+                <div className="text-slate-500">
+                  请求 <span className="text-slate-700">{formatCalls(status.data.daily_requests)}</span>
+                </div>
+                <div className="text-slate-500">
+                  输入 <span className="text-slate-700">{formatNumber(status.data.daily_input_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  输出 <span className="text-slate-700">{formatNumber(status.data.daily_output_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  推理 <span className="text-slate-700">{formatNumber(status.data.daily_reasoning_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  缓存 <span className="text-slate-700">{formatNumber(status.data.daily_cached_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  消耗 <span className="text-slate-700">{status.data.daily_used.toFixed(2)}</span>
+                </div>
               </div>
             </div>
           </details>
@@ -841,91 +848,6 @@ function OllamaCard({
   );
 }
 
-function OpenCodeCard({
-  status,
-  loading,
-  highlightId,
-  suffix,
-}: {
-  status: OpenCodeQuotaStatus | null;
-  loading: boolean;
-  highlightId: string | null;
-  suffix?: string;
-}) {
-  const cardId = suffix === "EX" ? "quota-opencode-ex" : "quota-opencode-primary";
-  const flash = useHighlightFlash(highlightId, cardId);
-  const label = `OpenCode-go${suffix === "EX" ? " EX" : ""}`;
-
-  // Nearest reset for cycle countdown
-  const sortedEntries = status?.data?.entries
-    ? [...status.data.entries].sort((a, b) => {
-        const aAt = a.reset_at ? new Date(a.reset_at).getTime() : Infinity;
-        const bAt = b.reset_at ? new Date(b.reset_at).getTime() : Infinity;
-        return aAt - bAt;
-      })
-    : [];
-  const nearestReset = sortedEntries[0]?.reset_at ?? null;
-  const cycleCountdown = buildCycleCountdown(nearestReset);
-
-  const workspaceUrl = status?.data?.workspace_url ?? null;
-
-  return (
-    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
-      <CardHeader
-        active={!!status?.available}
-        loading={loading}
-        name={label}
-        href={workspaceUrl ?? "https://opencode.ai"}
-        suffix="opencode.ai"
-        cycleCountdown={cycleCountdown}
-      />
-      {loading ? (
-        <SkeletonBars />
-      ) : status?.available && status.data ? (
-        <div className="space-y-1.5">
-          {status.data.entries.map((entry) => {
-            const scope =
-              entry.usage_type === "Rolling"
-                ? "滚动"
-                : entry.usage_type === "Weekly"
-                  ? "周"
-                  : entry.usage_type === "Monthly"
-                    ? "月"
-                    : entry.usage_type;
-            return (
-              <div key={entry.usage_type}>
-                <div className="flex justify-between text-[10px] text-slate-500">
-                  <span>{scope}</span>
-                  <span>
-                    {entry.percentage}%
-                    {entry.resets_in && ` · 剩余 ${entry.resets_in}`}
-                  </span>
-                </div>
-                <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      entry.percentage > 80
-                        ? "bg-rose-500"
-                        : entry.percentage > 50
-                          ? "bg-amber-500"
-                          : "bg-emerald-500"
-                    }`}
-                    style={{ width: `${Math.min(entry.percentage, 100)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="text-[11px] text-slate-400 italic">
-          {status?.error || "获取失败"}
-        </p>
-      )}
-    </CardShell>
-  );
-}
-
 function SkeletonBars() {
   return (
     <div className="space-y-1.5">
@@ -1063,6 +985,115 @@ function MeituanCard({
   );
 }
 
+function GrokCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: GrokQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-grok";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+  const usedPercent =
+    data?.weekly_usage_percent == null
+      ? null
+      : Math.min(Math.max(data.weekly_usage_percent, 0), 100);
+  const remainingPercent =
+    data?.weekly_remaining_percent == null
+      ? null
+      : Math.min(Math.max(data.weekly_remaining_percent, 0), 100);
+  const resetDisplay = formatResetTime(data?.weekly_reset_at);
+  const cycleCountdown = buildCycleCountdown(data?.weekly_reset_at ?? null);
+  const breakdown = data?.weekly_breakdown ?? [];
+  const productLabels: Record<string, string> = {
+    third_party: "第三方",
+    api: "API",
+    build: "Build",
+    plugins: "插件",
+    chat: "对话",
+    imagine: "Imagine",
+    voice: "语音",
+  };
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="Super Grok"
+        href="https://grok.com/?_s=usage"
+        suffix="grok.com"
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data && usedPercent !== null && remainingPercent !== null ? (
+        <>
+          <div className="flex items-center gap-2 text-[11px] mb-1.5">
+            <span className="font-bold text-slate-800">Weekly SuperGrok Limit</span>
+            <span className="px-1 py-0 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">
+              实时
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+            <span>
+              已用 {usedPercent.toFixed(0)}% · 剩余 {remainingPercent.toFixed(0)}%
+            </span>
+            <span className="text-slate-400">
+              {resetDisplay ?? "重置时间未知"}
+            </span>
+          </div>
+          <div className="space-y-1">
+            <div className="flex justify-between text-[10px] text-slate-500">
+              <span>本周已用</span>
+              <span className="text-slate-700 font-medium tabular-nums">
+                {usedPercent.toFixed(0)}%
+              </span>
+            </div>
+            <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${barColor(usedPercent, 100)}`}
+                style={{
+                  width: `${usedPercent}%`,
+                }}
+              />
+            </div>
+          </div>
+          {cycleCountdown && (
+            <div className={`mt-1.5 ${cycleCountdownTextClass(cycleCountdown.isUrgent)}`}>
+              {cycleCountdown.text}
+            </div>
+          )}
+          {breakdown.length > 0 && (
+            <div className="mt-2 pt-1.5 border-t border-slate-100 space-y-1">
+              {breakdown.map((entry) => (
+                <div
+                  key={entry.product}
+                  className="flex items-center justify-between text-[10px] text-slate-500"
+                >
+                  <span>{productLabels[entry.product] ?? entry.product}</span>
+                  <span className="tabular-nums">{entry.usage_percent.toFixed(0)}% 已用</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {data.zdr_status && data.zdr_status !== "no_zdr" && (
+            <div className="mt-1 text-[10px] text-amber-500">
+              ZDR: {data.zdr_status}
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || (status?.available ? "未返回实时周额度" : "获取失败")}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 export const QuotasSection = memo(function QuotasSection({
   quota,
   xunfei,
@@ -1097,17 +1128,6 @@ export const QuotasSection = memo(function QuotasSection({
           subscriptionSettings={subscriptionSettings}
         />
 
-        <OpenCodeCard
-          status={quota?.opencode_go ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
-        <OpenCodeCard
-          status={quota?.opencode_go_ex ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-          suffix="EX"
-        />
         <CommandCodeCard
           status={quota?.commandcode ?? null}
           loading={quotaLoading}
@@ -1131,6 +1151,11 @@ export const QuotasSection = memo(function QuotasSection({
         />
         <MeituanCard
           status={quota?.meituan ?? null}
+          loading={quotaLoading}
+          highlightId={highlightCardId}
+        />
+        <GrokCard
+          status={quota?.grok ?? null}
           loading={quotaLoading}
           highlightId={highlightCardId}
         />

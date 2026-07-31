@@ -308,6 +308,13 @@ if [ -n "${FENNO_AUTH_STATE_PATH_EX:-}" ]; then
     echo "✅ Injected FENNO_AUTH_STATE_PATH_EX"
 fi
 
+if [ -n "${GROK_XAI_API_KEY:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "GROK_XAI_API_KEY" "$GROK_XAI_API_KEY"
+    echo "✅ Injected GROK_XAI_API_KEY"
+else
+    echo "⚠️  GROK_XAI_API_KEY not set (Grok quota card will use ~/.grok/auth.json fallback)"
+fi
+
 sudo systemctl daemon-reload
 
 # ── 6. Free new port from rogue processes ─────────────────────────────

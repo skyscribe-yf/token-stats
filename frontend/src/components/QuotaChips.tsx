@@ -240,6 +240,23 @@ function buildQuotaChips(
     }
   }
 
+  // Grok
+  if (quota?.grok?.available && quota.grok.data) {
+    const g = quota.grok.data;
+    if (g.weekly_usage_percent != null && g.weekly_remaining_percent != null) {
+      const usedPct = Math.min(Math.max(g.weekly_usage_percent, 0), 100);
+      const remainingPct = Math.min(Math.max(g.weekly_remaining_percent, 0), 100);
+      chips.push({
+        id: "grok-remaining",
+        cardId: "quota-grok",
+        vendor: "Grok",
+        scope: "周余量",
+        display: `${remainingPct.toFixed(0)}%`,
+        pct: usedPct,
+      });
+    }
+  }
+
   return chips;
 }
 
