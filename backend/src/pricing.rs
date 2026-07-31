@@ -1201,6 +1201,38 @@ mod tests {
     }
 
     #[test]
+    fn project_pricing_toml_has_current_deepseek_rates() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        // DeepSeek publishes CNY/M rates; pricing.toml stores model rates in
+        // USD/M so the runtime can apply the configured USD→CNY conversion.
+        let expected = [
+            ("deepseek-v4-pro", 3.0 / 6.82, 6.0 / 6.82, 0.025 / 6.82, 0.0),
+            (
+                "deepseek-v4-flash",
+                1.0 / 6.82,
+                2.0 / 6.82,
+                0.02 / 6.82,
+                0.0,
+            ),
+        ];
+
+        for (name, input, output, cache_read, cache_write) in expected {
+            assert!(
+                cfg.model.iter().any(|model| {
+                    model.name == name
+                        && (model.input - input).abs() < 1e-12
+                        && (model.output - output).abs() < 1e-12
+                        && (model.cache_read - cache_read).abs() < 1e-12
+                        && (model.cache_write - cache_write).abs() < 1e-12
+                }),
+                "missing or incorrect current DeepSeek rates for {name}"
+            );
+        }
+    }
+
+    #[test]
     fn grok_cli_zero_cost_uses_configured_high_tier_price() {
         let _guard = pricing_test_guard();
         let prev_env = std::env::var("PRICING_CONFIG").ok();
@@ -1507,10 +1539,10 @@ freemodel_divisor = 68.2
 
 [[model]]
 name = "deepseek-v4-pro"
-input = 0.5865
-output = 2.346
-cache_read = 0.05865
-cache_write = 0.5865
+input = 0.439882697947214
+output = 0.879765395894428
+cache_read = 0.003665689149560
+cache_write = 0.0
 "#,
             )
             .unwrap();
@@ -1528,9 +1560,9 @@ cache_write = 0.5865
 
         let cny = display_cost(&record);
 
-        let usd = 1_000_000.0 * 0.5865 / 1_000_000.0
-            + 100_000.0 * 2.346 / 1_000_000.0
-            + 500_000.0 * 0.05865 / 1_000_000.0;
+        let usd = 1_000_000.0 * 0.439882697947214 / 1_000_000.0
+            + 100_000.0 * 0.879765395894428 / 1_000_000.0
+            + 500_000.0 * 0.003665689149560 / 1_000_000.0;
         let expected = usd * 6.82;
 
         assert!(

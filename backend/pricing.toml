@@ -271,23 +271,24 @@ output = 12.316715543
 cache_read = 1.026392962
 
 # DeepSeek 模型价格（USD per 1_000_000 tokens）
-# 官方定价（CNY）：v4-pro input=4, cache_read=0.4, output=16
-#                     v4-flash input=1, cache_read=0.1, output=4
+# 官方定价（CNY，当前）：v4-pro input=3, cache_read=0.025, output=6
+#                         v4-flash input=1, cache_read=0.02, output=2
 # 转换为 USD：CNY / 6.82
+# DeepSeek 价格表没有单独的 cache_write 计费项，因此 cache_write = 0。
 # 用于 claude-code 等无原始 cost 的源
 [[model]]
 name = "deepseek-v4-pro"
-input = 0.5865
-output = 2.346
-cache_read = 0.05865
-cache_write = 0.5865
+input = 0.439882697947214
+output = 0.879765395894428
+cache_read = 0.003665689149560
+cache_write = 0.0
 
 [[model]]
 name = "deepseek-v4-flash"
-input = 0.1466
-output = 0.5865
-cache_read = 0.01466
-cache_write = 0.1466
+input = 0.146627565982405
+output = 0.293255131964809
+cache_read = 0.002932551319648
+cache_write = 0.0
 
 [[model]]
 name = "deepseek-v4-flash-free"
