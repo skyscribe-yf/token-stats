@@ -1,7 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TokenRecord {
     pub date: String,
     pub time: String,
@@ -34,6 +34,23 @@ pub struct TokenRecord {
 }
 
 impl TokenRecord {
+    /// Stable identity used for cross-source dedup and DB uniqueness.
+    ///
+    /// Two records with the same fingerprint are considered the same
+    /// request (regardless of cost/ttft/tps refinements), matching the
+    /// historical in-memory dedup semantics.
+    pub fn fingerprint(&self) -> (String, String, String, String, i64, i64, i64) {
+        (
+            self.time.clone(),
+            self.provider.clone(),
+            self.model.clone(),
+            self.source.clone(),
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+        )
+    }
+
     pub fn cache_hit_ratio(&self) -> f64 {
         let total_input = self.input_tokens + self.cache_read_tokens;
         if total_input > 0 {

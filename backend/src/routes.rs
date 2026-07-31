@@ -13,7 +13,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -326,6 +326,69 @@ pub async fn refresh_data(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }))
 }
 
+// ─── Token store (dedicated SQLite persistence) ───────────────────────────────
+
+/// Status of the durable token store.
+#[derive(Debug, Serialize)]
+pub struct StoreInfo {
+    pub enabled: bool,
+    pub db_path: String,
+    pub db_records: usize,
+    pub memory_records: usize,
+    pub db_size_bytes: u64,
+}
+
+pub async fn get_store_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let memory_records = state.records.read().await.len();
+    let db_records = state.store.count();
+    let db_size_bytes = std::fs::metadata(state.store.path())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    Json(StoreInfo {
+        enabled: true,
+        db_path: state.store.path().display().to_string(),
+        db_records,
+        memory_records,
+        db_size_bytes,
+    })
+}
+
+/// Explicitly restore the in-memory snapshot from the durable store.
+///
+/// Under normal operation memory is already rebuilt from the store on every
+/// startup/refresh, so this is a safety net: it re-reads the whole DB and
+/// replaces the in-memory records with it.
+pub async fn restore_store(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let db_records = state.store.load_all();
+    let mut guard = state.records.write().await;
+    let before_count = guard.len();
+
+    let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
+    let added = db_records
+        .iter()
+        .filter(|r| !seen.contains(&r.fingerprint()))
+        .count();
+    let skipped = db_records.len() - added;
+
+    *guard = db_records;
+    let after_count = guard.len();
+
+    tracing::info!(
+        "Restored from token store: {} records (+{} from DB)",
+        after_count,
+        added
+    );
+
+    Json(RestoreResponse {
+        success: true,
+        before_count,
+        after_count,
+        added,
+        skipped,
+        errors: Vec::new(),
+    })
+}
+
 pub async fn get_xunfei() -> impl IntoResponse {
     let fetcher = XunfeiFetcher::new();
     let status = fetcher.fetch_all_statuses().await;
@@ -486,21 +549,12 @@ pub async fn restore_backup(
     let before_count = guard.len();
 
     // Build dedup fingerprint set from existing records
-    let mut seen: HashSet<(String, String, String, String, i64, i64, i64)> =
-        HashSet::with_capacity(guard.len());
+    let mut seen: HashSet<_> = HashSet::with_capacity(guard.len());
     for r in guard.iter() {
-        seen.insert((
-            r.time.clone(),
-            r.provider.clone(),
-            r.model.clone(),
-            r.source.clone(),
-            r.input_tokens,
-            r.output_tokens,
-            r.cache_read_tokens,
-        ));
+        seen.insert(r.fingerprint());
     }
 
-    let mut added = 0usize;
+    let mut added_records: Vec<TokenRecord> = Vec::new();
     let mut skipped = 0usize;
     let mut errors: Vec<String> = Vec::new();
 
@@ -578,26 +632,31 @@ pub async fn restore_backup(
                 record
             };
 
-            let key = (
-                record.time.clone(),
-                record.provider.clone(),
-                record.model.clone(),
-                record.source.clone(),
-                record.input_tokens,
-                record.output_tokens,
-                record.cache_read_tokens,
-            );
-
-            if seen.insert(key) {
-                guard.push(record);
-                added += 1;
+            if seen.insert(record.fingerprint()) {
+                added_records.push(record);
             } else {
                 skipped += 1;
             }
         }
     }
 
+    // Persist restored records into the durable store first, then rebuild
+    // the in-memory snapshot from it (keeps memory == DB).
+    if !added_records.is_empty() {
+        let persisted = state.store.insert_batch(&added_records);
+        if persisted != added_records.len() {
+            errors.push(format!(
+                "Failed to persist {} of {} restored record(s) to the token store",
+                added_records.len() - persisted,
+                added_records.len()
+            ));
+        }
+    }
+    let reloaded = state.store.load_all();
+    *guard = reloaded;
+
     let after_count = guard.len();
+    let added = after_count.saturating_sub(before_count);
 
     tracing::info!(
         "Restored from backup: {} added, {} skipped, {} errors",

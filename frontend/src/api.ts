@@ -669,6 +669,26 @@ export interface RestoreResponse {
   errors: string[];
 }
 
+export interface StoreInfo {
+  enabled: boolean;
+  db_path: string;
+  db_records: number;
+  memory_records: number;
+  db_size_bytes: number;
+}
+
+export async function fetchStoreInfo(): Promise<StoreInfo> {
+  const res = await fetch(`${API_BASE}/api/store/info`);
+  if (!res.ok) throw new Error("Failed to fetch token store info");
+  return res.json();
+}
+
+export async function restoreFromStore(): Promise<RestoreResponse> {
+  const res = await fetch(`${API_BASE}/api/store/restore`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to restore from token store");
+  return res.json();
+}
+
 export async function fetchRefresh(): Promise<{ success: boolean; added: number; total: number }> {
   const res = await fetch(`${API_BASE}/api/refresh`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to refresh data");

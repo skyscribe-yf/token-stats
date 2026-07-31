@@ -20,7 +20,9 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 
 ### Backend (`backend/`)
 - **Axum** web framework with CORS enabled
-- In-memory data store (`Arc<AppState>` with `RwLock<Vec<TokenRecord>>`)
+- **Dedicated SQLite store** (`TokenStore`) as the durable source of truth,
+  plus an in-memory snapshot (`Arc<AppState>` with `RwLock<Vec<TokenRecord>>`)
+  rebuilt from it
 - Background refresh task every 30s (`REFRESH_INTERVAL_SECS`)
 - Serves static files from `backend/static/` (built frontend)
 - Parses data from 5 sources:
@@ -56,6 +58,7 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 | `src/models.rs` | All data structs: `TokenRecord`, `StatsResponse`, `AggregatedStats`, etc. |
 | `src/parser.rs` | Parse all 3 data sources (JSONL + SQLite) |
 | `src/aggregator.rs` | Filter, aggregate, sort, paginate records |
+| `src/store.rs` | Dedicated SQLite persistence: schema, idempotent inserts, full restore |
 | `src/routes.rs` | Axum handlers: `/api/stats`, `/api/requests`, `/api/filters`, `/api/pricing` |
 | `src/pricing.rs` | Real-time cost calculation: model prices, USD→CNY conversion, special rules (xunfei per-call, kimi per-token, opencode /6) |
 
@@ -157,6 +160,30 @@ providers = ["openai", "ainaiba"]
 4. **UTC everywhere internally** — Times stored as RFC3339 UTC. Local timezone only applied at aggregation/display time via `tz_offset`.
 5. **No auth** — Local dashboard, no authentication.
 
+### Data Persistence (SQLite)
+
+All parsed token usage is written into a dedicated SQLite database so history
+survives cleaning up the original session files:
+
+- **Location**: `~/.config/token-stats/token-stats.db` by default, overridable
+  with `TOKEN_STATS_DB_PATH`.
+- **Lifecycle**: `AppState::new()` restores records from the store, ingests any
+  source records not yet persisted, then rebuilds the in-memory snapshot from
+  the DB. `refresh_records()` persists newly discovered records (idempotent
+  `INSERT OR IGNORE` on a fingerprint unique index) and reloads memory from the
+  DB, so memory always mirrors the store.
+- **Fingerprint**: `TokenRecord::fingerprint()` — `(time, provider, model,
+  source, input_tokens, output_tokens, cache_read_tokens)` — is the dedup key
+  used both in memory and in the DB.
+- **Failure handling**: a failed insert batch is rolled back and retried on the
+  next refresh, because unpersisted records never enter memory.
+- **Restore**: automatic on startup; explicit via `POST /api/store/restore`
+  (re-reads the whole DB into memory) and `GET /api/store/info` (status).
+  JSONL backups restored via `/api/restore` are also persisted to the store.
+- **Caveat**: stored records are the *final normalized* form (vendor merge,
+  model normalization applied). Changing `vendor_merge.toml` only affects
+  records ingested afterwards, not already-persisted history.
+
 ### Frontend
 1. **Single-file app** — `App.tsx` is large (~900 lines) by design; all components are inline closures.
 2. **Chinese UI labels** — Dashboard uses Chinese text (`ZH` constant object). Keep new UI text in Chinese.
@@ -226,6 +253,7 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `PORT` | `3000` | Backend port |
 | `RUST_LOG` | - | Logging level (`info`, `debug`, `trace`) |
 | `REFRESH_INTERVAL_SECS` | `30` | Data refresh interval |
+| `TOKEN_STATS_DB_PATH` | `~/.config/token-stats/token-stats.db` | Dedicated SQLite DB persisting all token usage history; restore-on-startup source |
 | `CCSWITCH_DB_PATH` | `~/.cc-switch/cc-switch.db` | Override ccswitch DB location |
 | `USE_CC_SWITCH` | unset | Set to any value to also load legacy cc-switch SQLite data |
 | `KIMI_SESSIONS_PATH` | `~/.kimi/sessions` | Override Kimi sessions directory |

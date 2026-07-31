@@ -15,6 +15,7 @@ mod quota;
 mod routes;
 mod settings;
 mod sources;
+mod store;
 mod time;
 mod xunfei;
 

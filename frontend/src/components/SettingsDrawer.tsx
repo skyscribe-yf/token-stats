@@ -1,6 +1,12 @@
 import { useState } from "react";
-import { X, Download, Upload, Calendar, Receipt } from "lucide-react";
-import type { PricingConfig, ModelPriceConfig, RestoreResponse, SubscriptionSettings } from "../api";
+import { X, Download, Upload, Calendar, Receipt, Database } from "lucide-react";
+import type {
+  PricingConfig,
+  ModelPriceConfig,
+  RestoreResponse,
+  StoreInfo,
+  SubscriptionSettings,
+} from "../api";
 
 interface SettingsDrawerProps {
   open: boolean;
@@ -18,6 +24,11 @@ interface SettingsDrawerProps {
   restoreLoading: boolean;
   restoreResult: RestoreResponse | null;
   restoreError: string | null;
+
+  storeInfo: StoreInfo | null;
+  onRestoreFromStore: () => Promise<void>;
+  storeRestoreLoading: boolean;
+  storeRestoreResult: RestoreResponse | null;
 }
 
 export function SettingsDrawer({
@@ -33,6 +44,10 @@ export function SettingsDrawer({
   restoreLoading,
   restoreResult,
   restoreError,
+  storeInfo,
+  onRestoreFromStore,
+  storeRestoreLoading,
+  storeRestoreResult,
 }: SettingsDrawerProps) {
   const [restorePath, setRestorePath] = useState("");
   const [subSavedAt, setSubSavedAt] = useState<number | null>(null);
@@ -63,6 +78,58 @@ export function SettingsDrawer({
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {/* 数据持久化 */}
+        <section className="rounded-lg border border-slate-200 bg-white p-3">
+          <h3 className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <Database className="w-3 h-3 text-slate-400" />
+            数据持久化
+          </h3>
+          {storeInfo ? (
+            <dl className="space-y-1 text-[10px] text-slate-600">
+              <div className="flex items-center justify-between gap-2">
+                <dt>数据库记录</dt>
+                <dd className="font-medium text-slate-800">
+                  {storeInfo.db_records.toLocaleString()} 条
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt>内存记录</dt>
+                <dd className="font-medium text-slate-800">
+                  {storeInfo.memory_records.toLocaleString()} 条
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <dt>数据库大小</dt>
+                <dd className="font-medium text-slate-800">
+                  {(storeInfo.db_size_bytes / 1024).toFixed(1)} KB
+                </dd>
+              </div>
+              <p className="pt-1 text-[9px] text-slate-400 break-all" title={storeInfo.db_path}>
+                {storeInfo.db_path}
+              </p>
+            </dl>
+          ) : (
+            <p className="text-[10px] text-slate-400">正在读取持久化状态...</p>
+          )}
+          <button
+            onClick={() => {
+              void onRestoreFromStore();
+            }}
+            disabled={storeRestoreLoading}
+            className="mt-1.5 w-full inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium rounded bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50 transition-colors"
+          >
+            <Database className="w-3 h-3" />
+            {storeRestoreLoading ? "恢复中..." : "从数据库恢复"}
+          </button>
+          {storeRestoreResult && (
+            <p className="mt-1 text-[10px] text-emerald-700">
+              已从数据库恢复 {storeRestoreResult.added} 条
+              {storeRestoreResult.skipped > 0 &&
+                ` · 跳过重复 ${storeRestoreResult.skipped} 条`}
+            </p>
+          )}
+        </section>
+
         {/* 订阅设置 */}
         <section className="rounded-lg border border-slate-200 bg-white p-3">
           <h3 className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">

@@ -21,10 +21,13 @@ import {
   fetchTps,
   fetchAdvancedModels,
   fetchSubscriptionSettings,
+  fetchStoreInfo,
+  restoreFromStore,
   saveSubscriptionSettings,
   type PricingConfig,
   exportBackup,
   restoreBackup,
+  type StoreInfo,
   type StatsResponse,
   type PaginatedRequests,
   type FilterOptions,
@@ -322,6 +325,10 @@ export default function App() {
   );
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [storeInfo, setStoreInfo] = useState<StoreInfo | null>(null);
+  const [storeRestoreLoading, setStoreRestoreLoading] = useState(false);
+  const [storeRestoreResult, setStoreRestoreResult] =
+    useState<RestoreResponse | null>(null);
 
   const [advancedModels, setAdvancedModels] = useState<string[]>([]);
   const [selectedPivotModels, setSelectedPivotModels] = useState<Set<string>>(
@@ -640,6 +647,12 @@ export default function App() {
   useEffect(() => {
     fetchSubscriptionSettings()
       .then(setSubscriptionSettings)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetchStoreInfo()
+      .then(setStoreInfo)
       .catch(() => {});
   }, []);
 
@@ -1027,6 +1040,29 @@ export default function App() {
     }
   }, []);
 
+  const handleRestoreFromStore = useCallback(async () => {
+    setStoreRestoreLoading(true);
+    setStoreRestoreResult(null);
+    try {
+      const result = await restoreFromStore();
+      setStoreRestoreResult(result);
+      setStoreInfo((prev) =>
+        prev ? { ...prev, memory_records: result.after_count } : prev
+      );
+    } catch (e: unknown) {
+      setStoreRestoreResult({
+        success: false,
+        before_count: 0,
+        after_count: 0,
+        added: 0,
+        skipped: 0,
+        errors: [e instanceof Error ? e.message : "从数据库恢复失败"],
+      });
+    } finally {
+      setStoreRestoreLoading(false);
+    }
+  }, []);
+
   const dismissAllAlerts = () => {
     setShowAlertModal(false);
     setDismissedAlerts((prev) => {
@@ -1085,6 +1121,10 @@ export default function App() {
             restoreLoading={restoreLoading}
             restoreResult={restoreResult}
             restoreError={restoreError}
+            storeInfo={storeInfo}
+            onRestoreFromStore={handleRestoreFromStore}
+            storeRestoreLoading={storeRestoreLoading}
+            storeRestoreResult={storeRestoreResult}
           />
         ) : (
           <Sidebar

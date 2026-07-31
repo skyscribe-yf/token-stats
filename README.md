@@ -146,6 +146,7 @@ cache_hit_ratio = cacheReadTokens / (inputTokens + cacheReadTokens) × 100%
 |----------|---------|-------------|
 | `PORT` | `3000` | Backend server port |
 | `RUST_LOG` | - | Logging level (info, debug, trace) |
+| `TOKEN_STATS_DB_PATH` | `~/.config/token-stats/token-stats.db` | Dedicated SQLite database that persists all parsed token usage records. History survives session-data cleanup and is restored automatically on startup. |
 
 ## License
 

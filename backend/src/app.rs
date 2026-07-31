@@ -6,6 +6,7 @@ use crate::models::TokenRecord;
 use crate::quota::QuotaFetcher;
 use crate::routes;
 use crate::sources::load_all_sources;
+use crate::store::TokenStore;
 use axum::{
     routing::{get, post},
     Router,
@@ -22,88 +23,89 @@ use tower_http::services::ServeDir;
 #[derive(Clone)]
 pub struct AppState {
     pub records: Arc<RwLock<Vec<TokenRecord>>>,
+    /// Dedicated SQLite store: durable source of truth for token history.
+    /// `records` is always rebuilt as a snapshot of this store.
+    pub store: Arc<TokenStore>,
     pub quota_fetcher: Arc<QuotaFetcher>,
 }
 
 impl AppState {
     /// Create the application state with an initial data load.
     pub fn new() -> Self {
-        let records = load_all_sources();
-        tracing::info!("Initial load: {} records", records.len());
+        let store = Arc::new(TokenStore::open_default());
+
+        // Restore history from the durable store, then ingest whatever the
+        // session logs contain that isn't persisted yet.
+        let db_records = store.load_all();
+        let seen: HashSet<_> = db_records.iter().map(TokenRecord::fingerprint).collect();
+        let source_records = load_all_sources();
+        let source_total = source_records.len();
+        let new_from_sources: Vec<TokenRecord> = source_records
+            .into_iter()
+            .filter(|r| !seen.contains(&r.fingerprint()))
+            .collect();
+        let ingested = store.insert_batch(&new_from_sources);
+
+        let records = store.load_all();
+        tracing::info!(
+            "Initial load: {} records restored from token store ({} new from sources, {} total scanned)",
+            records.len(),
+            ingested,
+            source_total
+        );
         Self {
             records: Arc::new(RwLock::new(records)),
+            store,
             quota_fetcher: Arc::new(QuotaFetcher::new()),
         }
     }
 
     /// Incrementally refresh records from all data sources.
     ///
-    /// Returns the number of new records added.
+    /// Returns the number of new records persisted.
     ///
-    /// Optimization: builds the fingerprint set under a **read** lock first,
-    /// then only acquires a write lock if there are new records to add.
-    /// This avoids blocking API reads during the expensive HashSet construction.
+    /// Newly discovered source records are written into the durable store
+    /// (idempotent, fingerprint-unique), then the in-memory snapshot is
+    /// rebuilt from the store. Memory therefore always mirrors the DB, and
+    /// any record that failed to persist is retried on the next refresh
+    /// because it never entered memory.
     pub async fn refresh_records(&self) -> usize {
         let new_records = load_all_sources();
 
-        // Phase 1: Build fingerprint set under read lock (cheap, doesn't block readers)
-        let seen = {
+        // Phase 1: Filter records not yet in memory (which mirrors the DB).
+        let records_to_add: Vec<TokenRecord> = {
             let guard = self.records.read().await;
-            let mut seen: HashSet<(
-                String, // time
-                String, // provider
-                String, // model
-                String, // source
-                i64,    // input_tokens
-                i64,    // output_tokens
-                i64,    // cache_read_tokens
-            )> = HashSet::with_capacity(guard.len());
-            for r in guard.iter() {
-                seen.insert((
-                    r.time.clone(),
-                    r.provider.clone(),
-                    r.model.clone(),
-                    r.source.clone(),
-                    r.input_tokens,
-                    r.output_tokens,
-                    r.cache_read_tokens,
-                ));
-            }
-            seen
+            let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
+            new_records
+                .into_iter()
+                .filter(|r| !seen.contains(&r.fingerprint()))
+                .collect()
         };
-        // Read lock released here — API handlers can proceed.
 
-        // Phase 2: Filter new records outside any lock
-        let records_to_add: Vec<TokenRecord> = new_records
-            .into_iter()
-            .filter(|r| {
-                let key = (
-                    r.time.clone(),
-                    r.provider.clone(),
-                    r.model.clone(),
-                    r.source.clone(),
-                    r.input_tokens,
-                    r.output_tokens,
-                    r.cache_read_tokens,
-                );
-                !seen.contains(&key)
-            })
-            .collect();
-
-        let added = records_to_add.len();
-        if added == 0 {
-            let guard = self.records.read().await;
-            tracing::debug!("Refreshed data: {} records (unchanged)", guard.len());
+        if records_to_add.is_empty() {
+            tracing::debug!(
+                "Refreshed data: {} records (unchanged)",
+                self.records.read().await.len()
+            );
             return 0;
         }
 
-        // Phase 3: Write lock only for the actual append
+        // Phase 2: Persist new records outside any lock. A failed batch is
+        // rolled back and retried next cycle, so the store never contains
+        // partial data.
+        let inserted = self.store.insert_batch(&records_to_add);
+
+        // Phase 3: Rebuild the in-memory snapshot from the store.
+        let reloaded = self.store.load_all();
         let mut guard = self.records.write().await;
-        for r in records_to_add {
-            guard.push(r);
-        }
-        tracing::info!("Refreshed data: {} records (+{} new)", guard.len(), added);
-        added
+        *guard = reloaded;
+        tracing::info!(
+            "Refreshed data: {} records ({} new, {} persisted)",
+            guard.len(),
+            records_to_add.len(),
+            inserted
+        );
+        inserted
     }
 
     /// Spawn a background task that reloads data sources periodically.
@@ -150,6 +152,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/export", get(routes::export_data))
         .route("/api/refresh", post(routes::refresh_data))
         .route("/api/restore", post(routes::restore_backup))
+        .route("/api/store/info", get(routes::get_store_info))
+        .route("/api/store/restore", post(routes::restore_store))
         .route("/api/ainaiba-credit", get(routes::get_ainaiba_credit))
         .route(
             "/api/settings/advanced-models",
