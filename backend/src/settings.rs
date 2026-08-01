@@ -124,7 +124,7 @@ pub struct SubscriptionSettings {
     pub kimi_subscription_multiplier: f64,
     /// Grok (XAI / Super Grok) subscription discount divisor.
     /// 50 RMB → 3 months → ~$1,950 API value ($150/week × 13 weeks).
-    /// Default: 1950 × 6.82 / 50 = 266
+    /// Default: 1950 × 6.7894 / 50 = 264.79
     #[serde(default = "default_grok_divisor")]
     pub grok_divisor: f64,
 }
@@ -134,7 +134,7 @@ fn default_kimi_subscription_multiplier() -> f64 {
 }
 
 fn default_grok_divisor() -> f64 {
-    1950.0 * 6.82 / 50.0
+    1950.0 * 6.7894 / 50.0
 }
 
 impl Default for SubscriptionSettings {

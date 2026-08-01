@@ -1,7 +1,17 @@
 # Token pricing configuration
 # 汇率：1 USD = ? CNY（人民币）
-usd_to_cny = 6.82
-rate_date = "2026-05-20"
+usd_to_cny = 6.7894
+rate_date = "2026-07-31"
+
+# 分段汇率：按记录时间选择“最近生效”的一段（语义与模型价格 effective_from 一致）
+# 兜底段（无 effective_from）：早于 2026-07-31 的记录沿用原单一汇率 6.82
+# 之后由 scripts/update-exchange-rate.sh 每 2 周追加一段
+[[usd_to_cny_segments]]
+rate = 6.82
+
+[[usd_to_cny_segments]]
+effective_from = "2026-07-31"
+rate = 6.7894
 
 # 特殊计费规则（直接以人民币计价）
 [special]
@@ -30,13 +40,19 @@ xiaomi_mimo_tp_per_token = 0.0000001237
 opencode_divisor = 6.0
 
 # Ainaba (AI奶爸) 折扣：按时间段分段
-# 5月25日22:30(UTC+8)之前：40倍
-# 5月25日22:30(UTC+8)之后：20倍
+# 平台结算逻辑：充值 396 元 → 8000 元额度（倍率 8000/396 = 20.20202）
+# API 按美元面值计费，平台以固定汇率 ainaba_platform_rate 折算人民币额度扣减
+# 实际成本 = USD × 7.0 / divisor（元），恒定不随市场汇率变
+# 5月25日22:30(UTC+8)之前：40倍（历史促销段）
+# 5月25日22:30(UTC+8)之前→8月2日1:00：20.20202 倍（充值倍率）
+# 8月2日1:00(UTC+8)起：1 美元 = 0.325 元 → divisor = 7.0 / 0.325 = 21.538461538
 # 分段按 `before` 时间匹配：记录时间 < before 则使用该段 divisor
 # 最后一段不加 `before` 作为兜底（当前费率）
+ainaba_platform_rate = 7.0
 ainaba_segments = [
     { before = "2025-05-25T22:30:00+08:00", divisor = 40.0 },
-    { divisor = 20.0 },
+    { before = "2026-08-02T01:00:00+08:00", divisor = 20.20202 },
+    { divisor = 21.538461538 },
 ]
 
 # Meituan LongCat：10 元 / 5000 万 Token（资源包计费）
@@ -48,25 +64,29 @@ meituan_per_token = 0.0000002
 # Pro 订阅 $20/月，38M token = 13% 周配额
 # 周配额 = 38M / 0.13 ≈ 292.3M tokens
 # 月配额 = 292.3M × 52/12 ≈ 1.27B tokens
-# 每百万token成本 = ¥136.4 / 1266.7 ≈ ¥0.1077
-ollama_cloud_empirical_per_token = 0.0000001077
+# 每百万token成本 = ¥135.79 / 1266.7 ≈ ¥0.1072
+ollama_cloud_empirical_per_token = 0.0000001072
 ollama_cloud_empirical_weekly_quota = 292307692
 
-# FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.82 / 0.1 = 68.2
-freemodel_divisor = 68.2
+# Model-specific empirical multipliers relative to the glm-5.2 baseline.
+# Unlisted Ollama models keep the baseline multiplier of 1.0.
+ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2 }
+
+# FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.7894 / 0.1 = 67.894
+freemodel_divisor = 67.894
 
 # CommandCode 订阅折扣：实际成本 = 列出价格 / 10
 commandcode_divisor = 10.0
 
 # Fenno 订阅折扣：10 CNY 可买 150 USD 面值
-# 先按 USD→CNY 换算，再除以折扣倍率：150 × 6.82 / 10 = 102.3
-fenno_divisor = 102.3
+# 先按 USD→CNY 换算，再除以折扣倍率：150 × 6.7894 / 10 = 101.841
+fenno_divisor = 101.841
 
 # Grok / Super Grok 订阅折扣：50 CNY 购买 3 个月配额（≈$1950 API 面值）
 # 官方提供 $150/周 原始额度，3 个月 ≈ 13 周 × $150 = $1,950
 # 实际成本 = API 计算价格（CNY）÷ grok_divisor
-# 默认：$1,950 × 6.82 / 50 = 266
-grok_divisor = 266.0
+# 默认：$1,950 × 6.7894 / 50 = 264.7866
+grok_divisor = 264.7866
 
 # ── 讯飞波谷计费配置（2026年6月18日上线） ──────────────────────────────
 # 分时段差异化计量，错峰使用即可享受优惠费率：
@@ -253,7 +273,7 @@ cache_read = 0.10
 cache_write = 1.25
 
 # Yairouter Grok 4.5: effective USD/M values that reproduce the observed
-# CNY credit deduction with usd_to_cny = 6.82. The rate doubles once total
+# CNY credit deduction with usd_to_cny = 6.7894. The rate doubles once total
 # input (uncached input + cache read + cache write) reaches 200K tokens.
 # cache_write is deliberately omitted: it was zero in all measured requests
 # and xAI does not document a separate cache-write price.
@@ -270,32 +290,32 @@ input = 4.105571848
 output = 12.316715543
 cache_read = 1.026392962
 
-# DeepSeek 模型价格（USD per 1_000_000 tokens）
-# 官方定价（CNY，当前）：v4-pro input=3, cache_read=0.025, output=6
-#                         v4-flash input=1, cache_read=0.02, output=2
-# 转换为 USD：CNY / 6.82
+# DeepSeek 模型价格（CNY per 1_000_000 tokens）
+# DeepSeek 官方按人民币定价，直接产出 CNY，不经过 USD→CNY 汇率换算。
+# 官方定价：v4-pro input=3, cache_read=0.025, output=6
+#           v4-flash input=1, cache_read=0.02, output=2
 # DeepSeek 价格表没有单独的 cache_write 计费项，因此 cache_write = 0。
 # 用于 claude-code 等无原始 cost 的源
 [[model]]
 name = "deepseek-v4-pro"
-input = 0.439882697947214
-output = 0.879765395894428
-cache_read = 0.003665689149560
-cache_write = 0.0
+input_cny = 3.0
+output_cny = 6.0
+cache_read_cny = 0.025
+cache_write_cny = 0.0
 
 [[model]]
 name = "deepseek-v4-flash"
-input = 0.146627565982405
-output = 0.293255131964809
-cache_read = 0.002932551319648
-cache_write = 0.0
+input_cny = 1.0
+output_cny = 2.0
+cache_read_cny = 0.02
+cache_write_cny = 0.0
 
 [[model]]
 name = "deepseek-v4-flash-free"
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
+input_cny = 0.0
+output_cny = 0.0
+cache_read_cny = 0.0
+cache_write_cny = 0.0
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Command Code API pricing (USD per 1_000_000 tokens)

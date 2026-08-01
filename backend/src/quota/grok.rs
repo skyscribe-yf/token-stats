@@ -184,9 +184,10 @@ pub async fn fetch_grok_quota(_client: &Client, grok_records: &[TokenRecord]) ->
     // Keep local usage totals as diagnostics, but never use them as a proxy for
     // the subscription quota shown by grok.com.
     let pricing_cfg = pricing::get_config();
-    let usd_to_cny = pricing_cfg.usd_to_cny;
+    // 配额卡显示“当前”成本，使用最新分段的汇率。
+    let usd_to_cny = pricing::current_rate();
     // Super Grok pricing: $12.50/M input, $25.00/M output (per /v1/models)
-    // 订阅折扣：50 元/3 月 ≈ $150/周 原始额度，divisor = 266
+    // 订阅折扣：50 元/3 月 ≈ $150/周 原始额度，divisor = 264.79
     let per_million_input = 12.50;
     let per_million_output = 25.00;
     let input_cost_usd = total_input_tokens as f64 / 1_000_000.0 * per_million_input;

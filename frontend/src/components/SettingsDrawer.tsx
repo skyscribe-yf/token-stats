@@ -152,7 +152,7 @@ export function SettingsDrawer({
                     kimi_monthly_start_day: null,
                     kimi_ex_monthly_start_day: null,
                     kimi_subscription_multiplier: 20,
-                    grok_divisor: 61.4,
+                    grok_divisor: 61.1,
                   }),
                   kimi_monthly_start_day: v,
                 });
@@ -189,7 +189,7 @@ export function SettingsDrawer({
                   kimi_monthly_start_day: null,
                   kimi_ex_monthly_start_day: null,
                   kimi_subscription_multiplier: 20,
-                  grok_divisor: 61.4,
+                  grok_divisor: 61.1,
                 }),
                 kimi_subscription_multiplier: multiplier,
               });
@@ -205,7 +205,7 @@ export function SettingsDrawer({
             type="number"
             min={0.1}
             step={0.1}
-            value={subscriptionSettings?.grok_divisor ?? 61.4}
+            value={subscriptionSettings?.grok_divisor ?? 61.1}
             onChange={(e) => {
               const divisor = e.currentTarget.valueAsNumber;
               if (!Number.isFinite(divisor)) return;
@@ -214,7 +214,7 @@ export function SettingsDrawer({
                   kimi_monthly_start_day: null,
                   kimi_ex_monthly_start_day: null,
                   kimi_subscription_multiplier: 20,
-                  grok_divisor: 61.4,
+                  grok_divisor: 61.1,
                 }),
                 grok_divisor: divisor,
               });
@@ -223,7 +223,7 @@ export function SettingsDrawer({
             aria-label="Grok 订阅折扣除数"
           />
           <p className="mt-1 text-[10px] text-slate-400">
-            50元/3月 ≈ $450 API面值 ÷ 6.82汇率 ÷ 50元 = 61.4
+            50元/3月 ≈ $450 API面值 × 6.7894汇率 ÷ 50元 = 61.1
           </p>
         </section>
 
@@ -241,6 +241,23 @@ export function SettingsDrawer({
                   ({pricingConfig.rate_date})
                 </span>
               </p>
+              {pricingConfig.usd_to_cny_segments?.length > 0 && (
+                <details className="rounded bg-slate-50 border border-slate-100 p-2">
+                  <summary className="cursor-pointer text-[10px] font-medium text-slate-600">
+                    历史分段汇率
+                  </summary>
+                  <ul className="mt-1.5 list-disc list-inside space-y-0.5 text-[10px]">
+                    {pricingConfig.usd_to_cny_segments.map((seg, i) => (
+                      <li key={i}>
+                        {seg.effective_from ?? '兜底'} → 1 USD = {seg.rate} CNY
+                        {i === pricingConfig.usd_to_cny_segments.length - 1 && (
+                          <span className="text-emerald-600 ml-1">(当前)</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
               <details className="rounded bg-slate-50 border border-slate-100 p-2">
                 <summary className="cursor-pointer text-[10px] font-medium text-slate-600">
                   特殊计费规则

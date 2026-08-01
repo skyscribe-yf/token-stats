@@ -734,6 +734,7 @@ export interface SpecialPricing {
 export interface PricingConfig {
   usd_to_cny: number;
   rate_date: string;
+  usd_to_cny_segments: { effective_from: string | null; rate: number }[];
   special: SpecialPricing;
   model: ModelPriceConfig[];
 }
