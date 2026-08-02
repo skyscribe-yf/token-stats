@@ -70,7 +70,7 @@ ollama_cloud_empirical_weekly_quota = 292307692
 
 # Model-specific empirical multipliers relative to the glm-5.2 baseline.
 # Unlisted Ollama models keep the baseline multiplier of 1.0.
-ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2 }
+ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2 }
 
 # FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.7894 / 0.1 = 67.894
 freemodel_divisor = 67.894

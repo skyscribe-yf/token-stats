@@ -151,6 +151,7 @@ fn default_ollama_cloud_model_multipliers() -> HashMap<String, f64> {
     HashMap::from([
         ("glm-5.2".to_string(), 1.0),
         ("deepseek-v4-flash".to_string(), 0.2),
+        ("deepseek-v4-flash:0731".to_string(), 0.2),
         ("deepseek-v4-flash:0731-cloud".to_string(), 0.2),
     ])
 }
@@ -1487,6 +1488,13 @@ mod tests {
         assert_eq!(
             cfg.special
                 .ollama_cloud_model_multipliers
+                .get("deepseek-v4-flash:0731")
+                .copied(),
+            Some(0.2)
+        );
+        assert_eq!(
+            cfg.special
+                .ollama_cloud_model_multipliers
                 .get("deepseek-v4-flash:0731-cloud")
                 .copied(),
             Some(0.2)
@@ -1503,6 +1511,7 @@ mod tests {
 
         let glm = make_record("pi", "ollama", "glm-5.2", 1_000_000, 0.0);
         let deepseek_flash = make_record("pi", "ollama", "deepseek-v4-flash", 1_000_000, 0.0);
+        let deepseek_0731 = make_record("pi", "ollama", "deepseek-v4-flash:0731", 1_000_000, 0.0);
         let deepseek_cloud = make_record(
             "pi",
             "ollama-cloud",
@@ -1513,6 +1522,7 @@ mod tests {
 
         assert!((display_cost(&glm) - baseline_cost).abs() < 1e-12);
         assert!((display_cost(&deepseek_flash) - baseline_cost * 0.2).abs() < 1e-12);
+        assert!((display_cost(&deepseek_0731) - baseline_cost * 0.2).abs() < 1e-12);
         assert!((display_cost(&deepseek_cloud) - baseline_cost * 0.2).abs() < 1e-12);
     }
 
