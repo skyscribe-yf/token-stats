@@ -13,7 +13,7 @@ use crate::models::TokenRecord;
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 // ── Configuration structs ────────────────────────────────────────────────────
 
@@ -751,7 +751,7 @@ impl RateSchedule {
 }
 
 /// Internal state that holds both the user config and the derived lookup map.
-struct PricingState {
+pub(crate) struct PricingState {
     config: PricingConfig,
     model_map: HashMap<String, ModelPrice>,
     yairouter_model_map: HashMap<String, ModelPrice>,
@@ -797,9 +797,16 @@ impl PricingState {
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
-fn state_cell() -> &'static Mutex<PricingState> {
-    static CELL: OnceLock<Mutex<PricingState>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(PricingState::new(PricingConfig::default())))
+fn state_cell() -> &'static RwLock<PricingState> {
+    static CELL: OnceLock<RwLock<PricingState>> = OnceLock::new();
+    CELL.get_or_init(|| RwLock::new(PricingState::new(PricingConfig::default())))
+}
+
+/// One read guard for a whole request's worth of `display_cost_in` calls.
+/// Reload swaps the whole state under the write lock, so holding a read
+/// guard across an aggregation keeps pricing consistent for that request.
+pub(crate) fn state_read() -> std::sync::RwLockReadGuard<'static, PricingState> {
+    state_cell().read().unwrap()
 }
 
 // ── Config file loading ──────────────────────────────────────────────────────
@@ -854,7 +861,7 @@ pub fn init() {
     let ss = crate::settings::load_subscription_settings();
     config.special.kimi_subscription_multiplier = ss.kimi_subscription_multiplier;
     config.special.grok_divisor = ss.grok_divisor;
-    let mut state = state_cell().lock().unwrap();
+    let mut state = state_cell().write().unwrap();
     *state = PricingState::new(config);
 }
 
@@ -865,26 +872,26 @@ pub fn reload() {
     let ss = crate::settings::load_subscription_settings();
     config.special.kimi_subscription_multiplier = ss.kimi_subscription_multiplier;
     config.special.grok_divisor = ss.grok_divisor;
-    let mut state = state_cell().lock().unwrap();
+    let mut state = state_cell().write().unwrap();
     state.reload(config);
     tracing::info!("Pricing configuration reloaded from {:?}", path);
 }
 
 /// Return a clone of the current pricing configuration (for the API endpoint).
 pub fn get_config() -> PricingConfig {
-    state_cell().lock().unwrap().config.clone()
+    state_cell().read().unwrap().config.clone()
 }
 
 /// Current USD→CNY rate (latest segment, or `usd_to_cny` when no segments).
 /// Used for quota cards and other "current state" displays.
 pub fn current_rate() -> f64 {
-    state_cell().lock().unwrap().rate_schedule.current_rate
+    state_cell().read().unwrap().rate_schedule.current_rate
 }
 
 /// Update the live Kimi subscription multiplier after persisted settings change.
 pub fn set_kimi_subscription_multiplier(multiplier: f64) {
     state_cell()
-        .lock()
+        .write()
         .unwrap()
         .config
         .special
@@ -892,7 +899,7 @@ pub fn set_kimi_subscription_multiplier(multiplier: f64) {
 }
 
 pub fn set_grok_divisor(divisor: f64) {
-    let mut state = state_cell().lock().unwrap();
+    let mut state = state_cell().write().unwrap();
     state.config.special.grok_divisor = divisor;
     // Divisors are derived per rate segment, so rebuild the schedule.
     state.rate_schedule = RateSchedule::new(&state.config);
@@ -1291,7 +1298,12 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
 ///   deepseek rates (USD→CNY, no divisor). Covers session-recovery records
 ///   and DeepSeek platform CSV export.
 pub fn display_cost(record: &TokenRecord) -> f64 {
-    let state = state_cell().lock().unwrap();
+    display_cost_in(&state_cell().read().unwrap(), record)
+}
+
+/// Same as [`display_cost`] but against an already-held pricing-state guard,
+/// so hot loops (aggregation over N records) pay one lock, not N.
+pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64 {
     let cfg = &state.config;
     let schedule = &state.rate_schedule;
 
@@ -1604,7 +1616,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         std::env::remove_var("PRICING_CONFIG");
-        let mut state = state_cell().lock().unwrap();
+        let mut state = state_cell().write().unwrap();
         state.reload(PricingConfig::default());
         drop(state);
         guard

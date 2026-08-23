@@ -206,7 +206,9 @@ pub async fn get_requests(
     };
     let filtered = aggregator::filter_records(&records, &filters);
     let (page, limit) = validate_pagination(query.page, query.limit);
-    let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref());
+    // One pricing read guard for the whole page, not one lock per record.
+    let pricing_guard = crate::pricing::state_read();
+    let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref(), &pricing_guard);
 
     Json(paginated)
 }
@@ -214,22 +216,23 @@ pub async fn get_requests(
 pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let records = state.records.read().await;
 
-    let mut vendors: Vec<String> = records.iter().map(|r| r.provider.clone()).collect();
-    vendors.sort();
-    vendors.dedup();
-
-    let mut models: Vec<String> = records.iter().map(|r| r.model.clone()).collect();
-    models.sort();
-    models.dedup();
-
-    let mut sources: Vec<String> = records.iter().map(|r| r.source.clone()).collect();
-    sources.sort();
-    sources.dedup();
+    // Only the distinct values are needed, so dedup with borrowed &str
+    // first instead of cloning N strings and sort-deduping them.
+    let pick = |f: fn(&TokenRecord) -> &str| -> Vec<String> {
+        let mut v: Vec<&str> = records
+            .iter()
+            .map(f)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        v.sort();
+        v.into_iter().map(str::to_string).collect()
+    };
 
     Json(FilterOptions {
-        vendors,
-        models,
-        sources,
+        vendors: pick(|r| &r.provider),
+        models: pick(|r| &r.model),
+        sources: pick(|r| &r.source),
     })
 }
 

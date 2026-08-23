@@ -34,21 +34,29 @@ pub struct TokenRecord {
 }
 
 impl TokenRecord {
-    /// Stable identity used for cross-source dedup and DB uniqueness.
+    /// Stable identity used for cross-source dedup.
     ///
     /// Two records with the same fingerprint are considered the same
     /// request (regardless of cost/ttft/tps refinements), matching the
-    /// historical in-memory dedup semantics.
-    pub fn fingerprint(&self) -> (String, String, String, String, i64, i64, i64) {
-        (
-            self.time.clone(),
-            self.provider.clone(),
-            self.model.clone(),
-            self.source.clone(),
-            self.input_tokens,
-            self.output_tokens,
-            self.cache_read_tokens,
-        )
+    /// historical in-memory dedup semantics. DB-level uniqueness is
+    /// enforced separately by the `idx_token_records_fingerprint` unique
+    /// index on the raw columns, so this in-memory form can be a hash.
+    ///
+    /// ponytail: u64 hash instead of a tuple of cloned Strings — zero
+    /// allocations; collision odds at ~1e5 records are ≈1e-10. Dedup is
+    /// in-memory only, rehashed per process, so hasher stability across
+    /// runs is not required.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.time.hash(&mut h);
+        self.provider.hash(&mut h);
+        self.model.hash(&mut h);
+        self.source.hash(&mut h);
+        self.input_tokens.hash(&mut h);
+        self.output_tokens.hash(&mut h);
+        self.cache_read_tokens.hash(&mut h);
+        h.finish()
     }
 
     pub fn cache_hit_ratio(&self) -> f64 {

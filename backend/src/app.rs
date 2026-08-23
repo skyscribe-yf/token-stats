@@ -48,19 +48,42 @@ impl AppState {
         // Restore history from the durable store, then ingest whatever the
         // session logs contain that isn't persisted yet.
         let db_records = store.load_all();
-        let seen: HashSet<_> = db_records.iter().map(TokenRecord::fingerprint).collect();
+        // Filtering with a growing set also dedups internal duplicates that
+        // INSERT OR IGNORE would previously have dropped before the second
+        // full reload.
+        let mut seen: HashSet<u64> = db_records.iter().map(TokenRecord::fingerprint).collect();
         let source_records = load_all_sources();
         let source_total = source_records.len();
+        let has_cc = source_records.iter().any(|r| r.source == "commandcode");
         let new_from_sources: Vec<TokenRecord> = source_records
             .into_iter()
-            .filter(|r| !seen.contains(&r.fingerprint()))
+            .filter(|r| seen.insert(r.fingerprint()))
             .collect();
         let ingested = store.insert_batch(&new_from_sources);
         // Newly ingested exclusive cmd rows can pair with older inclusive
-        // twins that were already in the store.
-        store.collapse_commandcode_inclusive_twins();
+        // twins that were already in the store. Only worth scanning for when
+        // any cmd rows arrived (open() already collapses on startup).
+        if has_cc {
+            store.collapse_commandcode_inclusive_twins();
+        }
 
-        let records = store.load_all();
+        // Build memory from the rows we already have instead of re-reading
+        // the whole DB a second time; apply the same in-memory twin-drop the
+        // refresh path uses and the load_all ORDER BY for identical shape.
+        let mut records: Vec<TokenRecord> = db_records
+            .into_iter()
+            .chain(new_from_sources)
+            .collect();
+        if has_cc {
+            drop_commandcode_inclusive_twins(&mut records);
+        }
+        records.sort_by(|a, b| {
+            a.time
+                .cmp(&b.time)
+                .then_with(|| a.source.cmp(&b.source))
+                .then_with(|| a.provider.cmp(&b.provider))
+                .then_with(|| a.model.cmp(&b.model))
+        });
         tracing::info!(
             "Initial load: {} records restored from token store ({} new from sources, {} total scanned)",
             records.len(),
@@ -123,11 +146,18 @@ impl AppState {
         if records_to_add.is_empty() {
             return 0;
         }
+        // New cmd rows only affect twin-collapsing when cmd rows actually
+        // arrived; skip the full-vec and full-DB scans otherwise.
+        let has_cc = records_to_add.iter().any(|r| r.source == "commandcode");
         guard.extend(records_to_add.iter().cloned());
-        drop_commandcode_inclusive_twins(&mut guard);
+        if has_cc {
+            drop_commandcode_inclusive_twins(&mut guard);
+        }
         let added = records_to_add.len();
         self.pending.queue(records_to_add);
-        self.store.collapse_commandcode_inclusive_twins();
+        if has_cc {
+            self.store.collapse_commandcode_inclusive_twins();
+        }
         tracing::info!(
             "Refreshed data: {} records ({} new, queued for deferred write)",
             guard.len(),
@@ -144,7 +174,9 @@ impl AppState {
             return 0;
         }
         let inserted = self.store.insert_batch(&batch);
-        self.store.collapse_commandcode_inclusive_twins();
+        if batch.iter().any(|r| r.source == "commandcode") {
+            self.store.collapse_commandcode_inclusive_twins();
+        }
         if inserted == 0 {
             // Transaction rolled back — nothing was written. Re-queue so the
             // next flush retries.
@@ -209,21 +241,25 @@ impl AppState {
     }
 }
 
+/// Hash key for twin-pairing cmd rows (allocation-free; see fingerprint()).
+fn cc_twin_key(r: &TokenRecord, exclusive_input: i64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    r.time.hash(&mut h);
+    r.provider.hash(&mut h);
+    r.model.hash(&mut h);
+    r.output_tokens.hash(&mut h);
+    r.cache_read_tokens.hash(&mut h);
+    exclusive_input.hash(&mut h);
+    h.finish()
+}
+
 /// Keep the exclusive cmd row when an older cache-inclusive twin is present.
 fn drop_commandcode_inclusive_twins(records: &mut Vec<TokenRecord>) {
-    let exclusive: std::collections::HashSet<_> = records
+    let exclusive: std::collections::HashSet<u64> = records
         .iter()
         .filter(|r| r.source == "commandcode" && r.cache_read_tokens > 0)
-        .map(|r| {
-            (
-                r.time.clone(),
-                r.provider.clone(),
-                r.model.clone(),
-                r.output_tokens,
-                r.cache_read_tokens,
-                r.input_tokens,
-            )
-        })
+        .map(|r| cc_twin_key(r, r.input_tokens))
         .collect();
     records.retain(|r| {
         if r.source != "commandcode" || r.cache_read_tokens <= 0 {
@@ -233,14 +269,7 @@ fn drop_commandcode_inclusive_twins(records: &mut Vec<TokenRecord>) {
         if exclusive_input < 0 {
             return true;
         }
-        !exclusive.contains(&(
-            r.time.clone(),
-            r.provider.clone(),
-            r.model.clone(),
-            r.output_tokens,
-            r.cache_read_tokens,
-            exclusive_input,
-        ))
+        !exclusive.contains(&cc_twin_key(r, exclusive_input))
     });
 }
 

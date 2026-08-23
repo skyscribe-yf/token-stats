@@ -19,14 +19,16 @@ struct StatAccum {
 }
 
 impl StatAccum {
-    fn accumulate(&mut self, r: &TokenRecord) {
+    /// `ps` is the request-scoped pricing read guard (one lock per request,
+    /// not per record).
+    fn accumulate(&mut self, ps: &pricing::PricingState, r: &TokenRecord) {
         self.calls += 1;
         self.input_tokens += r.input_tokens;
         self.output_tokens += r.output_tokens;
         self.cache_read_tokens += r.cache_read_tokens;
         self.cache_write_tokens += r.cache_write_tokens;
         self.total_tokens += r.total_tokens;
-        self.cost += pricing::display_cost(r);
+        self.cost += pricing::display_cost_in(ps, r);
     }
 
     fn cache_hit_ratio(&self) -> f64 {
@@ -77,20 +79,25 @@ pub fn aggregate_records(
     let sources = parse_csv_filter(filters.source);
     let providers = parse_csv_filter(filters.provider);
     let models = parse_csv_filter(filters.model);
+    let pricing_guard = pricing::state_read();
+    let ps = &*pricing_guard;
     let filtered: Vec<&TokenRecord> = records
         .iter()
-        .filter(|r| record_matches_bound(r, filters.from, filters.to, filters.tz))
+        // Parse each timestamp exactly once, reused by the bound check.
+        .filter(|r| {
+            record_matches_bound(r, r.parsed_time().as_ref(), filters.from, filters.to, filters.tz)
+        })
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
         .filter(|r| !r.is_zero_token()) // stats always exclude 0-token records
         .collect();
 
-    let overall = compute_overall_stats(&filtered);
-    let by_vendor = compute_vendor_stats(&filtered);
-    let by_date = compute_date_stats(&filtered, filters.tz, resolution);
-    let by_model = compute_model_stats(&filtered);
-    let by_source = compute_source_stats(&filtered);
+    let overall = compute_overall_stats(&filtered, ps);
+    let by_vendor = compute_vendor_stats(&filtered, ps);
+    let by_date = compute_date_stats(&filtered, filters.tz, resolution, ps);
+    let by_model = compute_model_stats(&filtered, ps);
+    let by_source = compute_source_stats(&filtered, ps);
 
     StatsResponse {
         overall,
@@ -108,22 +115,26 @@ pub fn filter_records<'a>(
     let sources = parse_csv_filter(filters.source);
     let providers = parse_csv_filter(filters.provider);
     let models = parse_csv_filter(filters.model);
-    let mut filtered: Vec<&'a TokenRecord> = records
+    // Parse each record's timestamp exactly once: reused for the bound
+    // filter, then carried as the sort key (previously parsed twice per
+    // sort *comparison* — O(N log N) parses per request).
+    let mut keyed: Vec<(Option<DateTime<Utc>>, &'a TokenRecord)> = records
         .iter()
-        .filter(|r| record_matches_bound(r, filters.from, filters.to, filters.tz))
-        .filter(|r| {
-            let provider_ok = providers.is_empty() || providers.contains(&r.provider.as_str());
-            let model_ok = models.is_empty() || models.contains(&r.model.as_str());
-            let source_ok = sources.is_empty() || sources.contains(&r.source.as_str());
-            provider_ok && model_ok && source_ok
+        .filter_map(|r| {
+            let parsed = r.parsed_time();
+            let matches = record_matches_bound(r, parsed.as_ref(), filters.from, filters.to, filters.tz)
+                && (providers.is_empty() || providers.contains(&r.provider.as_str()))
+                && (models.is_empty() || models.contains(&r.model.as_str()))
+                && (sources.is_empty() || sources.contains(&r.source.as_str()))
+                && (!filters.exclude_zero_tokens || !r.is_zero_token());
+            matches.then_some((parsed, r))
         })
-        .filter(|r| !filters.exclude_zero_tokens || !r.is_zero_token())
         .collect();
 
     // Sort by time descending, then source asc, provider asc, model asc
-    filtered.sort_by(|a, b| {
-        let time_order = match (a.parsed_time(), b.parsed_time()) {
-            (Some(at), Some(bt)) => bt.cmp(&at),
+    keyed.sort_by(|(at, a), (bt, b)| {
+        let time_order = match (at, bt) {
+            (Some(at), Some(bt)) => bt.cmp(at),
             _ => b.time.cmp(&a.time),
         };
         time_order
@@ -132,21 +143,21 @@ pub fn filter_records<'a>(
             .then_with(|| a.model.cmp(&b.model))
     });
 
-    filtered
+    keyed.into_iter().map(|(_, r)| r).collect()
 }
 
+/// `parsed` is the record's precomputed UTC time (parsed once by the caller).
 fn record_matches_bound(
     record: &TokenRecord,
+    parsed: Option<&DateTime<Utc>>,
     from: Option<&TimeBound>,
     to: Option<&TimeBound>,
     tz: Option<&FixedOffset>,
 ) -> bool {
-    let record_dt = record.parsed_time().map(|dt| dt.naive_utc());
+    let record_dt = parsed.map(|dt| dt.naive_utc());
     // Use local date if tz is provided, otherwise use UTC date
     let record_date = if let Some(tz) = tz {
-        record
-            .parsed_time()
-            .map(|dt| dt.with_timezone(tz).date_naive())
+        parsed.map(|dt| dt.with_timezone(tz).date_naive())
     } else {
         record.parsed_date()
     };
@@ -192,6 +203,7 @@ pub fn paginate_requests(
     page: usize,
     limit: usize,
     tz: Option<&FixedOffset>,
+    ps: &pricing::PricingState,
 ) -> PaginatedRequests {
     let total = records.len();
     // Guard: avoid divide-by-zero and negative start index
@@ -216,7 +228,7 @@ pub fn paginate_requests(
                 cache_read_tokens: r.cache_read_tokens,
                 cache_write_tokens: r.cache_write_tokens,
                 total_tokens: r.total_tokens,
-                cost: pricing::display_cost(r),
+                cost: pricing::display_cost_in(ps, r),
                 cache_hit_ratio: r.cache_hit_ratio(),
                 ttft_ms: r.ttft_ms,
                 tps: r.tps,
@@ -235,12 +247,12 @@ pub fn paginate_requests(
 
 // ── Aggregation functions ───────────────────────────────────────────────────
 
-fn compute_overall_stats(records: &[&TokenRecord]) -> AggregatedStats {
+fn compute_overall_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> AggregatedStats {
     let mut acc = StatAccum::default();
     let mut total_cache_hit_ratio = 0.0;
 
     for r in records {
-        acc.accumulate(r);
+        acc.accumulate(ps, r);
         total_cache_hit_ratio += r.cache_hit_ratio();
     }
 
@@ -263,13 +275,13 @@ fn compute_overall_stats(records: &[&TokenRecord]) -> AggregatedStats {
     }
 }
 
-fn compute_vendor_stats(records: &[&TokenRecord]) -> Vec<VendorStats> {
+fn compute_vendor_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> Vec<VendorStats> {
     let mut map: HashMap<String, StatAccum> = HashMap::new();
     let mut ttft_map: HashMap<String, Vec<f64>> = HashMap::new();
     let mut tps_map: HashMap<String, (i64, f64)> = HashMap::new(); // (output_tokens_sum, duration_secs_sum)
 
     for r in records {
-        map.entry(r.provider.clone()).or_default().accumulate(r);
+        map.entry(r.provider.clone()).or_default().accumulate(ps, r);
         if let Some(ttft) = r.ttft_ms {
             if ttft > 0.0 {
                 ttft_map.entry(r.provider.clone()).or_default().push(ttft);
@@ -375,6 +387,7 @@ fn compute_date_stats(
     records: &[&TokenRecord],
     tz: Option<&FixedOffset>,
     resolution: Resolution,
+    ps: &pricing::PricingState,
 ) -> Vec<DateStats> {
     // Accumulator that excludes xunfei provider (which has no cache mechanism)
     #[derive(Default)]
@@ -389,11 +402,11 @@ fn compute_date_stats(
     for r in records {
         let key = period_key_for_record(r, tz, resolution);
         let acc = map.entry(key).or_default();
-        acc.all.accumulate(r);
+        acc.all.accumulate(ps, r);
         if is_xunfei_provider(&r.provider) {
             acc.has_xunfei = true;
         } else {
-            acc.no_xunfei.accumulate(r);
+            acc.no_xunfei.accumulate(ps, r);
         }
     }
 
@@ -499,7 +512,7 @@ fn count_window_minutes(keys: &[i64], minute_map: &HashMap<i64, i64>) -> (i64, i
     (duration_minutes, total_requests)
 }
 
-fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
+fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> Vec<ModelStats> {
     struct Agg {
         accum: StatAccum,
         source_set: HashSet<String>,
@@ -533,12 +546,12 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
             source_ttft: HashMap::new(),
             source_tps_data: HashMap::new(),
         });
-        agg.accum.accumulate(r);
+        agg.accum.accumulate(ps, r);
         agg.source_set.insert(r.source.clone());
         agg.source_aggs
             .entry(r.source.clone())
             .or_default()
-            .accumulate(r);
+            .accumulate(ps, r);
         if let Some(minute) = r.minute_index_utc() {
             agg.times.push(minute);
             agg.source_times
@@ -649,11 +662,11 @@ fn compute_model_stats(records: &[&TokenRecord]) -> Vec<ModelStats> {
     result
 }
 
-fn compute_source_stats(records: &[&TokenRecord]) -> Vec<SourceStats> {
+fn compute_source_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> Vec<SourceStats> {
     let mut map: HashMap<String, StatAccum> = HashMap::new();
 
     for r in records {
-        map.entry(r.source.clone()).or_default().accumulate(r);
+        map.entry(r.source.clone()).or_default().accumulate(ps, r);
     }
 
     let mut result: Vec<SourceStats> = map
@@ -728,7 +741,7 @@ pub fn compute_rpm_analysis(
     let models = parse_csv_filter(filters.model);
     let filtered: Vec<&TokenRecord> = records
         .iter()
-        .filter(|r| record_matches_bound(r, filters.from, filters.to, filters.tz))
+        .filter(|r| record_matches_bound(r, r.parsed_time().as_ref(), filters.from, filters.to, filters.tz))
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
@@ -1413,7 +1426,8 @@ mod tests {
             record("pi", "openai", "gpt-5.5", "2026-07-11T11:00:00Z", 10),
         ];
 
-        let page = paginate_requests(vec![&records[0], &records[1]], 1, 50, None);
+        let pricing_guard = crate::pricing::state_read();
+        let page = paginate_requests(vec![&records[0], &records[1]], 1, 50, None, &pricing_guard);
 
         assert_eq!(page.total, 2);
         assert!(page.data.iter().any(|request| request.source == "grok-cli"));
