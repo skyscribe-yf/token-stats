@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Download, Upload, Calendar, Receipt, Database } from "lucide-react";
+import { X, Download, Upload, Calendar, Receipt, Database, Eye } from "lucide-react";
 import type {
   PricingConfig,
   ModelPriceConfig,
@@ -7,6 +7,7 @@ import type {
   StoreInfo,
   SubscriptionSettings,
 } from "../api";
+import { QUOTA_CARD_DEFS } from "../lib/quotaCards";
 
 interface SettingsDrawerProps {
   open: boolean;
@@ -15,6 +16,9 @@ interface SettingsDrawerProps {
   subscriptionSettings: SubscriptionSettings | null;
   onSubscriptionSettingsChange: (s: SubscriptionSettings) => void;
   onSaveSubscriptionSettings: () => Promise<void>;
+
+  hiddenQuotaCards: Set<string>;
+  onToggleQuotaCard: (key: string) => void;
 
   pricingConfig: PricingConfig | null;
 
@@ -37,6 +41,8 @@ export function SettingsDrawer({
   subscriptionSettings,
   onSubscriptionSettingsChange,
   onSaveSubscriptionSettings,
+  hiddenQuotaCards,
+  onToggleQuotaCard,
   pricingConfig,
   onExport,
   exportError,
@@ -99,6 +105,12 @@ export function SettingsDrawer({
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-2">
+                <dt>待落盘记录</dt>
+                <dd className="font-medium text-slate-800">
+                  {storeInfo.pending_records.toLocaleString()} 条
+                </dd>
+              </div>
+              <div className="flex items-center justify-between gap-2">
                 <dt>数据库大小</dt>
                 <dd className="font-medium text-slate-800">
                   {(storeInfo.db_size_bytes / 1024).toFixed(1)} KB
@@ -128,6 +140,42 @@ export function SettingsDrawer({
                 ` · 跳过重复 ${storeRestoreResult.skipped} 条`}
             </p>
           )}
+        </section>
+
+        {/* 订阅卡片显示 */}
+        <section className="rounded-lg border border-slate-200 bg-white p-3">
+          <h3 className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <Eye className="w-3 h-3 text-slate-400" />
+            订阅卡片显示
+          </h3>
+          <div className="space-y-1">
+            {QUOTA_CARD_DEFS.map((def) => {
+              const hidden = hiddenQuotaCards.has(def.key);
+              return (
+                <label
+                  key={def.key}
+                  className="flex items-center gap-2 cursor-pointer select-none"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!hidden}
+                    onChange={() => onToggleQuotaCard(def.key)}
+                    className="w-3.5 h-3.5 accent-primary-600"
+                  />
+                  <span
+                    className={`text-[11px] ${
+                      hidden ? "text-slate-400 line-through" : "text-slate-700"
+                    }`}
+                  >
+                    {def.label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-[10px] text-slate-400">
+            取消勾选可隐藏对应订阅卡片，选择自动保存
+          </p>
         </section>
 
         {/* 订阅设置 */}

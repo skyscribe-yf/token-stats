@@ -25,17 +25,22 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
   rebuilt from it
 - Background refresh task every 30s (`REFRESH_INTERVAL_SECS`)
 - Serves static files from `backend/static/` (built frontend)
-- Parses data from 5 sources:
+- Parses data from multiple sources:
   1. **Pi**: `~/.pi/token-logs/usage.jsonl` (JSONL)
   2. **Codex**: `~/.codex/sessions/*/rollout-*.jsonl` (JSONL) — direct from Codex CLI
   3. **Claude Code**: `~/.claude/projects/*/*.jsonl` (JSONL) — direct from Claude Code CLI
   4. **OpenCode**: `~/.local/share/opencode/opencode.db` (SQLite) — direct from OpenCode CLI
   5. **Kimi CLI**: `~/.kimi/sessions/*/wire.jsonl` (JSONL)
+  6. **ZCode**: `~/.zcode/cli/db/db.sqlite` (SQLite) — `model_usage` table, direct from ZCode CLI
+  7. **DSH**: `~/.dsh/sessions/*/session-*/session.jsonl.zstd` (zstd-compressed JSONL) — DeepSeek Harness; usage chunks paired with `finish` replayState for provider/model
+  8. **Dim**: `~/.dimcode/v2/dimcode.sqlite` (SQLite) — an OpenCode fork; reads the `usage_run_stats` table (one row per completed run) with exact per-run token counts and a catalog-computed USD cost
+  9. **Command Code** (`cmd`): `~/.commandcode/projects/<slug>/<session-id>.jsonl` (JSONL) — native CLI transcripts; `type=message` lines with `usage`; sidecar `*.checkpoints.jsonl` skipped
   - **ccswitch fallback**: `~/.cc-switch/cc-switch.db` (SQLite) — only loaded if `USE_CC_SWITCH` env var is set
 
 ### Quota Data Sources
 - **OpenCode-go subscription**: Fetched directly via HTTP to the workspace dashboard (`https://opencode.ai/workspace/{id}/go`) using `reqwest` + `scraper` for HTML parsing. Reads `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE` from environment variables. Extracts Rolling/Weekly/Monthly usage percentages and reset timers from the `<div data-slot="usage">` element.
 - **Fenno subscription**: Fetched from `https://api.fenno.ai/api/v1/subscriptions/active` with a bearer access token. `FENNO_AUTH_TOKEN` and `FENNO_REFRESH_TOKEN` bootstrap the auth manager; rotated credentials are persisted to `FENNO_AUTH_STATE_PATH` (default `~/.config/token-stats/fenno-auth.json`) and refreshed automatically.
+- **Command Code subscription**: Fetched from `https://api.commandcode.ai` (`/internal/billing/subscriptions`, `/internal/billing/credits`, `/internal/usage/summary`) using `COMMANDCODE_SESSION_TOKEN` as the `__Secure-commandcode_prod_.session_token` cookie.
 
 ### Frontend (`frontend/`)
 - Vite + React 19 + TypeScript
@@ -56,7 +61,8 @@ Browser → nginx:80 → Rust Axum API (:3000) + static files
 | `src/main.rs` | Server init, background refresh, routing, CORS |
 | `src/config.rs` | Vendor merge config loading and application |
 | `src/models.rs` | All data structs: `TokenRecord`, `StatsResponse`, `AggregatedStats`, etc. |
-| `src/parser.rs` | Parse all 3 data sources (JSONL + SQLite) |
+| `src/sources/dim.rs` | Parse Dim (dimcode) SQLite `usage_run_stats` table |
+| `src/sources/commandcode.rs` | Parse Command Code (`cmd`) session JSONL under `~/.commandcode/projects` |
 | `src/aggregator.rs` | Filter, aggregate, sort, paginate records |
 | `src/store.rs` | Dedicated SQLite persistence: schema, idempotent inserts, full restore |
 | `src/routes.rs` | Axum handlers: `/api/stats`, `/api/requests`, `/api/filters`, `/api/pricing` |
@@ -126,6 +132,8 @@ cache_hit_ratio = cache_read_tokens / (input_tokens + cache_read_tokens) × 100%
 - **Qoder CLI (OpenAI convention)**: `input_tokens` INCLUDES `cache_read_input_tokens` in the raw data. The parser subtracts: `effective_input = input_tokens - cache_read_tokens`.
 - **Claude Code (Anthropic API)**: `input_tokens` already excludes cache tokens. No normalization needed.
 - **Kimi CLI**: `input_tokens` already excludes cache tokens. No normalization needed.
+- **Dim (dimcode)**: OpenCode convention — `input_tokens` INCLUDES `cache_read_tokens`. The parser subtracts: `effective_input = input_tokens - cache_read_tokens`. `cache_read_tokens`/`cache_write_tokens` may be NULL and default to 0.
+- **Command Code native `cmd`**: `inputTokens` INCLUDES `cacheReadTokens` (OpenAI convention). The parser subtracts: `effective_input = inputTokens - cacheReadTokens`. Storing raw input double-counts cache in `cache_hit_ratio` and caps every record at 50%. Pi-via-Command-Code is subtracted in `load_all_sources()`.
 - This ensures consistent cache hit ratio calculation across all sources.
 
 ### Vendor Merging
@@ -168,15 +176,21 @@ survives cleaning up the original session files:
 - **Location**: `~/.config/token-stats/token-stats.db` by default, overridable
   with `TOKEN_STATS_DB_PATH`.
 - **Lifecycle**: `AppState::new()` restores records from the store, ingests any
-  source records not yet persisted, then rebuilds the in-memory snapshot from
-  the DB. `refresh_records()` persists newly discovered records (idempotent
-  `INSERT OR IGNORE` on a fingerprint unique index) and reloads memory from the
-  DB, so memory always mirrors the store.
+  source records not yet persisted (one write at startup), then loads memory
+  from the DB. `refresh_records()` publishes newly discovered records to
+  **memory immediately** (so the frontend always reads the latest data) and
+  queues them in a `PendingBuffer` for a **deferred disk write**: a background
+  flush task drains the buffer into SQLite in one batch at most once per 2
+  minutes (`FLUSH_DELAY` in `app.rs`), and on SIGINT/SIGTERM `serve()` stops
+  the background tasks and flushes everything still queued exactly once before
+  exiting. Memory is therefore a superset of the DB (memory = DB + queued
+  records); `GET /api/store/info` reports `pending_records` for the gap.
 - **Fingerprint**: `TokenRecord::fingerprint()` — `(time, provider, model,
   source, input_tokens, output_tokens, cache_read_tokens)` — is the dedup key
   used both in memory and in the DB.
-- **Failure handling**: a failed insert batch is rolled back and retried on the
-  next refresh, because unpersisted records never enter memory.
+- **Failure handling**: a failed insert batch is rolled back and re-queued for
+  the next flush (records stay visible in memory either way; the source logs
+  still contain them as a fallback).
 - **Restore**: automatic on startup; explicit via `POST /api/store/restore`
   (re-reads the whole DB into memory) and `GET /api/store/info` (status).
   JSONL backups restored via `/api/restore` are also persisted to the store.
@@ -193,6 +207,18 @@ survives cleaning up the original session files:
    - All other Pi providers (ainaiba, opencode-go, guancha, xiaomi-mimo, etc.): **USD**
    - OpenCode DB records (`source="opencode"`): **USD** (from OpenCode API)
    - Codex/Claude-code: no stored cost (`cost=0`), computed from tokens
+   - ZCode records (`source="zcode"`): no stored cost, computed from tokens with
+     `provider="opencode-go"` (requests are billed through the OpenCode Go
+     subscription, so the opencode plan divisor applies)
+   - Dim records (`source="dim"`): **USD** cost stored from dim's provider
+     catalog (Dim's claimed deepseek July pre-increase API prices).
+     `original_provider="dim"` bypasses the deepseek CNY-as-is branch in
+     `display_cost()` so the stored USD cost is converted to CNY via the
+     standard USD→CNY path (no divisor).
+   - Command Code records (`provider="commandcode"`, native `cmd` or Pi):
+     stored cost is ignored (`cost=0`). `display_cost()` recomputes from
+     tokens using `cc:` list prices in `pricing.toml`, then applies
+     `commandcode_divisor` (subscription discount) and USD→CNY.
    The `pricing::display_cost()` function converts everything to CNY on-the-fly using `pricing.toml`, applying provider-specific discounts. Non-pi sources with zero computed cost show "N/A".
 5. **Preset time ranges** — Today, 6h, 12h, 1d, 3d, 7d, 14d, 30d, all, custom.
 
@@ -202,7 +228,7 @@ survives cleaning up the original session files:
 
 To add a new tool's token data:
 
-1. **`parser.rs`**: Add a new `parse_*` function + `get_*_path()` helper
+1. **`src/sources/`**: Add a new source module (e.g. `dim.rs`) implementing the `DataSource` trait
    - Return `Vec<TokenRecord>`
    - Normalize cache semantics to match the Anthropic convention
    - Set `source` field to identify the tool
@@ -260,6 +286,11 @@ cd backend && RUST_LOG=info ./target/release/token-stats-backend
 | `VENDOR_MERGE_CONFIG` | auto-detect | Override vendor merge config path (see below) |
 | `OPENCODE_GO_WORKSPACE_ID` | unset | OpenCode-go workspace ID (required for quota display) |
 | `OPENCODE_GO_AUTH_COOKIE` | unset | OpenCode-go `auth` cookie value (required for quota display) |
+| `ZCODE_DB_PATH` | `~/.zcode/cli/db/db.sqlite` | Override ZCode SQLite DB location |
+| `DSH_SESSIONS_PATH` | `~/.dsh/sessions` | Override DSH sessions directory |
+| `DIM_DB_PATH` | `~/.dimcode/v2/dimcode.sqlite` | Override Dim SQLite DB location |
+| `COMMANDCODE_PROJECTS_PATH` | `~/.commandcode/projects` | Override Command Code (`cmd`) session directory |
+| `COMMANDCODE_SESSION_TOKEN` | unset | Command Code session cookie value for quota card display |
 | `YAI_API_KEY` | unset | Ainaiba/XAI API key for credit balance display (Bearer token passed to `api-xai.ainaibahub.com`) |
 | `OLLAMA_AUTH_COOKIE` | unset | Ollama cloud session cookie (`__Secure-session=...`) for quota card display |
 | `MEITUAN_AUTH_COOKIE` | unset | Meituan LongCat `passport_token_key` cookie value for quota card display |

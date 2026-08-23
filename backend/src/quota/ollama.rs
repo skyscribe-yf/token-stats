@@ -120,10 +120,7 @@ struct BillingData {
     usage_entries: Vec<OllamaUsageEntry>,
 }
 
-async fn fetch_billing_page(
-    client: &Client,
-    cookie: &str,
-) -> Result<BillingData, String> {
+async fn fetch_billing_page(client: &Client, cookie: &str) -> Result<BillingData, String> {
     let html = fetch_page(client, cookie, "/settings/billing").await?;
     parse_billing_page(&html)
 }
@@ -132,17 +129,12 @@ fn parse_billing_page(html: &str) -> Result<BillingData, String> {
     let document = Html::parse_document(html);
 
     // Extract plan name — look for "Current Plan: Pro" or "Current Plan: Max"
-    let plan_name = extract_text_after(&document, "Current Plan:")
-        .unwrap_or_else(|| "Unknown".to_string());
+    let plan_name =
+        extract_text_after(&document, "Current Plan:").unwrap_or_else(|| "Unknown".to_string());
 
     // Extract renewal date — "Your subscription renews on\nJuly 26, 2026."
     let renews_on = extract_text_after(&document, "renews on")
-        .map(|s| {
-            s.trim()
-                .trim_end_matches('.')
-                .trim()
-                .to_string()
-        })
+        .map(|s| s.trim().trim_end_matches('.').trim().to_string())
         .filter(|s| !s.is_empty());
 
     // Price: "Paid\n$20.00" in the invoices table
@@ -248,13 +240,7 @@ fn extract_text_after(document: &Html, label: &str) -> Option<String> {
     let after = &text[label_pos + label.len()..];
 
     // Take the first meaningful line or phrase after the label
-    let result = after
-        .trim()
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let result = after.trim().lines().next().unwrap_or("").trim().to_string();
 
     // Clean up: remove trailing dots and extra whitespace
     let result = result.trim_end_matches('.').trim().to_string();
@@ -318,8 +304,6 @@ fn extract_usage_percentage(document: &Html, usage_type: &str) -> Option<f64> {
     pct_str.parse::<f64>().ok()
 }
 
-
-
 // ─── Generic helpers ─────────────────────────────────────────────────────────
 
 /// Fetch a page from ollama.com with authentication cookies.
@@ -357,9 +341,16 @@ mod tests {
 
     #[test]
     fn test_get_auth_cookie() {
-        temp_env::with_var("OLLAMA_AUTH_COOKIE", Some("aid=abc; __Secure-session=xyz"), || {
-            assert_eq!(get_auth_cookie(), Some("aid=abc; __Secure-session=xyz".to_string()));
-        });
+        temp_env::with_var(
+            "OLLAMA_AUTH_COOKIE",
+            Some("aid=abc; __Secure-session=xyz"),
+            || {
+                assert_eq!(
+                    get_auth_cookie(),
+                    Some("aid=abc; __Secure-session=xyz".to_string())
+                );
+            },
+        );
     }
 
     #[test]
@@ -428,11 +419,17 @@ mod tests {
 
         assert_eq!(entries[0].usage_type, "Session");
         assert_eq!(entries[0].percentage, 0.0);
-        assert_eq!(entries[0].reset_time.as_deref(), Some("2026-06-26T05:00:00Z"));
+        assert_eq!(
+            entries[0].reset_time.as_deref(),
+            Some("2026-06-26T05:00:00Z")
+        );
 
         assert_eq!(entries[1].usage_type, "Weekly");
         assert_eq!(entries[1].percentage, 10.0);
-        assert_eq!(entries[1].reset_time.as_deref(), Some("2026-06-29T00:00:00Z"));
+        assert_eq!(
+            entries[1].reset_time.as_deref(),
+            Some("2026-06-29T00:00:00Z")
+        );
     }
 
     #[test]

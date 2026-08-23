@@ -17,7 +17,11 @@ use std::path::PathBuf;
 /// The wire format is a JSONL stream where the first line is a `metadata`
 /// record and subsequent lines are agent event records. We look for
 /// `usage.record` entries with `usageScope: "turn"` to capture per-turn
-/// token consumption without double-counting.
+/// token consumption without double-counting. Requests routed through the
+/// secondary slot are recorded with a `__secondary__` placeholder model on
+/// `usage.record`; the real model id is only available from the preceding
+/// `llm.request` event, so the parser keeps track of it to resolve those
+/// records correctly.
 #[derive(Default)]
 pub struct KimiCodeSource;
 
@@ -48,8 +52,34 @@ impl DataSource for KimiCodeSource {
         all_records
     }
 
+    /// Incremental: only re-parse wire.jsonl files whose (mtime, size)
+    /// changed since the last pass.
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let mut all_records = Vec::new();
+        for data_dir in Self::data_dirs() {
+            let base = data_dir.join("sessions");
+            let files = Self::wire_files(&base);
+            let changed = self.changed_data_files();
+            if !changed.is_empty() {
+                all_records.extend(Self::parse_files(&files, &changed));
+            }
+            self.mark_files_parsed(&files);
+        }
+        all_records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        for data_dir in Self::data_dirs() {
+            files.extend(Self::wire_files(&data_dir.join("sessions")));
+        }
+        files
+    }
+
     fn is_available(&self) -> bool {
-        Self::data_dirs().iter().any(|d| d.join("sessions").exists())
+        Self::data_dirs()
+            .iter()
+            .any(|d| d.join("sessions").exists())
     }
 }
 
@@ -90,35 +120,45 @@ impl KimiCodeSource {
     }
 
     fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
+        Self::parse_files(&Self::wire_files(base_path), &[])
+    }
+
+    /// All wire.jsonl files under the sessions directory.
+    fn wire_files(base_path: &std::path::Path) -> Vec<std::path::PathBuf> {
         if !base_path.exists() {
-            tracing::warn!(
-                "Kimi Code sessions dir not found at {:?}, skipping",
-                base_path
-            );
             return Vec::new();
         }
+        match super::walkdir(base_path) {
+            Ok(entries) => entries
+                .into_iter()
+                .filter(|p| p.to_string_lossy().ends_with("wire.jsonl"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 
+    /// Parse `files`, optionally limited to `subset`. Streams line-by-line.
+    fn parse_files(
+        paths: &[std::path::PathBuf],
+        subset: &[std::path::PathBuf],
+    ) -> Vec<TokenRecord> {
         let mut records = Vec::new();
 
-        let entries = match super::walkdir(base_path) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("Failed to walk Kimi Code sessions dir: {}", e);
-                return records;
-            }
-        };
-
-        for wire_path in entries {
-            if !wire_path.to_string_lossy().ends_with("wire.jsonl") {
+        for wire_path in paths {
+            if !subset.is_empty() && !subset.contains(wire_path) {
                 continue;
             }
 
-            let file = match File::open(&wire_path) {
+            let file = match File::open(wire_path) {
                 Ok(f) => f,
                 Err(_) => continue,
             };
 
             let reader = BufReader::new(file);
+            // Kimi Code records secondary-slot requests with a `__secondary__`
+            // placeholder model on usage.record; the preceding llm.request
+            // event carries the actual model id (e.g. "deepseek-v4-flash").
+            let mut last_request_model: Option<String> = None;
             for line in reader.lines().map_while(Result::ok) {
                 if line.trim().is_empty() {
                     continue;
@@ -130,6 +170,15 @@ impl KimiCodeSource {
                 let Some(record_type) = msg.get("type").and_then(|t| t.as_str()) else {
                     continue;
                 };
+
+                // Track the resolved model from llm.request events so
+                // __secondary__ usage records can be attributed correctly.
+                if record_type == "llm.request" {
+                    if let Some(model) = msg.get("model").and_then(|v| v.as_str()) {
+                        last_request_model = Some(model.to_string());
+                    }
+                    continue;
+                }
 
                 // Skip metadata header and all non-usage records
                 if record_type != "usage.record" {
@@ -168,9 +217,11 @@ impl KimiCodeSource {
                     .unwrap_or("kimi-for-coding");
                 // Kimi Code emits "__secondary__" as a placeholder model name when a
                 // sub-agent's request is routed through the secondary backend slot
-                // without a resolved model id. Treat it as the default kimi model.
+                // without a resolved model id. Resolve it from the most recent
+                // llm.request in this wire stream, which carries the actual model;
+                // fall back to the default kimi model if no request was seen yet.
                 let raw_model = if raw_model == "__secondary__" {
-                    "kimi-k2.7"
+                    last_request_model.as_deref().unwrap_or("kimi-for-coding")
                 } else {
                     raw_model
                 };
@@ -232,7 +283,9 @@ impl KimiCodeSource {
     /// model name patterns.
     fn resolve_provider(model: &str) -> String {
         match model {
-            "kimi-for-coding" | "kimi-k2" | "kimi-k2.5" | "kimi-k2.6" | "kimi-k2.7" | "k3" => "kimi".to_string(),
+            "kimi-for-coding" | "kimi-k2" | "kimi-k2.5" | "kimi-k2.6" | "kimi-k2.7" | "k3" => {
+                "kimi".to_string()
+            }
             "astron-code-latest" => "xunfei".to_string(),
             "mimo-v2.5-pro" | "mimo-v2-pro" | "mimo-v2.5" => "xiaomi-mimo".to_string(),
             "deepseek-v4-pro" | "deepseek-v4-flash" => "deepseek".to_string(),
@@ -275,24 +328,73 @@ mod tests {
     }
 
     #[test]
-    fn secondary_sentinel_resolves_to_kimi_k2_7() {
-        // Kimi Code emits "__secondary__" when the sub-agent's model is unresolved;
-        // the parser rewrites it to the default kimi model before resolving.
-        fn resolve_provider_for_raw(raw: &str) -> String {
-            let raw = if raw == "__secondary__" { "kimi-k2.7" } else { raw };
-            let (prefix, model) = match raw.split_once('/') {
-                Some((p, m)) => (Some(p), m),
-                None => (None, raw),
-            };
-            let resolved = KimiCodeSource::resolve_provider(model);
-            if resolved == "kimi" {
-                "kimi".to_string()
-            } else {
-                prefix.unwrap_or(&resolved).to_string()
-            }
-        }
-        assert_eq!(resolve_provider_for_raw("__secondary__"), "kimi");
-        assert_eq!(super::super::normalize_model_name("kimi-k2.7"), "kimi-k2.7");
+    fn secondary_usage_resolves_from_preceding_llm_request() {
+        // Kimi Code emits "__secondary__" as the model on usage.record for
+        // requests routed through the secondary slot; the actual model is only
+        // available from the preceding llm.request event.
+        let base = std::env::temp_dir().join(format!(
+            "token-stats-kimi-code-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let wire = base
+            .join("wd_test")
+            .join("session_1")
+            .join("agents")
+            .join("main")
+            .join("wire.jsonl");
+        std::fs::create_dir_all(wire.parent().unwrap()).unwrap();
+
+        std::fs::write(
+            &wire,
+            [
+                r#"{"type":"metadata","protocol_version":"1.4","created_at":1785908864360}"#,
+                r#"{"type":"llm.request","provider":"openai","model":"deepseek-v4-flash","modelAlias":"__secondary__","time":1785908864498}"#,
+                r#"{"type":"usage.record","model":"__secondary__","usage":{"inputOther":100,"output":50,"inputCacheRead":10,"inputCacheCreation":0},"usageScope":"turn","time":1785908867305}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let records = KimiCodeSource::parse(&base);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].provider, "deepseek");
+        assert_eq!(records[0].model, "deepseek-v4-flash");
+        assert_eq!(records[0].source, "kimi-code");
+        assert_eq!(records[0].input_tokens, 100);
+        assert_eq!(records[0].cache_read_tokens, 10);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn secondary_sentinel_falls_back_to_default_kimi_model() {
+        // If no llm.request was seen yet, __secondary__ should not be stored
+        // verbatim; fall back to the default kimi model.
+        let base = std::env::temp_dir().join(format!(
+            "token-stats-kimi-code-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let wire = base
+            .join("wd_test")
+            .join("session_1")
+            .join("agents")
+            .join("main")
+            .join("wire.jsonl");
+        std::fs::create_dir_all(wire.parent().unwrap()).unwrap();
+        std::fs::write(
+            &wire,
+            r#"{"type":"usage.record","model":"__secondary__","usage":{"inputOther":5,"output":5,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1785908867305}"#,
+        )
+        .unwrap();
+
+        let records = KimiCodeSource::parse(&base);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].provider, "kimi");
+        assert_eq!(records[0].model, "kimi-for-coding");
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

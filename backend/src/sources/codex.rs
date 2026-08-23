@@ -22,6 +22,37 @@ impl DataSource for CodexSource {
         records
     }
 
+    /// Incremental: only re-parse rollout files whose (mtime, size) changed
+    /// since the last pass. The first pass parses everything.
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let base = Self::sessions_path();
+        let all = Self::rollout_files(&base);
+        let changed = self.changed_data_files();
+        let records = if changed.is_empty() {
+            Vec::new()
+        } else {
+            Self::parse_files(&all, &changed)
+        };
+        self.mark_files_parsed(&all);
+        if !changed.is_empty() {
+            tracing::info!(
+                "Codex: re-parsed {} changed rollout file(s), {} unchanged skipped",
+                changed.len(),
+                all.len() - changed.len()
+            );
+        } else {
+            tracing::debug!(
+                "Codex: all {} rollout file(s) unchanged, skipped",
+                all.len()
+            );
+        }
+        records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        Self::rollout_files(&Self::sessions_path())
+    }
+
     fn is_available(&self) -> bool {
         Self::sessions_path().exists()
     }
@@ -32,96 +63,107 @@ impl CodexSource {
         super::home_dir().join(".codex").join("sessions")
     }
 
-    fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
-        if !base_path.exists() {
-            tracing::warn!("Codex sessions dir not found at {:?}, skipping", base_path);
+    /// All rollout files under the sessions directory.
+    fn rollout_files(base_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let Ok(entries) = super::walkdir(base_path) else {
             return Vec::new();
-        }
+        };
+        entries
+            .into_iter()
+            .filter(|path| {
+                path.to_string_lossy().ends_with(".jsonl")
+                    && path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .starts_with("rollout-")
+            })
+            .collect()
+    }
 
+    fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
+        Self::parse_files(&Self::rollout_files(base_path), &[])
+    }
+
+    /// Parse `files` (optionally limited to a subset of `paths`).
+    ///
+    /// Files are streamed line-by-line — never read wholesale into memory —
+    /// because individual codex rollouts can be hundreds of MB. The session
+    /// provider/model pre-scan is done on the first pass only when the file
+    /// hasn't been seen before (incremental append: model/provider never
+    /// change mid-file, so a changed file re-uses the known values).
+    fn parse_files(
+        paths: &[std::path::PathBuf],
+        subset: &[std::path::PathBuf],
+    ) -> Vec<TokenRecord> {
         let mut records = Vec::new();
         let mut seen_usage: HashMap<_, PathBuf> = HashMap::new();
 
-        let entries = match super::walkdir(base_path) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("Failed to walk Codex sessions dir: {}", e);
-                return records;
-            }
-        };
-
-        for path in entries {
-            if !path.to_string_lossy().ends_with(".jsonl") {
+        for path in paths {
+            if !subset.is_empty() && !subset.contains(path) {
                 continue;
             }
-            if !path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .starts_with("rollout-")
-            {
-                continue;
-            }
-
-            let file = match File::open(&path) {
+            let file = match File::open(path) {
                 Ok(f) => f,
                 Err(_) => continue,
             };
+
             // Pre-scan to discover the model from turn_context events.
             // Forked subagent sessions replay parent token_count events before
             // any turn_context appears, so a naive sequential parse would assign
-            // a wrong hardcoded default model.
-            let lines: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
-            // The Codex CLI records the active configured profile on the session
-            // metadata. A model can be served by multiple profiles, so using the
-            // model alone cannot reliably identify the billing provider.
-            let session_provider = lines
-                .iter()
-                .find_map(|line| {
-                    serde_json::from_str::<serde_json::Value>(line)
-                        .ok()
-                        .and_then(|obj| {
-                            if obj.get("type").and_then(|t| t.as_str()) == Some("session_meta") {
-                                obj.get("payload")
-                                    .and_then(|p| p.get("model_provider"))
-                                    .and_then(|provider| provider.as_str())
-                                    .filter(|provider| !provider.is_empty())
-                                    .map(String::from)
-                            } else {
-                                None
-                            }
-                        })
-                })
-                // Older rollout files did not include the profile metadata.
-                .unwrap_or_else(|| "openai".to_string());
-            let mut session_model = lines
-                .iter()
-                .find_map(|line| {
-                    serde_json::from_str::<serde_json::Value>(line)
-                        .ok()
-                        .and_then(|obj| {
-                            if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
-                                obj.get("payload")
-                                    .and_then(|p| p.get("model"))
-                                    .and_then(|m| m.as_str())
-                                    .map(String::from)
-                            } else {
-                                None
-                            }
-                        })
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-            for line in &lines {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
+            // a wrong hardcoded default model. Skipped on incremental passes:
+            // provider/model never change within a file.
+            let mut session_provider = "openai".to_string();
+            let mut session_model = "unknown".to_string();
+            if !subset.contains(path) {
+                let lines = BufReader::new(file);
+                for line in lines.lines().map_while(Result::ok) {
+                    if session_provider == "openai" && session_model != "unknown" {
+                        break;
+                    }
+                    let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+                        continue;
+                    };
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("session_meta") {
+                        if let Some(provider) = obj
+                            .get("payload")
+                            .and_then(|p| p.get("model_provider"))
+                            .and_then(|provider| provider.as_str())
+                            .filter(|provider| !provider.is_empty())
+                        {
+                            session_provider = provider.to_string();
+                        }
+                    } else if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
                         if let Some(model) = obj
                             .get("payload")
                             .and_then(|p| p.get("model"))
                             .and_then(|m| m.as_str())
                         {
                             session_model = model.to_string();
+                        }
+                    }
+                }
+            }
+
+            let file = match File::open(path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = BufReader::new(file);
+            for line in reader.lines().map_while(Result::ok) {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
+                        if !subset.contains(path) {
+                            if let Some(model) = obj
+                                .get("payload")
+                                .and_then(|p| p.get("model"))
+                                .and_then(|m| m.as_str())
+                            {
+                                session_model = model.to_string();
+                            }
                         }
                         continue;
                     }
@@ -314,8 +356,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
         let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
-        let cumulative =
-            r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let cumulative = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
         let mk = |ts: &str, plan: &str| {
             let event = serde_json::json!({
                 "timestamp": ts,
@@ -431,5 +472,83 @@ mod tests {
         let records = CodexSource::parse(dir.path());
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].model, "unknown");
+    }
+
+    #[test]
+    fn incremental_only_reparses_changed_files() {
+        let dir = tempdir().unwrap();
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
+        let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let event = |ts: &str| {
+            format!(
+                r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{usage},"total_token_usage":{{"input_tokens":100}}}}}}}}"#
+            )
+        };
+
+        let file_a = dir.path().join("rollout-a.jsonl");
+        let file_b = dir.path().join("rollout-b.jsonl");
+        fs::write(&file_a, format!("{context}\n{}\n", event("2026-07-10T10:00:00Z"))).unwrap();
+        fs::write(
+            &file_b,
+            format!(
+                "{context}\n{}\n",
+                event("2026-07-10T11:00:00Z").replace(
+                    r#""total_token_usage":{"input_tokens":100}"#,
+                    r#""total_token_usage":{"input_tokens":200}"#
+                )
+            ),
+        )
+        .unwrap();
+
+        let all = vec![file_a.clone(), file_b.clone()];
+
+        // First pass: everything is new → both files parsed.
+        let changed1 = crate::sources::changed_files(&all);
+        assert_eq!(changed1.len(), 2);
+        let records1 = CodexSource::parse_files(&all, &changed1);
+        assert_eq!(records1.len(), 2);
+        crate::sources::mark_files_parsed_for_test(&all);
+
+        // Second pass: nothing changed → no files parsed.
+        let changed2 = crate::sources::changed_files(&all);
+        assert!(changed2.is_empty(), "unchanged files must be skipped");
+        let records2 = if changed2.is_empty() {
+            Vec::new()
+        } else {
+            CodexSource::parse_files(&all, &changed2)
+        };
+        assert!(records2.is_empty());
+
+        // Append a NEW call (different cumulative) to file_a → only file_a
+        // re-parsed. Re-parsing yields all records from the changed file;
+        // the caller (refresh_records) dedups already-seen ones by
+        // fingerprint against memory.
+        fs::write(
+            &file_a,
+            format!(
+                "{context}\n{}\n{}\n",
+                event("2026-07-10T10:00:00Z"),
+                event("2026-07-10T10:01:00Z")
+                    .replace(
+                        r#""total_token_usage":{"input_tokens":100}"#,
+                        r#""total_token_usage":{"input_tokens":300}"#
+                    )
+            ),
+        )
+        .unwrap();
+        let changed3 = crate::sources::changed_files(&all);
+        assert_eq!(changed3, vec![file_a.clone()], "only the appended file changed");
+        let records3 = CodexSource::parse_files(&all, &changed3);
+        assert_eq!(
+            records3.len(),
+            2,
+            "re-parsing the changed file returns all its records"
+        );
+        assert!(
+            records3
+                .iter()
+                .any(|r| r.time == "2026-07-10T10:01:00+00:00"),
+            "the appended call is included"
+        );
     }
 }

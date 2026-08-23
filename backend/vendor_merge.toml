@@ -22,3 +22,7 @@ providers = ["fenno", "fenno-ex"]
 [[vendor_group]]
 name = "FreeModel"
 providers = ["freemodel", "FreeModel"]
+
+[[vendor_group]]
+name = "deepseek"
+providers = ["deepseek", "deepseek-official"]

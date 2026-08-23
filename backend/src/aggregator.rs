@@ -881,8 +881,10 @@ pub fn compute_tps_analysis(
         tokens: f64,
         intervals: Vec<(f64, f64)>,
     }
-    let mut minute_buckets: HashMap<(String, String), HashMap<DateTime<FixedOffset>, MinuteBucket>> =
-        HashMap::new();
+    let mut minute_buckets: HashMap<
+        (String, String),
+        HashMap<DateTime<FixedOffset>, MinuteBucket>,
+    > = HashMap::new();
     let mut all_models: HashSet<String> = HashSet::new();
 
     for r in &filtered {
@@ -927,11 +929,10 @@ pub fn compute_tps_analysis(
                             let sec_start =
                                 (effective_start - cursor).num_milliseconds() as f64 / 1000.0;
                             let sec_end = (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
-                            let bucket =
-                                buckets.entry(cursor).or_insert_with(|| MinuteBucket {
-                                    tokens: 0.0,
-                                    intervals: Vec::new(),
-                                });
+                            let bucket = buckets.entry(cursor).or_insert_with(|| MinuteBucket {
+                                tokens: 0.0,
+                                intervals: Vec::new(),
+                            });
                             bucket.tokens += tps * overlap_secs;
                             bucket.intervals.push((sec_start, sec_end));
                         }

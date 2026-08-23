@@ -22,6 +22,24 @@ impl DataSource for KimiCliSource {
         records
     }
 
+    /// Incremental: only re-parse wire.jsonl files whose (mtime, size) changed.
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let base = Self::sessions_path();
+        let files = Self::wire_files(&base);
+        let changed = self.changed_data_files();
+        let records = if changed.is_empty() {
+            Vec::new()
+        } else {
+            Self::parse_files(&files, &changed)
+        };
+        self.mark_files_parsed(&files);
+        records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        Self::wire_files(&Self::sessions_path())
+    }
+
     fn is_available(&self) -> bool {
         Self::sessions_path().exists()
     }
@@ -35,31 +53,38 @@ impl KimiCliSource {
             .unwrap_or_else(|| super::home_dir().join(".kimi").join("sessions"))
     }
 
-    fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
+    fn wire_files(base_path: &std::path::Path) -> Vec<std::path::PathBuf> {
         if !base_path.exists() {
-            tracing::warn!("Kimi sessions dir not found at {:?}, skipping", base_path);
             return Vec::new();
         }
+        match super::walkdir(base_path) {
+            Ok(entries) => entries
+                .into_iter()
+                .filter(|p| p.to_string_lossy().ends_with("wire.jsonl"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 
+    fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
+        Self::parse_files(&Self::wire_files(base_path), &[])
+    }
+
+    fn parse_files(
+        paths: &[std::path::PathBuf],
+        subset: &[std::path::PathBuf],
+    ) -> Vec<TokenRecord> {
         let mut records = Vec::new();
 
-        let entries = match super::walkdir(base_path) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("Failed to walk Kimi sessions dir: {}", e);
-                return records;
-            }
-        };
-
-        for wire_path in entries {
-            if !wire_path.to_string_lossy().ends_with("wire.jsonl") {
+        for wire_path in paths {
+            if !subset.is_empty() && !subset.contains(wire_path) {
                 continue;
             }
 
-            let session_dir = wire_path.parent().unwrap_or(base_path);
+            let session_dir = wire_path.parent().unwrap_or(std::path::Path::new(""));
             let model = Self::read_session_model(session_dir);
 
-            let file = match File::open(&wire_path) {
+            let file = match File::open(wire_path) {
                 Ok(f) => f,
                 Err(_) => continue,
             };

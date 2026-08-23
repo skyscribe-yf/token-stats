@@ -7,6 +7,9 @@
 mod ccswitch;
 mod claude_code;
 mod codex;
+mod commandcode;
+mod dim;
+mod dsh;
 mod grok_cli;
 mod kimi_cli;
 mod kimi_code;
@@ -14,16 +17,21 @@ mod opencode;
 mod pi;
 mod qoder;
 mod qoder_cn;
+mod zcode;
 
 use crate::config;
 use crate::models::TokenRecord;
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
 pub use codex::CodexSource;
+pub use commandcode::CommandCodeSource;
+pub use dim::DimSource;
+pub use dsh::DshSource;
 pub(crate) use grok_cli::grok_usage_log_path;
 pub use grok_cli::GrokCliSource;
 pub use kimi_cli::KimiCliSource;
@@ -32,6 +40,7 @@ pub use opencode::OpenCodeSource;
 pub use pi::PiSource;
 pub use qoder::QoderSource;
 pub use qoder_cn::QoderCnSource;
+pub use zcode::ZcodeSource;
 
 /// Trait for a data source that produces `TokenRecord` batches.
 pub trait DataSource: Send + Sync {
@@ -40,6 +49,38 @@ pub trait DataSource: Send + Sync {
 
     /// Load all records from this source.
     fn load(&self) -> Vec<TokenRecord>;
+
+    /// Load only the records from files that changed since the last call.
+    ///
+    /// Default implementation re-parses everything (same as `load`), so
+    /// sources opt into incremental parsing by implementing
+    /// [`Self::data_files`] and using [`Self::changed_data_files`].
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        self.load()
+    }
+
+    /// The files this source reads. Used by the incremental machinery to
+    /// decide which files changed; sources that don't report files are
+    /// always fully re-parsed.
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    /// Of [`Self::data_files`], the ones whose (mtime, size) changed since
+    /// the last successful parse. After parsing, call
+    /// [`Self::mark_files_parsed`] so the next refresh skips them.
+    fn changed_data_files(&self) -> Vec<std::path::PathBuf> {
+        changed_files(&self.data_files())
+    }
+
+    /// Record that `paths` have been parsed at their current (mtime, size).
+    fn mark_files_parsed(&self, paths: &[std::path::PathBuf]) {
+        for p in paths {
+            if let Some(stamp) = stamp_of(p) {
+                remember_parsed(p, stamp);
+            }
+        }
+    }
 
     /// Whether this source's data path exists and should be loaded.
     /// Sources returning false are skipped entirely during refresh,
@@ -182,7 +223,94 @@ pub fn normalize_model_name(model: &str) -> String {
 /// on every refresh cycle. Re-checked on every call but only logged once.
 static UNAVAILABLE_SOURCES: OnceLock<Vec<&'static str>> = OnceLock::new();
 
+/// A lightweight fingerprint of a data file's contents.
+///
+/// Comparing `(modified, len)` catches both brand-new files and appended
+/// lines (codex/kimi/claude append to the same rollout file as a session
+/// progresses). It does not catch in-place rewrites of identical length,
+/// which these append-only logs never do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FileStamp {
+    modified: std::time::SystemTime,
+    len: u64,
+}
+
+/// Remembers which data files have already been parsed so refreshes only
+/// re-read files that changed. Keyed by canonical path.
+///
+/// Stored on the heap via `OnceLock<Box<...>>` because `Mutex::new` is not
+/// const-constructible in older Rust; the box is created once on first use.
+static FILE_STAMPS: OnceLock<Box<Mutex<HashMap<std::path::PathBuf, FileStamp>>>> =
+    OnceLock::new();
+
+fn file_stamps() -> &'static Mutex<HashMap<std::path::PathBuf, FileStamp>> {
+    FILE_STAMPS.get_or_init(|| Box::new(Mutex::new(HashMap::new())))
+}
+
+/// Return the current stamp of `path` (missing files are treated as
+/// "no stamp" so a previously-seen file that vanishes is re-parsed if it
+/// reappears with a different identity).
+pub(crate) fn stamp_of(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    Some(FileStamp {
+        modified,
+        len: meta.len(),
+    })
+}
+
+/// Record that `path` has been fully parsed at the given stamp.
+pub(crate) fn remember_parsed(path: &Path, stamp: FileStamp) {
+    if let Ok(mut map) = file_stamps().lock() {
+        map.insert(path.to_path_buf(), stamp);
+    }
+}
+
+/// Filter `paths` down to those whose (mtime, size) differs from the last
+/// time they were parsed. Paths never seen before are always included.
+pub(crate) fn changed_files(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    let map = match file_stamps().lock() {
+        Ok(m) => m,
+        Err(_) => return paths.to_vec(),
+    };
+    paths
+        .iter()
+        .filter(|p| {
+            stamp_of(p).map_or(true, |stamp| map.get(*p) != Some(&stamp))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Test-only: mark `paths` as parsed at their current (mtime, size).
+#[cfg(test)]
+pub(crate) fn mark_files_parsed_for_test(paths: &[std::path::PathBuf]) {
+    for p in paths {
+        if let Some(stamp) = stamp_of(p) {
+            remember_parsed(p, stamp);
+        }
+    }
+}
+
+/// Like `load_all_sources`, but only re-parses files whose (mtime, size)
+/// changed since the previous call. The first call behaves exactly like
+/// `load_all_sources` (nothing is known yet).
+///
+/// `post_process` receives every record loaded on *this* call (both changed
+/// and untouched sources) so normalizations that span sources (vendor merge,
+/// deepseek-ai dedup) still see the full current data. Sources whose files
+/// are all unchanged return zero records but still get post-processed —
+/// cheap because it only touches the (small) set of new records.
+pub fn load_changed_sources() -> Vec<TokenRecord> {
+    load_sources_impl(true)
+}
+
+/// Full reload — parse every available source file, ignoring the cache.
 pub fn load_all_sources() -> Vec<TokenRecord> {
+    load_sources_impl(false)
+}
+
+fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
     let mut all_records = Vec::new();
 
     let sources: Vec<Box<dyn DataSource>> = {
@@ -196,6 +324,10 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
             Box::new(QoderSource),
             Box::new(QoderCnSource),
             Box::new(GrokCliSource),
+            Box::new(CommandCodeSource),
+            Box::new(ZcodeSource),
+            Box::new(DshSource),
+            Box::new(DimSource),
         ];
         if std::env::var("USE_CC_SWITCH").is_ok() {
             v.push(Box::new(CcSwitchSource));
@@ -225,12 +357,18 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
         if !src.is_available() {
             continue;
         }
-        let records = src.load();
-        tracing::info!("Loaded {} records from {}", records.len(), src.name());
+        let records = if incremental {
+            src.load_incremental()
+        } else {
+            src.load()
+        };
+        if !records.is_empty() {
+            tracing::info!("Loaded {} records from {}", records.len(), src.name());
+        }
         all_records.extend(records);
     }
 
-    tracing::info!("Total records across all sources: {}", all_records.len());
+    tracing::info!("Total records loaded this pass: {}", all_records.len());
 
     // ── Cross-source dedup: deepseek-ai vs opencode ────────────────────
     // deepseek-ai records imported from DeepSeek official platform exports
@@ -275,11 +413,11 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
     }
 
     // ── Command Code normalization ─────────────────────────────────────
-    // Command Code API uses OpenAI convention: input_tokens includes
-    // cache_read_tokens. Subtract to normalize (matching Codex parser).
-    // This ensures correct pricing and cache hit ratio calculations.
+    // Command Code API via pi uses OpenAI convention: input_tokens includes
+    // cache_read_tokens. Subtract to normalize (matching Codex / native cmd).
+    // Native `cmd` logs (source="commandcode") are subtracted in the parser.
     for record in all_records.iter_mut() {
-        if record.provider == "commandcode" {
+        if record.provider == "commandcode" && record.source == "pi" {
             let effective_input = (record.input_tokens - record.cache_read_tokens).max(0);
             record.input_tokens = effective_input;
             record.total_tokens = effective_input
@@ -471,7 +609,9 @@ mod tests {
     #[test]
     fn commandcode_input_normalization() {
         // Simulate what load_all_sources does: normalize commandcode
-        // input_tokens from OpenAI convention to Anthropic convention
+        // input_tokens from OpenAI convention to Anthropic convention.
+        // Only pi-origin records are normalized here; native cmd is
+        // subtracted in the commandcode parser.
         let mut record = TokenRecord {
             date: "2026-05-25".to_string(),
             time: "2026-05-25T12:46:55Z".to_string(),
@@ -490,18 +630,45 @@ mod tests {
             tps: None,
         };
 
-        // Apply normalization (as load_all_sources does)
-        let effective_input = (record.input_tokens - record.cache_read_tokens).max(0);
-        record.input_tokens = effective_input;
-        record.total_tokens = effective_input
-            + record.output_tokens
-            + record.cache_read_tokens
-            + record.cache_write_tokens;
+        // Apply normalization (as load_all_sources does) — only source=="pi"
+        if record.provider == "commandcode" && record.source == "pi" {
+            let effective_input = (record.input_tokens - record.cache_read_tokens).max(0);
+            record.input_tokens = effective_input;
+            record.total_tokens = effective_input
+                + record.output_tokens
+                + record.cache_read_tokens
+                + record.cache_write_tokens;
+        }
 
         // input should be 21159 - 20864 = 295 (only new uncached input)
         assert_eq!(record.input_tokens, 295);
         assert_eq!(record.total_tokens, 295 + 286 + 20864);
-        // No change for non-commandcode records
+        // Native cmd source is NOT normalized (already exclusive)
+        let native = TokenRecord {
+            date: "2026-08-18".to_string(),
+            time: "2026-08-18T23:22:28.444Z".to_string(),
+            api_key_prefix: "N/A".to_string(),
+            provider: "commandcode".to_string(),
+            original_provider: None,
+            model: "muse-spark-1.2-contributor".to_string(),
+            source: "commandcode".to_string(),
+            input_tokens: 29710,
+            output_tokens: 345,
+            cache_read_tokens: 177,
+            cache_write_tokens: 0,
+            total_tokens: 30232,
+            cost: 0.0,
+            ttft_ms: None,
+            tps: None,
+        };
+        // Guard: native cmd records must NOT be normalized (exclusive already)
+        let mut native_clone = native.clone();
+        if native_clone.provider == "commandcode" && native_clone.source == "pi" {
+            let eff = (native_clone.input_tokens - native_clone.cache_read_tokens).max(0);
+            native_clone.input_tokens = eff;
+        }
+        assert_eq!(native_clone.input_tokens, 29710, "native cmd should stay unmodified");
+        // Non-commandcode records unchanged either way
         let normal = TokenRecord {
             date: "2026-05-25".to_string(),
             time: "2026-05-25T12:00:00Z".to_string(),

@@ -15,9 +15,8 @@ pub mod types;
 pub mod xiaomi_mimo;
 
 pub use types::{
-    CommandCodeQuotaStatus, FennoQuotaStatus, GrokQuotaStatus, KimiQuotaStatus,
-    MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus, QuotaResponse,
-    XiaomiMiMoQuotaStatus,
+    CommandCodeQuotaStatus, FennoQuotaStatus, GrokQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus,
+    OllamaQuotaStatus, OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus,
 };
 
 use serde::de;

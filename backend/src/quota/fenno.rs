@@ -8,7 +8,7 @@
 use super::types::{FennoQuotaData, FennoQuotaStatus, FennoSubscription};
 use fs2::FileExt;
 use reqwest::{Client, StatusCode};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -52,7 +52,8 @@ impl FennoAuthManager {
 
     fn new_with_suffix(client: Client, env_suffix: &str) -> Self {
         let state_path = get_state_path(env_suffix);
-        let credentials = load_state(&state_path).or_else(|| load_bootstrap_credentials(env_suffix));
+        let credentials =
+            load_state(&state_path).or_else(|| load_bootstrap_credentials(env_suffix));
         Self::with_config(client, FENNO_API_BASE_URL, state_path, credentials)
     }
 
@@ -117,8 +118,7 @@ impl FennoAuthManager {
         if let Some(credentials) = load_state(&self.state_path) {
             if failed_access_token.is_some_and(|failed| {
                 credentials.access_token != failed && credentials.is_valid_for(unix_now())
-            })
-                || failed_access_token.is_none() && credentials.is_valid_for(unix_now())
+            }) || failed_access_token.is_none() && credentials.is_valid_for(unix_now())
             {
                 let access_token = credentials.access_token.clone();
                 *self.credentials.write().await = Some(credentials);
@@ -265,7 +265,10 @@ async fn parse_json_response<T: DeserializeOwned>(
 }
 
 fn load_bootstrap_credentials(suffix: &str) -> Option<FennoCredentials> {
-    let access_token = std::env::var(format!("FENNO_AUTH_TOKEN{suffix}")).ok()?.trim().to_string();
+    let access_token = std::env::var(format!("FENNO_AUTH_TOKEN{suffix}"))
+        .ok()?
+        .trim()
+        .to_string();
     let refresh_token = std::env::var(format!("FENNO_REFRESH_TOKEN{suffix}"))
         .ok()?
         .trim()
@@ -419,13 +422,13 @@ fn decode_base64(value: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::FennoCredentials;
-    use super::{FennoAuthManager, FennoQuotaData, fetch_fenno_quota};
+    use super::{fetch_fenno_quota, FennoAuthManager, FennoQuotaData};
     use reqwest::Client;
     use serde_json::json;
     use std::fs;
     use std::sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::tempdir;

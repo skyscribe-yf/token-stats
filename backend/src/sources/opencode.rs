@@ -20,6 +20,22 @@ impl DataSource for OpenCodeSource {
         records
     }
 
+    /// Incremental: skip entirely when the DB file (mtime, size) is unchanged.
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let path = Self::db_path();
+        let files = vec![path.clone()];
+        if self.changed_data_files().is_empty() {
+            return Vec::new();
+        }
+        let records = Self::parse(&path);
+        self.mark_files_parsed(&files);
+        records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        vec![Self::db_path()]
+    }
+
     fn is_available(&self) -> bool {
         Self::db_path().exists()
     }

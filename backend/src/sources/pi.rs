@@ -51,6 +51,36 @@ impl DataSource for PiSource {
 
         records
     }
+
+    /// Incremental: only re-read usage.jsonl when its (mtime, size) changed.
+    /// Taskplane runtime exit summaries are small and only scanned when the
+    /// main log changed (new activity implies new batches may exist).
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let log_path = Self::log_path();
+        let files = vec![log_path.clone()];
+        let changed = self.changed_data_files();
+        if changed.is_empty() {
+            return Vec::new();
+        }
+
+        let live_records = Self::parse_log(&log_path);
+        let covered: HashSet<(String, String, String)> = live_records
+            .iter()
+            .map(|r| (r.date.clone(), r.provider.clone(), r.model.clone()))
+            .collect();
+        let mut records = live_records;
+        records.extend(Self::scan_taskplane_runtimes(&covered));
+        self.mark_files_parsed(&files);
+        records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        vec![Self::log_path()]
+    }
+
+    fn is_available(&self) -> bool {
+        Self::log_path().exists()
+    }
 }
 
 impl PiSource {

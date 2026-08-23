@@ -156,17 +156,21 @@ export function getLocalDatetimeOffsetHours(hours: number, now: Date = new Date(
 }
 
 export const SOURCE_COLORS: Record<string, string> = {
-  pi: "#2563eb",          // blue-600
+  pi: "#2563eb", // blue-600
   "claude-code": "#fbbf24", // amber-400
-  codex: "#34d399",       // emerald-400
-  "kimi-cli": "#a78bfa",  // violet-400
+  codex: "#34d399", // emerald-400
+  "kimi-cli": "#a78bfa", // violet-400
   "kimi-code": "#d946ef", // fuchsia-500
-  opencode: "#fb923c",    // orange-400
+  opencode: "#fb923c", // orange-400
   "xiaomi-mimo-tp": "#f43f5e", // rose-500
-  qoder: "#14b8a6",       // teal-500
-  "qoder-cn": "#0d9488",   // teal-600
-  meituan: "#facc15",      // yellow-400
-  "grok-cli": "#e11d48",  // rose-600
+  qoder: "#14b8a6", // teal-500
+  "qoder-cn": "#0d9488", // teal-600
+  meituan: "#facc15", // yellow-400
+  "grok-cli": "#e11d48", // rose-600
+  zcode: "#818cf8", // indigo-400
+  dsh: "#22d3ee", // cyan-400
+  commandcode: "#f472b6", // pink-400
+  dim: "#f97316", // orange-500 - Dim (dimcode)
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -197,7 +201,10 @@ export function getVendorColor(vendor: string): string {
  *  only changes what is rendered. */
 export const VENDOR_LABELS: Record<string, string> = {
   ainaba: "Yairouter",
+  ainaiba: "Yairouter",
   xai: "Yairouter",
+  "yai-router": "Yairouter",
+  yairouter: "Yairouter",
   fenno: "Fenno",
 };
 
@@ -227,6 +234,10 @@ export const SOURCE_LABELS: Record<string, string> = {
   "qoder-cn": "Qoder CN",
   meituan: "美团 LongCat",
   "grok-cli": "Grok CLI",
+  zcode: "ZCode",
+  dsh: "DSH",
+  commandcode: "Command Code",
+  dim: "Dim",
 };
 
 export function getSourceColor(source: string): string {

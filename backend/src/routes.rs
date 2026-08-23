@@ -335,12 +335,15 @@ pub struct StoreInfo {
     pub db_path: String,
     pub db_records: usize,
     pub memory_records: usize,
+    /// Records queued for the next deferred disk write (memory − DB).
+    pub pending_records: usize,
     pub db_size_bytes: u64,
 }
 
 pub async fn get_store_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let memory_records = state.records.read().await.len();
     let db_records = state.store.count();
+    let pending_records = state.pending.len();
     let db_size_bytes = std::fs::metadata(state.store.path())
         .map(|m| m.len())
         .unwrap_or(0);
@@ -349,16 +352,20 @@ pub async fn get_store_info(State(state): State<Arc<AppState>>) -> impl IntoResp
         db_path: state.store.path().display().to_string(),
         db_records,
         memory_records,
+        pending_records,
         db_size_bytes,
     })
 }
 
 /// Explicitly restore the in-memory snapshot from the durable store.
 ///
-/// Under normal operation memory is already rebuilt from the store on every
-/// startup/refresh, so this is a safety net: it re-reads the whole DB and
-/// replaces the in-memory records with it.
+/// Under normal operation memory already contains everything the store has
+/// (plus queued records), so this is a safety net: it re-reads the whole DB
+/// and replaces the in-memory records with it. Queued records are flushed
+/// first so nothing pending is dropped from memory.
 pub async fn restore_store(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Persist anything still queued so memory == DB after the restore.
+    state.flush_pending().await;
     let db_records = state.store.load_all();
     let mut guard = state.records.write().await;
     let before_count = guard.len();
@@ -545,6 +552,9 @@ pub async fn restore_backup(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RestoreBody>,
 ) -> Result<Json<RestoreResponse>, (StatusCode, String)> {
+    // Persist anything still queued so the reload below doesn't drop it from
+    // memory (memory = DB + queued records is the normal invariant).
+    state.flush_pending().await;
     let mut guard = state.records.write().await;
     let before_count = guard.len();
 

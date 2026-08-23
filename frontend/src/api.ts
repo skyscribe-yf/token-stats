@@ -3,6 +3,13 @@ const API_BASE = "/token-stats";
 /** Provider merge map: aliases → canonical name */
 const PROVIDER_MERGE: Record<string, string> = {
   "ollama-cloud": "ollama",
+  // Yairouter is billed through the same platform as ainaba (AI奶爸),
+  // and the Grok CLI records it as `yai-router`. Normalize both so the UI
+  // shows one Yairouter vendor instead of splitting the data.
+  "yai-router": "ainaba",
+  "ainaiba": "ainaba",
+  "xai": "ainaba",
+  "yairouter": "ainaba",
 };
 
 /** Merge provider aliases in a StatsResponse so the UI shows unified vendors. */
@@ -674,6 +681,7 @@ export interface StoreInfo {
   db_path: string;
   db_records: number;
   memory_records: number;
+  pending_records: number;
   db_size_bytes: number;
 }
 

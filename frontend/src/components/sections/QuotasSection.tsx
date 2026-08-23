@@ -15,6 +15,7 @@ import type {
   XunfeiAccountStatus,
   AinaibaCreditResponse,
   KimiQuotaStatus,
+  OpenCodeQuotaStatus,
   CommandCodeQuotaStatus,
   OllamaQuotaStatus,
   MeituanQuotaStatus,
@@ -23,6 +24,7 @@ import type {
   SubscriptionSettings,
 } from "../../api";
 import { remainingQuota } from "../../lib/fennoQuota";
+import { isQuotaCardHidden } from "../../lib/quotaCards";
 
 interface QuotasSectionProps {
   quota: QuotaResponse | null;
@@ -33,6 +35,7 @@ interface QuotasSectionProps {
   ainaibaCreditLoading: boolean;
   subscriptionSettings: SubscriptionSettings | null;
   highlightCardId: string | null;
+  hiddenCards: Set<string>;
 }
 
 function barColor(used: number, limit: number): string {
@@ -848,6 +851,91 @@ function OllamaCard({
   );
 }
 
+function OpenCodeCard({
+  status,
+  loading,
+  highlightId,
+  suffix,
+}: {
+  status: OpenCodeQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+  suffix?: string;
+}) {
+  const cardId = suffix === "EX" ? "quota-opencode-ex" : "quota-opencode-primary";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const label = `OpenCode-go${suffix === "EX" ? " EX" : ""}`;
+
+  // Nearest reset for cycle countdown
+  const sortedEntries = status?.data?.entries
+    ? [...status.data.entries].sort((a, b) => {
+        const aAt = a.reset_at ? new Date(a.reset_at).getTime() : Infinity;
+        const bAt = b.reset_at ? new Date(b.reset_at).getTime() : Infinity;
+        return aAt - bAt;
+      })
+    : [];
+  const nearestReset = sortedEntries[0]?.reset_at ?? null;
+  const cycleCountdown = buildCycleCountdown(nearestReset);
+
+  const workspaceUrl = status?.data?.workspace_url ?? null;
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name={label}
+        href={workspaceUrl ?? "https://opencode.ai"}
+        suffix="opencode.ai"
+        cycleCountdown={cycleCountdown}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && status.data ? (
+        <div className="space-y-1.5">
+          {status.data.entries.map((entry) => {
+            const scope =
+              entry.usage_type === "Rolling"
+                ? "滚动"
+                : entry.usage_type === "Weekly"
+                  ? "周"
+                  : entry.usage_type === "Monthly"
+                    ? "月"
+                    : entry.usage_type;
+            return (
+              <div key={entry.usage_type}>
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>{scope}</span>
+                  <span>
+                    {entry.percentage}%
+                    {entry.resets_in && ` · 剩余 ${entry.resets_in}`}
+                  </span>
+                </div>
+                <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      entry.percentage > 80
+                        ? "bg-rose-500"
+                        : entry.percentage > 50
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${Math.min(entry.percentage, 100)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function SkeletonBars() {
   return (
     <div className="space-y-1.5">
@@ -1103,62 +1191,98 @@ export const QuotasSection = memo(function QuotasSection({
   ainaibaCreditLoading,
   subscriptionSettings,
   highlightCardId,
+  hiddenCards,
 }: QuotasSectionProps) {
   return (
     <section id="section-quotas" className="space-y-3 scroll-mt-32">
       <h2 className="text-base font-semibold text-slate-800">订阅</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-        {xunfei?.accounts?.map((acc) => (
-          <XunfeiCard
-            key={acc.label}
-            account={acc}
-            loading={xunfeiLoading}
+        {xunfei?.accounts
+          ?.filter(
+            (acc) => !isQuotaCardHidden(hiddenCards, `quota-xunfei-${acc.label}`)
+          )
+          .map((acc) => (
+            <XunfeiCard
+              key={acc.label}
+              account={acc}
+              loading={xunfeiLoading}
+              highlightId={highlightCardId}
+            />
+          ))}
+        {!isQuotaCardHidden(hiddenCards, "quota-ainaiba") && (
+          <AinaibaCard
+            status={ainaibaCredit}
+            loading={ainaibaCreditLoading}
             highlightId={highlightCardId}
           />
-        ))}
-        <AinaibaCard
-          status={ainaibaCredit}
-          loading={ainaibaCreditLoading}
-          highlightId={highlightCardId}
-        />
-        <KimiCard
-          status={quota?.kimi ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-          subscriptionSettings={subscriptionSettings}
-        />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-kimi") && (
+          <KimiCard
+            status={quota?.kimi ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+            subscriptionSettings={subscriptionSettings}
+          />
+        )}
 
-        <CommandCodeCard
-          status={quota?.commandcode ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
-        <FennoCard
-          status={quota?.fenno ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
-        <FennoCard
-          status={quota?.fenno_ex ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-          suffix="EX"
-        />
-        <OllamaCard
-          status={quota?.ollama ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
-        <MeituanCard
-          status={quota?.meituan ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
-        <GrokCard
-          status={quota?.grok ?? null}
-          loading={quotaLoading}
-          highlightId={highlightCardId}
-        />
+        {!isQuotaCardHidden(hiddenCards, "quota-opencode-primary") && (
+          <OpenCodeCard
+            status={quota?.opencode_go ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-opencode-ex") && (
+          <OpenCodeCard
+            status={quota?.opencode_go_ex ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+            suffix="EX"
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-commandcode") && (
+          <CommandCodeCard
+            status={quota?.commandcode ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-fenno") && (
+          <FennoCard
+            status={quota?.fenno ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-fenno-ex") && (
+          <FennoCard
+            status={quota?.fenno_ex ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+            suffix="EX"
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-ollama") && (
+          <OllamaCard
+            status={quota?.ollama ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-meituan") && (
+          <MeituanCard
+            status={quota?.meituan ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-grok") && (
+          <GrokCard
+            status={quota?.grok ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
       </div>
     </section>
   );

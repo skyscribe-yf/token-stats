@@ -36,6 +36,7 @@ import {
   type AinaibaCreditResponse,
   type RestoreResponse,
   type SubscriptionSettings,
+  type OpenCodeQuotaStatus,
   type RpmAnalysis,
   type TpsAnalysis,
 } from "./api";
@@ -100,6 +101,7 @@ interface AlertItem {
 const LS_ACTIVE_SECTION = "token-stats:active-section";
 const LS_VENDOR_METRIC = "token-stats:vendor-breakdown-metric";
 const LS_ALERT_DISMISS = "token-stats:alert-dismiss";
+const LS_HIDDEN_QUOTA_CARDS = "token-stats:hidden-quota-cards";
 
 const DISMISS_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -124,6 +126,19 @@ function readDismissedAlerts(): Map<string, number> {
 }
 
 
+
+/** Read hidden subscription card keys from localStorage. */
+function readHiddenQuotaCards(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LS_HIDDEN_QUOTA_CARDS);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((k) => typeof k === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
 function readLs<T extends string>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -313,6 +328,30 @@ export default function App() {
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [subscriptionSettings, setSubscriptionSettings] =
     useState<SubscriptionSettings | null>(null);
+  const [hiddenQuotaCards, setHiddenQuotaCards] = useState<Set<string>>(
+    () => readHiddenQuotaCards()
+  );
+  // Persist hidden subscription cards to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        LS_HIDDEN_QUOTA_CARDS,
+        JSON.stringify([...hiddenQuotaCards])
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [hiddenQuotaCards]);
+
+  const handleToggleQuotaCard = useCallback((key: string) => {
+    setHiddenQuotaCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
   const [dismissedPersisted, setDismissedPersisted] = useState<Set<string>>(
@@ -738,6 +777,48 @@ export default function App() {
       }
     }
 
+    const checkOpenCode = (
+      status: OpenCodeQuotaStatus | null | undefined,
+      label: string
+    ) => {
+      if (!status?.available || !status.data) return;
+      const suffix = label === "ex" ? " (EX)" : "";
+      for (const entry of status.data.entries) {
+        if (entry.percentage >= 80) {
+          const typeLabel =
+            entry.usage_type === "Rolling"
+              ? "滚动"
+              : entry.usage_type === "Weekly"
+                ? "周"
+                : entry.usage_type === "Monthly"
+                  ? "月"
+                  : entry.usage_type;
+          alerts.push({
+            id: `opencode_${label}_${entry.usage_type}_low`,
+            provider: `OpenCode-go${suffix}`,
+            type: "quota_low",
+            message: `OpenCode-go${suffix} ${typeLabel}限额已用 ${entry.percentage}%`,
+            detail: `重置于 ${entry.resets_in}`,
+          });
+        }
+        if (
+          entry.usage_type === "Monthly" &&
+          entry.reset_at &&
+          isWithin24Hours(entry.reset_at)
+        ) {
+          alerts.push({
+            id: `opencode_${label}_expiring`,
+            provider: `OpenCode-go${suffix}`,
+            type: "expiring_soon",
+            message: `OpenCode-go${suffix} 月度配额即将重置`,
+            detail: `重置于 ${new Date(entry.reset_at).toLocaleString()}`,
+          });
+        }
+      }
+    };
+    checkOpenCode(quota?.opencode_go, "primary");
+    checkOpenCode(quota?.opencode_go_ex, "ex");
+
     if (xunfei?.accounts) {
       for (const acc of xunfei.accounts) {
         const suffix = acc.label === "ex" ? " (EX)" : "";
@@ -1114,6 +1195,8 @@ export default function App() {
             subscriptionSettings={subscriptionSettings}
             onSubscriptionSettingsChange={setSubscriptionSettings}
             onSaveSubscriptionSettings={handleSaveSubscriptionSettings}
+            hiddenQuotaCards={hiddenQuotaCards}
+            onToggleQuotaCard={handleToggleQuotaCard}
             pricingConfig={pricingConfig}
             onExport={handleExport}
             exportError={exportError}
@@ -1205,6 +1288,7 @@ export default function App() {
                   ainaibaCreditLoading={ainaibaCreditLoading}
                   subscriptionSettings={subscriptionSettings}
                   highlightCardId={highlightCardId}
+                  hiddenCards={hiddenQuotaCards}
                 />
               </Suspense>
 

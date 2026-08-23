@@ -59,11 +59,19 @@ impl ProxyConfig {
     }
 
     fn resolve_route(&self, model: &str) -> Option<ResolvedRoute> {
-        let (upstream_base_url, provider, network_proxy) = match model {
-            "grok-4.5-yai" => (&self.yai_upstream_base_url, "yai-router", None),
+        let (upstream_base_url, provider, canonical_model, network_proxy) = match model {
+            "grok-4.5-yai" => (&self.yai_upstream_base_url, "yai-router", "grok-4.5", None),
+            "grok-4.6-yai" => (&self.yai_upstream_base_url, "yai-router", "grok-4.6", None),
             "grok-4.5-xai" => (
                 &self.xai_upstream_base_url,
                 "xai-official",
+                "grok-4.5",
+                self.xai_network_proxy.clone(),
+            ),
+            "grok-4.6-xai" => (
+                &self.xai_upstream_base_url,
+                "xai-official",
+                "grok-4.6",
                 self.xai_network_proxy.clone(),
             ),
             _ => return None,
@@ -72,7 +80,7 @@ impl ProxyConfig {
         Some(ResolvedRoute {
             upstream_base_url: upstream_base_url.clone(),
             provider,
-            canonical_model: "grok-4.5",
+            canonical_model,
             network_proxy,
         })
     }
@@ -532,6 +540,109 @@ mod tests {
                 .unwrap(),
             "Bearer official-key"
         );
+    }
+
+    #[tokio::test]
+    async fn routes_grok_4_6_official_alias_to_xai_and_rewrites_the_model() {
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.6","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&xai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer official-key")
+                .body(Body::from(r#"{"model":"grok-4.6-xai"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(yai.received_requests().await.unwrap().is_empty());
+        let requests = xai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.6");
+        // Consume the stream so the terminal usage record is flushed.
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "xai-official");
+        assert_eq!(record.model, "grok-4.6");
+    }
+
+    #[tokio::test]
+    async fn routes_grok_4_6_yai_alias_to_yai_and_rewrites_the_model() {
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.6","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&yai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer yai-key")
+                .header("content-length", r#"{"model":"grok-4.6-yai"}"#.len())
+                .body(Body::from(r#"{"model":"grok-4.6-yai"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(xai.received_requests().await.unwrap().is_empty());
+        let requests = yai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.6");
+        assert_eq!(
+            requests[0]
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer yai-key"
+        );
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "yai-router");
+        assert_eq!(record.model, "grok-4.6");
     }
 
     #[tokio::test]

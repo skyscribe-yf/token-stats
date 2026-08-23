@@ -83,7 +83,6 @@ impl TokenRecord {
     pub fn minute_index_utc(&self) -> Option<i64> {
         self.parsed_time().map(|dt| dt.timestamp() / 60)
     }
-
 }
 
 /// Aggregation time resolution for date-based stats.

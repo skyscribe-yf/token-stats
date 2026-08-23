@@ -10,7 +10,7 @@
 //! using the current `pricing.toml` configuration.
 
 use crate::models::TokenRecord;
-use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -26,6 +26,21 @@ pub struct AinabaSegment {
     /// If `None`, this is the catch-all segment (applies to all remaining records).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<String>,
+    pub divisor: f64,
+}
+
+/// Model-scoped, time-based OpenCode Go plan divisor.
+///
+/// Unmatched models and records before a segment's `effective_from` keep
+/// [`SpecialPricing::opencode_divisor`]. When several segments match, the
+/// latest qualifying `effective_from` wins (same rule as model prices).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpencodeModelSegment {
+    /// Model-name substrings (case-insensitive) this segment applies to.
+    pub models: Vec<String>,
+    /// Inclusive start. `None` = baseline override for the listed models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_from: Option<String>,
     pub divisor: f64,
 }
 
@@ -81,6 +96,10 @@ pub struct SpecialPricing {
     #[serde(default)]
     pub xiaomi_mimo_tp_per_token: f64,
     pub opencode_divisor: f64,
+    /// Model-scoped OpenCode Go divisor overrides. Empty = always use
+    /// `opencode_divisor`.
+    #[serde(default)]
+    pub opencode_model_segments: Vec<OpencodeModelSegment>,
     /// Legacy single-value divisor. Kept for backward compatibility.
     /// When `ainaba_segments` is non-empty, segments take precedence.
     #[serde(default)]
@@ -210,6 +229,19 @@ pub struct ModelPriceConfig {
     pub cache_read: f64,
     #[serde(default)]
     pub cache_write: f64,
+    /// UTC hour ranges (`[start, end)`) during which the optional `peak_*`
+    /// rates apply.  Used by providers that publish recurring peak/off-peak
+    /// pricing after a dated price segment becomes effective.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peak_hours_utc: Vec<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_input: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_output: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_cache_read: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_cache_write: Option<f64>,
     /// Optional CNY-denominated rates (CNY per 1M tokens). When present, the
     /// model cost is computed directly in CNY without any USD→CNY conversion.
     /// Used for providers that publish CNY list prices (e.g. DeepSeek 官方).
@@ -262,6 +294,11 @@ pub struct PricingConfig {
     pub special: SpecialPricing,
     #[serde(default)]
     pub model: Vec<ModelPriceConfig>,
+    /// Provider-scoped model prices for Yairouter/Ainaba. These overrides take
+    /// effect only once their dated segment is active; earlier records retain
+    /// the regular model schedule.
+    #[serde(default)]
+    pub yairouter_model: Vec<ModelPriceConfig>,
 }
 
 impl Default for PricingConfig {
@@ -279,6 +316,7 @@ impl Default for PricingConfig {
                 // effective per-token = 99 * 0.84 / 672_260_000 ≈ 0.0000001237
                 xiaomi_mimo_tp_per_token: 0.0000001237,
                 opencode_divisor: 6.0,
+                opencode_model_segments: Vec::new(),
                 ainaba_divisor: 1.0,
                 ainaba_segments: Vec::new(),
                 ainaba_platform_rate: default_ainaba_platform_rate(),
@@ -293,6 +331,7 @@ impl Default for PricingConfig {
                 xunfei_off_peak: None,
             },
             model: Vec::new(),
+            yairouter_model: Vec::new(),
         }
     }
 }
@@ -300,9 +339,17 @@ impl Default for PricingConfig {
 impl PricingConfig {
     /// Build a fast lookup map from model names to prices.
     fn build_model_map(&self) -> HashMap<String, ModelPrice> {
+        Self::build_model_map_for(&self.model)
+    }
+
+    fn build_yairouter_model_map(&self) -> HashMap<String, ModelPrice> {
+        Self::build_model_map_for(&self.yairouter_model)
+    }
+
+    fn build_model_map_for(models: &[ModelPriceConfig]) -> HashMap<String, ModelPrice> {
         // Group configs by model name
         let mut groups: HashMap<String, Vec<&ModelPriceConfig>> = HashMap::new();
-        for m in &self.model {
+        for m in models {
             groups.entry(m.name.clone()).or_default().push(m);
         }
         // Build ModelPrice from each group (time-segment + tier validation inside)
@@ -320,6 +367,10 @@ struct PriceTier {
     output: f64,
     cache_read: f64,
     cache_write: f64,
+    peak_input: Option<f64>,
+    peak_output: Option<f64>,
+    peak_cache_read: Option<f64>,
+    peak_cache_write: Option<f64>,
     input_cny: Option<f64>,
     output_cny: Option<f64>,
     cache_read_cny: Option<f64>,
@@ -333,6 +384,9 @@ struct TimeSegment {
     /// When this price segment takes effect. `None` = baseline (oldest rates)
     /// that applies to every record unless a later dated segment overrides it.
     effective_from: Option<DateTime<FixedOffset>>,
+    /// Inclusive UTC hour ranges (`[start, end)`) using the optional peak
+    /// rates on its tiers. An empty list means the base rates always apply.
+    peak_hours_utc: Vec<[u32; 2]>,
     /// Token-count tiers sorted by threshold ascending (first = base, threshold 0).
     tiers: Vec<PriceTier>,
 }
@@ -351,6 +405,20 @@ impl TimeSegment {
             }
         }
         selected
+    }
+
+    fn is_peak_hour(&self, record_time: Option<&DateTime<FixedOffset>>) -> bool {
+        let Some(record_time) = record_time else {
+            return false;
+        };
+        let hour = record_time.with_timezone(&Utc).hour();
+        self.peak_hours_utc.iter().any(|[start, end]| {
+            if start <= end {
+                *start <= hour && hour < *end
+            } else {
+                hour >= *start || hour < *end
+            }
+        })
     }
 }
 
@@ -400,6 +468,10 @@ impl ModelPrice {
                         output: c.output,
                         cache_read: c.cache_read,
                         cache_write: c.cache_write,
+                        peak_input: c.peak_input,
+                        peak_output: c.peak_output,
+                        peak_cache_read: c.peak_cache_read,
+                        peak_cache_write: c.peak_cache_write,
                         input_cny: c.input_cny,
                         output_cny: c.output_cny,
                         cache_read_cny: c.cache_read_cny,
@@ -410,12 +482,40 @@ impl ModelPrice {
                 let effective_from = eff_from
                     .as_ref()
                     .and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-                TimeSegment { effective_from, tiers }
+                let peak_hours_utc = cfgs
+                    .iter()
+                    .find(|c| !c.peak_hours_utc.is_empty())
+                    .map(|c| c.peak_hours_utc.clone())
+                    .unwrap_or_default();
+                TimeSegment {
+                    effective_from,
+                    peak_hours_utc,
+                    tiers,
+                }
             })
             .collect();
         // None (baseline) sorts first as -inf, then dated segments by time.
-        segments.sort_by_key(|s| s.effective_from.map(|dt| dt.timestamp()).unwrap_or(i64::MIN));
+        segments.sort_by_key(|s| {
+            s.effective_from
+                .map(|dt| dt.timestamp())
+                .unwrap_or(i64::MIN)
+        });
         Self { segments }
+    }
+
+    /// Whether this provider-scoped price has started for the record time.
+    /// Scoped configurations deliberately have no baseline: before their first
+    /// dated segment, the normal model price must remain in effect.
+    fn has_active_dated_segment(&self, record_time: &str) -> bool {
+        let Ok(record_time) = DateTime::parse_from_rfc3339(record_time) else {
+            return false;
+        };
+        self.segments.iter().any(|segment| {
+            segment
+                .effective_from
+                .as_ref()
+                .is_some_and(|effective_from| record_time >= *effective_from)
+        })
     }
 
     /// Select the time segment for a record. `record_time` is the parsed RFC3339
@@ -451,13 +551,23 @@ impl ModelPrice {
         record_time: &str,
     ) -> f64 {
         let rt = DateTime::parse_from_rfc3339(record_time).ok();
-        let seg = self.select_segment(rt);
+        let seg = self.select_segment(rt.clone());
         let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
         let tier = seg.select_tier(total_input);
-        input_tokens as f64 * tier.input / 1_000_000.0
-            + output_tokens as f64 * tier.output / 1_000_000.0
-            + cache_read_tokens as f64 * tier.cache_read / 1_000_000.0
-            + cache_write_tokens as f64 * tier.cache_write / 1_000_000.0
+        let (input, output, cache_read, cache_write) = if seg.is_peak_hour(rt.as_ref()) {
+            (
+                tier.peak_input.unwrap_or(tier.input),
+                tier.peak_output.unwrap_or(tier.output),
+                tier.peak_cache_read.unwrap_or(tier.cache_read),
+                tier.peak_cache_write.unwrap_or(tier.cache_write),
+            )
+        } else {
+            (tier.input, tier.output, tier.cache_read, tier.cache_write)
+        };
+        input_tokens as f64 * input / 1_000_000.0
+            + output_tokens as f64 * output / 1_000_000.0
+            + cache_read_tokens as f64 * cache_read / 1_000_000.0
+            + cache_write_tokens as f64 * cache_write / 1_000_000.0
     }
 
     /// Whether this model is priced directly in CNY (any tier carries a CNY
@@ -564,12 +674,13 @@ impl RateSchedule {
             });
         }
         // None (baseline) sorts first as -inf, then dated segments by time.
-        segments.sort_by_key(|s| s.effective_from.map(|dt| dt.timestamp()).unwrap_or(i64::MIN));
+        segments.sort_by_key(|s| {
+            s.effective_from
+                .map(|dt| dt.timestamp())
+                .unwrap_or(i64::MIN)
+        });
 
-        let current_rate = segments
-            .last()
-            .map(|s| s.rate)
-            .unwrap_or(config.usd_to_cny);
+        let current_rate = segments.last().map(|s| s.rate).unwrap_or(config.usd_to_cny);
 
         if segments.is_empty() {
             // No segments configured → single implicit baseline (legacy behavior).
@@ -643,6 +754,7 @@ impl RateSchedule {
 struct PricingState {
     config: PricingConfig,
     model_map: HashMap<String, ModelPrice>,
+    yairouter_model_map: HashMap<String, ModelPrice>,
     kimi_api_model_map: HashMap<String, KimiApiModelPrice>,
     rate_schedule: RateSchedule,
 }
@@ -650,6 +762,7 @@ struct PricingState {
 impl PricingState {
     fn new(config: PricingConfig) -> Self {
         let model_map = config.build_model_map();
+        let yairouter_model_map = config.build_yairouter_model_map();
         let kimi_api_model_map = config
             .special
             .kimi_api_models
@@ -661,6 +774,7 @@ impl PricingState {
         Self {
             config,
             model_map,
+            yairouter_model_map,
             kimi_api_model_map,
             rate_schedule,
         }
@@ -668,6 +782,7 @@ impl PricingState {
 
     fn reload(&mut self, config: PricingConfig) {
         self.model_map = config.build_model_map();
+        self.yairouter_model_map = config.build_yairouter_model_map();
         self.kimi_api_model_map = config
             .special
             .kimi_api_models
@@ -787,9 +902,29 @@ pub fn set_grok_divisor(divisor: f64) {
 
 fn resolve_model_price<'a>(
     state: &'a PricingState,
-    model: &str,
-    provider: &str,
+    record: &TokenRecord,
 ) -> Option<&'a ModelPrice> {
+    let model = &record.model;
+    let provider = &record.provider;
+
+    if is_yairouter_billed(record) {
+        let model_lower = model.to_lowercase();
+        let override_key = if model_lower.contains("gpt-5.6-terra") {
+            Some("gpt-5.6-terra")
+        } else if model_lower.contains("gpt-5.6-luna") {
+            Some("gpt-5.6-luna")
+        } else {
+            None
+        };
+
+        if let Some(price) = override_key
+            .and_then(|key| state.yairouter_model_map.get(key))
+            .filter(|price| price.has_active_dated_segment(&record.time))
+        {
+            return Some(price);
+        }
+    }
+
     // Exact match first
     if let Some(p) = state.model_map.get(model) {
         return Some(p);
@@ -922,6 +1057,8 @@ fn normalize_commandcode_model(model: &str) -> String {
         // DeepSeek
         "deepseek-v4-pro" => "cc:deepseek-v4-pro",
         "deepseek-v4-flash" => "cc:deepseek-v4-flash",
+        s if s.starts_with("deepseek-v4-pro") => "cc:deepseek-v4-pro",
+        s if s.starts_with("deepseek-v4-flash") => "cc:deepseek-v4-flash",
 
         // Moonshot/Kimi
         "kimi-k2.6" => "cc:kimi-k2.6",
@@ -1042,6 +1179,64 @@ fn is_xunfei_off_peak(record: &TokenRecord, config: &XunfeiOffPeakConfig) -> boo
 
 // ── Cost calculation ─────────────────────────────────────────────────────────
 
+/// Yairouter / Ainaba billed providers share the same settlement:
+/// official USD list price × fixed platform rate / subscription divisor.
+fn is_yairouter_billed(record: &TokenRecord) -> bool {
+    let effective = record
+        .original_provider
+        .as_deref()
+        .unwrap_or(&record.provider);
+    matches!(
+        record.provider.as_str(),
+        "ainaba" | "ainaiba" | "yai-router"
+    ) || matches!(effective, "ainaba" | "ainaiba" | "yai-router")
+}
+
+/// Select the OpenCode Go divisor for a record.
+///
+/// Model-scoped segments override [`SpecialPricing::opencode_divisor`] when
+/// the model name contains a listed substring and the record time is on or
+/// after that segment's `effective_from`. The latest qualifying segment wins.
+fn get_opencode_divisor(special: &SpecialPricing, model: &str, record_time: &str) -> f64 {
+    if special.opencode_model_segments.is_empty() {
+        return special.opencode_divisor;
+    }
+
+    let model_lower = model.to_lowercase();
+    let record_dt = DateTime::parse_from_rfc3339(record_time).ok();
+    let mut chosen: Option<(i64, f64)> = None;
+
+    for segment in &special.opencode_model_segments {
+        if !segment
+            .models
+            .iter()
+            .any(|name| model_lower.contains(&name.to_lowercase()))
+        {
+            continue;
+        }
+        let effective_from = segment
+            .effective_from
+            .as_deref()
+            .and_then(parse_rate_effective_from);
+        let qualifies = match (effective_from, record_dt) {
+            (None, _) => true,
+            (Some(from), Some(rt)) => rt >= from,
+            (Some(_), None) => false,
+        };
+        if !qualifies {
+            continue;
+        }
+        let ts = effective_from.map(|dt| dt.timestamp()).unwrap_or(i64::MIN);
+        if chosen.is_none_or(|(prev, _)| ts >= prev) {
+            chosen = Some((ts, segment.divisor));
+        }
+    }
+
+    chosen
+        .map(|(_, divisor)| divisor)
+        .unwrap_or(special.opencode_divisor)
+}
+
 /// Select the Ainaba divisor for a record based on its timestamp.
 /// Checks `ainaba_segments` first (time-based), falls back to legacy `ainaba_divisor`.
 fn get_ainaba_divisor(special: &SpecialPricing, record_time: &str) -> f64 {
@@ -1157,7 +1352,8 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
     // 3. OpenCode source (direct from OpenCode DB): cost is in USD
     //    Apply OpenCode Go plan divisor + convert to CNY
     if record.source == "opencode" && record.cost > 0.0 {
-        return record.cost / cfg.special.opencode_divisor * schedule.rate_for(&record.time);
+        return record.cost / get_opencode_divisor(&cfg.special, &record.model, &record.time)
+            * schedule.rate_for(&record.time);
     }
 
     // 4. CommandCode provider: always compute from normalized tokens using
@@ -1209,8 +1405,8 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
 
         // Pi's stored Ainaba cost can lag the latest pricing table for long
         // contexts, so recompute from token counts when a known model exists.
-        if record.provider == "ainaba" || effective_provider == "ainaiba" {
-            if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+        if is_yairouter_billed(record) {
+            if let Some(mp) = resolve_model_price(&state, record) {
                 let usd = mp.compute_usd(
                     record.input_tokens,
                     record.output_tokens,
@@ -1233,7 +1429,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         if (effective_provider == "fenno" || effective_provider == "fenno-ex")
             && is_gpt_family(&record.model)
         {
-            if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+            if let Some(mp) = resolve_model_price(&state, record) {
                 let usd = mp.compute_usd(
                     record.input_tokens,
                     record.output_tokens,
@@ -1254,7 +1450,8 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         // 4b. opencode-go Pi provider: cost is in USD from OpenCode API
         //     Apply OpenCode Go plan divisor + convert to CNY
         if effective_provider == "opencode-go" {
-            return record.cost / cfg.special.opencode_divisor * schedule.rate_for(&record.time);
+            return record.cost / get_opencode_divisor(&cfg.special, &record.model, &record.time)
+                * schedule.rate_for(&record.time);
         }
 
         // 4b2. kimi-coding Pi provider: subscription model, same as kimi-code.
@@ -1262,9 +1459,11 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         //     cost. Recompute from token counts and apply the multiplier.
         //     (original_provider preserved by vendor merge from "kimi-coding" → "kimi")
         if effective_provider == "kimi-coding" {
-            if let Some(cost) =
-                compute_kimi_subscription_cost(&state, record, cfg.special.kimi_subscription_multiplier)
-            {
+            if let Some(cost) = compute_kimi_subscription_cost(
+                &state,
+                record,
+                cfg.special.kimi_subscription_multiplier,
+            ) {
                 return cost;
             }
         }
@@ -1272,16 +1471,17 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         // 4c. Other Pi providers: cost is in USD, convert to CNY.
         //     Ainaiba 使用平台固定结算汇率 7.0（充值 396 元 → 8000 元额度），
         //     其余提供商按记录时间所在的市场汇率分段折算。
-        let base_rate = if record.provider == "ainaba" {
+        let base_rate = if is_yairouter_billed(record) {
             cfg.special.ainaba_platform_rate
         } else {
             schedule.rate_for(&record.time)
         };
         let mut cny = record.cost * base_rate;
 
-        // Ainaba time-based rate: divisor depends on record timestamp
-        // (provider="ainaba" after vendor merge, covering both Pi and Codex)
-        if record.provider == "ainaba" {
+        // Yairouter / Ainaba time-based rate: divisor depends on record timestamp
+        // (provider="ainaba" after vendor merge, covering both Pi and Codex;
+        //  grok-cli records keep provider="yai-router")
+        if is_yairouter_billed(record) {
             cny /= get_ainaba_divisor(&cfg.special, &record.time);
         }
 
@@ -1308,7 +1508,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         .as_deref()
         .unwrap_or(&record.provider);
     if effective_provider == "deepseek" && record.cost == 0.0 {
-        if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
+        if let Some(mp) = resolve_model_price(&state, record) {
             if mp.is_cny_priced() {
                 return mp.compute_cny(
                     record.input_tokens,
@@ -1329,16 +1529,20 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
         }
     }
 
-    // 6. Derived sources without original cost: codex, claude-code, kimi-code, Grok CLI, etc.
+    // 6. Derived sources without original cost: codex, claude-code, kimi-code,
+    //    Grok CLI, zcode, dsh, etc. (commandcode native is handled above via
+    //    provider == "commandcode")
     //    Compute from per-model token rates. pricing.toml model prices are in
     //    USD by default; CNY-priced models (e.g. DeepSeek 官方) skip conversion.
     if record.source == "codex"
         || record.source == "claude-code"
         || record.source == "kimi-code"
         || record.source == "grok-cli"
+        || record.source == "zcode"
+        || record.source == "dsh"
     {
-        if let Some(mp) = resolve_model_price(&state, &record.model, &record.provider) {
-            let base_rate = if record.provider == "ainaba" {
+        if let Some(mp) = resolve_model_price(&state, record) {
+            let base_rate = if is_yairouter_billed(record) {
                 cfg.special.ainaba_platform_rate
             } else {
                 schedule.rate_for(&record.time)
@@ -1360,8 +1564,8 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
                     &record.time,
                 ) * base_rate
             };
-            // Ainaba time-based rate: divisor depends on record timestamp
-            if record.provider == "ainaba" {
+            // Yairouter / Ainaba time-based rate: divisor depends on record timestamp
+            if is_yairouter_billed(record) {
                 cny /= get_ainaba_divisor(&cfg.special, &record.time);
             }
             // FreeModel discount: 1 USD face value = 0.1 CNY actual cost
@@ -1372,7 +1576,7 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
             // kimi-code records with provider="opencode-go" go through the
             // same OpenCode Go subscription as pi records with opencode-go.
             if record.provider == "opencode-go" {
-                cny /= cfg.special.opencode_divisor;
+                cny /= get_opencode_divisor(&cfg.special, &record.model, &record.time);
             }
             if record.provider == "fenno" {
                 cny /= schedule.fenno_divisor_for(&record.time);
@@ -1499,6 +1703,19 @@ mod tests {
                 .copied(),
             Some(0.2)
         );
+        assert_eq!(cfg.special.opencode_divisor, 6.0);
+        assert_eq!(cfg.special.opencode_model_segments.len(), 1);
+        assert_eq!(
+            cfg.special.opencode_model_segments[0].models,
+            vec!["deepseek-v4-flash", "deepseek-v4-pro"]
+        );
+        assert_eq!(
+            cfg.special.opencode_model_segments[0]
+                .effective_from
+                .as_deref(),
+            Some("2026-08-18T00:00:00+08:00")
+        );
+        assert_eq!(cfg.special.opencode_model_segments[0].divisor, 3.0);
     }
 
     #[test]
@@ -1564,13 +1781,7 @@ mod tests {
         // pricing.toml stores the CNY values verbatim (no USD conversion).
         let expected = [
             ("deepseek-v4-pro", 3.0, 6.0, 0.025, 0.0),
-            (
-                "deepseek-v4-flash",
-                1.0,
-                2.0,
-                0.02,
-                0.0,
-            ),
+            ("deepseek-v4-flash", 1.0, 2.0, 0.02, 0.0),
         ];
 
         for (name, input_cny, output_cny, cache_read_cny, cache_write_cny) in expected {
@@ -1585,6 +1796,41 @@ mod tests {
                 "missing or incorrect current DeepSeek CNY rates for {name}"
             );
         }
+    }
+
+    #[test]
+    fn project_pricing_toml_has_commandcode_deepseek_flash_peak_schedule() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+        let flash_segments: Vec<_> = cfg
+            .model
+            .iter()
+            .filter(|model| model.name == "cc:deepseek-v4-flash")
+            .collect();
+
+        assert_eq!(
+            flash_segments.len(),
+            2,
+            "expected baseline and dated Flash rates"
+        );
+        assert!(flash_segments.iter().any(|model| {
+            model.effective_from.is_none()
+                && model.input == 0.14
+                && model.output == 0.28
+                && model.cache_read == 0.0028
+        }));
+
+        let current = flash_segments
+            .iter()
+            .find(|model| model.effective_from.as_deref() == Some("2026-08-16T16:00:00Z"))
+            .expect("missing current Command Code Flash segment");
+        assert_eq!(current.peak_hours_utc, vec![[1, 4], [6, 10]]);
+        assert_eq!(current.input, 0.22);
+        assert_eq!(current.output, 0.66);
+        assert_eq!(current.cache_read, 0.007);
+        assert_eq!(current.peak_input, Some(0.44));
+        assert_eq!(current.peak_output, Some(1.32));
+        assert_eq!(current.peak_cache_read, Some(0.014));
     }
 
     #[test]
@@ -1624,6 +1870,335 @@ mod tests {
             "grok-cli high-tier cost: expected {}, got {}",
             expected,
             cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn project_pricing_toml_has_grok_4_6_official_usd_rates() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        let base = cfg
+            .model
+            .iter()
+            .find(|m| m.name == "grok-4.6" && m.tier_threshold.is_none())
+            .expect("grok-4.6 base tier");
+        assert_eq!(base.input, 2.00);
+        assert_eq!(base.output, 6.00);
+        assert_eq!(base.cache_read, 0.50);
+        assert_eq!(base.cache_write, 0.0);
+
+        let high = cfg
+            .model
+            .iter()
+            .find(|m| m.name == "grok-4.6" && m.tier_threshold == Some(200000))
+            .expect("grok-4.6 200K tier");
+        assert_eq!(high.input, 4.00);
+        assert_eq!(high.output, 12.00);
+        assert_eq!(high.cache_read, 1.00);
+        assert_eq!(high.cache_write, 0.0);
+    }
+
+    #[test]
+    fn grok_46_yai_router_uses_official_usd_fixed_rate_and_ainaba_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // Official list: $2 / $6 / $0.50. Yairouter converts at the fixed
+        // platform rate (7.0) and then applies the current ainaba divisor
+        // (21.538461538 from 2026-08-02 01:00 +08:00).
+        let mut record = make_record("grok-cli", "yai-router", "grok-4.6", 0, 0.0);
+        record.input_tokens = 100_000;
+        record.output_tokens = 20_000;
+        record.cache_read_tokens = 40_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 160_000;
+        record.time = "2026-08-13T00:00:00Z".to_string();
+
+        let cost = display_cost(&record);
+        let usd = 100_000.0 * 2.00 / 1_000_000.0
+            + 20_000.0 * 6.00 / 1_000_000.0
+            + 40_000.0 * 0.50 / 1_000_000.0;
+        let expected = usd * 7.0 / 21.538461538;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "yai-router grok-4.6 base-tier: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn grok_46_yai_router_high_tier_uses_official_long_context_rates() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // 200K+ total input (uncached + cache) selects the official long-context
+        // tier: $4 / $12 / $1.00. Same fixed-rate / divisor conversion.
+        let mut record = make_record("grok-cli", "yai-router", "grok-4.6", 0, 0.0);
+        record.input_tokens = 180_000;
+        record.output_tokens = 10_000;
+        record.cache_read_tokens = 40_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 230_000;
+        record.time = "2026-08-13T00:00:00Z".to_string();
+
+        let cost = display_cost(&record);
+        let usd = 180_000.0 * 4.00 / 1_000_000.0
+            + 10_000.0 * 12.00 / 1_000_000.0
+            + 40_000.0 * 1.00 / 1_000_000.0;
+        let expected = usd * 7.0 / 21.538461538;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "yai-router grok-4.6 high-tier: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn zcode_zero_cost_uses_model_price_with_opencode_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // ZCode records are billed through the OpenCode Go subscription
+        // (provider_metadata_json = {"OpenCodeGo": {}}), so the official
+        // CNY price (deepseek) is divided by the opencode plan divisor.
+        let mut record = make_record("zcode", "opencode-go", "deepseek-v4-flash", 1_000_000, 0.0);
+        record.input_tokens = 15276;
+        record.output_tokens = 1048;
+        record.cache_read_tokens = 17664;
+        record.cache_write_tokens = 0;
+        record.time = "2026-08-01T00:00:00Z".to_string();
+        let cost = display_cost(&record);
+        let expected = (15276.0 / 1_000_000.0 * 1.0 // input_cny
+            + 1048.0 / 1_000_000.0 * 2.0 // output_cny
+            + 17664.0 / 1_000_000.0 * 0.02) // cache_read_cny
+            / 6.0; // opencode_divisor
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "zcode cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dsh_deepseek_zero_cost_computes_in_cny() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // DSH records with provider "deepseek-official" are merged to
+        // "deepseek" by vendor_merge.toml (original_provider preserved).
+        // They carry no stored cost, so display_cost must derive the official
+        // DeepSeek CNY price from tokens (no USD→CNY conversion, no divisor).
+        let mut record = make_record("dsh", "deepseek", "deepseek-v4-pro", 0, 0.0);
+        record.original_provider = Some("deepseek-official".to_string());
+        record.input_tokens = 653;
+        record.output_tokens = 17287;
+        record.cache_read_tokens = 50432;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 68372;
+        record.time = "2026-08-13T23:11:54.627+00:00".to_string();
+        let cost = display_cost(&record);
+        let expected = 653.0 / 1_000_000.0 * 3.0 // input_cny
+            + 17287.0 / 1_000_000.0 * 6.0 // output_cny
+            + 50432.0 / 1_000_000.0 * 0.025; // cache_read_cny
+        assert!(
+            cost > 0.0,
+            "dsh deepseek record should have non-zero cost, got {}",
+            cost
+        );
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "dsh deepseek cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dsh_opencode_go_uses_opencode_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // DSH records routed through the OpenCode Go provider are billed via
+        // the OpenCode Go subscription, so the official CNY price is divided
+        // by the opencode plan divisor (same as zcode records).
+        let mut record = make_record("dsh", "opencode-go", "deepseek-v4-flash", 0, 0.0);
+        record.input_tokens = 15276;
+        record.output_tokens = 1048;
+        record.cache_read_tokens = 17664;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 33988;
+        record.time = "2026-08-01T00:00:00Z".to_string();
+        let cost = display_cost(&record);
+        let expected = (15276.0 / 1_000_000.0 * 1.0 // input_cny
+            + 1048.0 / 1_000_000.0 * 2.0 // output_cny
+            + 17664.0 / 1_000_000.0 * 0.02) // cache_read_cny
+            / 6.0; // opencode_divisor
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "dsh opencode-go cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    fn opencode_deepseek_segment_config() -> Vec<u8> {
+        br#"
+usd_to_cny = 6.7894
+rate_date = "2026-07-31"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 1.0
+freemodel_divisor = 67.894
+opencode_model_segments = [
+    { models = ["deepseek-v4-flash", "deepseek-v4-pro"], effective_from = "2026-08-18T00:00:00+08:00", divisor = 3.0 },
+]
+
+[[model]]
+name = "deepseek-v4-flash"
+input_cny = 1.0
+output_cny = 2.0
+cache_read_cny = 0.02
+cache_write_cny = 0.0
+
+[[model]]
+name = "deepseek-v4-pro"
+input_cny = 3.0
+output_cny = 6.0
+cache_read_cny = 0.025
+cache_write_cny = 0.0
+"#
+        .to_vec()
+    }
+
+    fn opencode_stored_cost(record_time: &str, model: &str, usd_cost: f64) -> TokenRecord {
+        let mut record = make_record("pi", "opencode-go", model, 1_000, usd_cost);
+        record.time = record_time.to_string();
+        record
+    }
+
+    #[test]
+    fn opencode_deepseek_keeps_old_divisor_before_quota_cut() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&opencode_deepseek_segment_config());
+
+        let record = opencode_stored_cost("2026-08-17T23:59:59+08:00", "deepseek-v4-flash", 1.0);
+        let expected = 1.0 / 6.0 * 6.7894;
+        let cost = display_cost(&record);
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "DeepSeek OpenCode cost before 2026-08-18 00:00 CST should use /6, expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn opencode_deepseek_uses_halved_quota_from_beijing_cutoff() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&opencode_deepseek_segment_config());
+
+        for (time, model) in [
+            ("2026-08-18T00:00:00+08:00", "deepseek-v4-flash"),
+            ("2026-08-18T00:00:00+08:00", "deepseek-v4-pro"),
+            ("2026-08-17T16:00:00Z", "deepseek-v4-flash"),
+            ("2026-08-20T12:00:00+08:00", "opencode-go/deepseek-v4-pro"),
+        ] {
+            let record = opencode_stored_cost(time, model, 1.0);
+            let expected = 1.0 / 3.0 * 6.7894;
+            let cost = display_cost(&record);
+            assert!(
+                (cost - expected).abs() < 1e-9,
+                "DeepSeek OpenCode cost at {} ({}) should use /3 after $30 quota, expected {}, got {}",
+                time,
+                model,
+                expected,
+                cost
+            );
+        }
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn opencode_non_deepseek_keeps_plan_divisor_after_cutoff() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&opencode_deepseek_segment_config());
+
+        let record = opencode_stored_cost("2026-08-18T00:00:00+08:00", "kimi-k2.6", 1.0);
+        let expected = 1.0 / 6.0 * 6.7894;
+        let cost = display_cost(&record);
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "non-DeepSeek OpenCode models should keep /6 after the DeepSeek quota cut, expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn opencode_source_and_derived_paths_use_dated_deepseek_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&opencode_deepseek_segment_config());
+
+        let mut opencode_db =
+            make_record("opencode", "opencode-go", "deepseek-v4-flash", 1_000, 1.2);
+        opencode_db.time = "2026-08-18T01:00:00+08:00".to_string();
+        let opencode_expected = 1.2 / 3.0 * 6.7894;
+        let opencode_cost = display_cost(&opencode_db);
+        assert!(
+            (opencode_cost - opencode_expected).abs() < 1e-9,
+            "source=opencode DeepSeek after cutoff should use /3, expected {}, got {}",
+            opencode_expected,
+            opencode_cost
+        );
+
+        let mut zcode = make_record("zcode", "opencode-go", "deepseek-v4-flash", 0, 0.0);
+        zcode.input_tokens = 1_000_000;
+        zcode.output_tokens = 0;
+        zcode.cache_read_tokens = 0;
+        zcode.cache_write_tokens = 0;
+        zcode.total_tokens = 1_000_000;
+        zcode.time = "2026-08-18T00:00:00+08:00".to_string();
+        // CNY list: 1.0 yuan / 1M input, then /3 after the quota cut.
+        let zcode_expected = 1.0 / 3.0;
+        let zcode_cost = display_cost(&zcode);
+        assert!(
+            (zcode_cost - zcode_expected).abs() < 1e-9,
+            "zcode DeepSeek after cutoff should use /3, expected {}, got {}",
+            zcode_expected,
+            zcode_cost
         );
 
         restore_pricing_env(prev_env);
@@ -1983,7 +2558,7 @@ ainaba_divisor = 1.0
 freemodel_divisor = 67.894
 fenno_divisor = 101.841
 "#
-            .to_vec()
+        .to_vec()
     }
 
     #[test]
@@ -2172,7 +2747,11 @@ cache_write_cny = 0.0
         record.cache_read_tokens = 100_000_000;
         record.total_tokens = 150_000_000;
         let cost_with_cache = display_cost(&record);
-        assert!((cost_with_cache - 10.0).abs() < 0.01, "cache should be free, expected 10.0, got {}", cost_with_cache);
+        assert!(
+            (cost_with_cache - 10.0).abs() < 0.01,
+            "cache should be free, expected 10.0, got {}",
+            cost_with_cache
+        );
 
         // Input + output both count
         record.input_tokens = 25_000_000;
@@ -2180,7 +2759,11 @@ cache_write_cny = 0.0
         record.cache_read_tokens = 0;
         record.total_tokens = 50_000_000;
         let cost_mixed = display_cost(&record);
-        assert!((cost_mixed - 10.0).abs() < 0.01, "input+output should = 10.0, got {}", cost_mixed);
+        assert!(
+            (cost_mixed - 10.0).abs() < 0.01,
+            "input+output should = 10.0, got {}",
+            cost_mixed
+        );
     }
 
     #[test]
@@ -2451,7 +3034,7 @@ commandcode_divisor = 10.0
 name = "cc:deepseek-v4-flash"
 input = 0.14
 output = 0.28
-cache_read = 0.01
+cache_read = 0.0028
 cache_write = 0.0
 
 [[model]]
@@ -2460,15 +3043,22 @@ input = 0.95
 output = 4.00
 cache_read = 0.16
 cache_write = 0.0
+
+[[model]]
+name = "cc:kimi-k3"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 0.0
 "#,
         );
 
         // Test: deepseek-v4-flash from commandcode
         // After normalization: input=295 (new), cache_read=20864 (cached)
-        // cc price: input=$0.14/M, output=$0.28/M, cache_read=$0.01/M
-        // usd = 295*0.14/1M + 286*0.28/1M + 20864*0.01/1M
-        //     = 0.0000413 + 0.00008008 + 0.00020864 = 0.00033002
-        // cny = 0.00033002 * 6.7894 / 10.0 = 0.000224064
+        // cc price: input=$0.14/M, output=$0.28/M, cache_read=$0.0028/M
+        // usd = 295*0.14/1M + 286*0.28/1M + 20864*0.0028/1M
+        //     = 0.0000413 + 0.00008008 + 0.0000584192 = 0.0001797992
+        // cny = 0.0001797992 * 6.7894 / 10.0 = 0.000122078
         let mut record = make_record("pi", "commandcode", "deepseek-v4-flash", 0, 0.0);
         record.input_tokens = 295;
         record.output_tokens = 286;
@@ -2477,8 +3067,9 @@ cache_write = 0.0
         record.total_tokens = 21445;
 
         let cny = display_cost(&record);
-        let usd =
-            295.0 * 0.14 / 1_000_000.0 + 286.0 * 0.28 / 1_000_000.0 + 20864.0 * 0.01 / 1_000_000.0;
+        let usd = 295.0 * 0.14 / 1_000_000.0
+            + 286.0 * 0.28 / 1_000_000.0
+            + 20864.0 * 0.0028 / 1_000_000.0;
         let expected = usd * 6.7894 / 10.0;
         assert!(
             cny > 0.0,
@@ -2512,6 +3103,101 @@ cache_write = 0.0
             expected2,
             cny2
         );
+
+        // Test: model with provider prefix "moonshotai/Kimi-K3" → cc:kimi-k3
+        // cc price: input=$3.00/M, output=$15.00/M, cache_read=$0.30/M
+        let mut record3 = make_record("pi", "commandcode", "moonshotai/Kimi-K3", 0, 0.0);
+        record3.input_tokens = 100_000;
+        record3.output_tokens = 10_000;
+        record3.cache_read_tokens = 50_000;
+        record3.cache_write_tokens = 0;
+        record3.total_tokens = 160_000;
+
+        let cny3 = display_cost(&record3);
+        let usd3 = 100_000.0 * 3.00 / 1_000_000.0
+            + 10_000.0 * 15.00 / 1_000_000.0
+            + 50_000.0 * 0.30 / 1_000_000.0;
+        let expected3 = usd3 * 6.7894 / 10.0;
+        assert!(
+            cny3 > 0.0,
+            "commandcode kimi-k3 should compute non-zero cost, got {}",
+            cny3
+        );
+        assert!(
+            (cny3 - expected3).abs() < 1e-9,
+            "commandcode kimi-k3: expected {}, got {}",
+            expected3,
+            cny3
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn commandcode_deepseek_flash_applies_dated_peak_schedule_to_display_cost() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.7894
+rate_date = "2026-07-31"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 67.894
+commandcode_divisor = 10.0
+
+[[model]]
+name = "cc:deepseek-v4-flash"
+input = 0.14
+output = 0.28
+cache_read = 0.0028
+cache_write = 0.0
+
+[[model]]
+name = "cc:deepseek-v4-flash"
+effective_from = "2026-08-16T16:00:00Z"
+peak_hours_utc = [[1, 4], [6, 10]]
+input = 0.22
+output = 0.66
+cache_read = 0.007
+cache_write = 0.0
+peak_input = 0.44
+peak_output = 1.32
+peak_cache_read = 0.014
+peak_cache_write = 0.0
+"#,
+        );
+
+        let mut record = make_record("pi", "commandcode", "deepseek-v4-flash", 1_000_000, 0.0);
+        record.input_tokens = 25_000;
+        record.cache_read_tokens = 975_000;
+        record.output_tokens = 5_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 1_000_000;
+
+        let expected = |input: f64, cache_read: f64, output: f64| {
+            (25_000.0 * input + 975_000.0 * cache_read + 5_000.0 * output) / 1_000_000.0 * 6.7894
+                / 10.0
+        };
+
+        record.time = "2026-08-16T15:59:59Z".to_string();
+        assert!((display_cost(&record) - expected(0.14, 0.0028, 0.28)).abs() < 1e-12);
+
+        // DeepSeek may expose the dated API revision in the model name.
+        record.model = "deepseek-v4-flash-0731".to_string();
+        record.time = "2026-08-16T16:00:00Z".to_string();
+        assert!((display_cost(&record) - expected(0.22, 0.007, 0.66)).abs() < 1e-12);
+
+        record.time = "2026-08-17T01:00:00Z".to_string();
+        assert!((display_cost(&record) - expected(0.44, 0.014, 1.32)).abs() < 1e-12);
+
+        // Peak ranges are half-open: 04:00 UTC is already off-peak.
+        record.time = "2026-08-17T04:00:00Z".to_string();
+        assert!((display_cost(&record) - expected(0.22, 0.007, 0.66)).abs() < 1e-12);
 
         restore_pricing_env(prev_env);
     }
@@ -3561,6 +4247,137 @@ holidays = [
             "22:00 CST should be off-peak: expected {}, got {}",
             expected,
             cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn model_price_applies_recurring_utc_peak_hours_after_cutover() {
+        let base_tier = PriceTier {
+            threshold: 0,
+            input: 0.435,
+            output: 0.87,
+            cache_read: 0.003625,
+            cache_write: 0.0,
+            peak_input: None,
+            peak_output: None,
+            peak_cache_read: None,
+            peak_cache_write: None,
+            input_cny: None,
+            output_cny: None,
+            cache_read_cny: None,
+            cache_write_cny: None,
+        };
+        let off_peak_tier = PriceTier {
+            threshold: 0,
+            input: 0.66,
+            output: 1.98,
+            cache_read: 0.022,
+            cache_write: 0.0,
+            peak_input: Some(1.32),
+            peak_output: Some(3.96),
+            peak_cache_read: Some(0.044),
+            peak_cache_write: Some(0.0),
+            input_cny: None,
+            output_cny: None,
+            cache_read_cny: None,
+            cache_write_cny: None,
+        };
+        let price = ModelPrice {
+            segments: vec![
+                TimeSegment {
+                    effective_from: None,
+                    peak_hours_utc: Vec::new(),
+                    tiers: vec![base_tier],
+                },
+                TimeSegment {
+                    effective_from: Some(
+                        DateTime::parse_from_rfc3339("2026-08-16T16:00:00Z").unwrap(),
+                    ),
+                    peak_hours_utc: vec![[1, 4], [6, 10]],
+                    tiers: vec![off_peak_tier],
+                },
+            ],
+        };
+
+        assert_eq!(
+            price.compute_usd(1_000_000, 0, 0, 0, "2026-08-16T15:59:59Z"),
+            0.435
+        );
+        assert_eq!(
+            price.compute_usd(1_000_000, 0, 0, 0, "2026-08-16T17:00:00Z"),
+            0.66
+        );
+        assert_eq!(
+            price.compute_usd(1_000_000, 0, 0, 0, "2026-08-17T01:00:00Z"),
+            1.32
+        );
+    }
+
+    #[test]
+    fn yairouter_gpt_5_6_reverts_to_pre_july_rates_at_beijing_midnight() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+        // 2026-08-17 00:00 CST is 2026-08-16 16:00 UTC. The rate change is
+        // inclusive at that instant and applies only to Yairouter/Ainaba.
+        let before = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-08-16T15:59:59Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.01,
+        );
+        let after = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-08-16T16:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.01,
+        );
+
+        // With the helper's 10% output split, Terra's discounted price is
+        // $0.32/M equivalent; the reinstated pre-July price is $0.40/M.
+        let divisor = 21.538461538;
+        let before_expected = 0.32 * 7.0 / divisor;
+        let after_expected = 0.40 * 7.0 / divisor;
+        let before_cost = display_cost(&before);
+        let after_cost = display_cost(&after);
+        assert!(
+            (before_cost - before_expected).abs() < 1e-9,
+            "before cutoff: expected {before_expected}, got {before_cost}"
+        );
+        assert!(
+            (after_cost - after_expected).abs() < 1e-9,
+            "at cutoff: expected {after_expected}, got {after_cost}"
+        );
+
+        let luna = make_timed_record(
+            "pi",
+            "ainaba",
+            "gpt-5.6-luna",
+            "2026-08-16T16:00:00Z",
+            100_000,
+            10_000,
+            0,
+            0,
+            0.01,
+        );
+        // Luna likewise changes from $0.032/M back to $0.160/M equivalent.
+        let luna_expected = 0.160 * 7.0 / divisor;
+        let luna_cost = display_cost(&luna);
+        assert!(
+            (luna_cost - luna_expected).abs() < 1e-9,
+            "Luna at cutoff: expected {luna_expected}, got {luna_cost}"
         );
 
         restore_pricing_env(prev_env);

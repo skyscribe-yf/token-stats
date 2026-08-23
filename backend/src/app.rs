@@ -5,8 +5,8 @@
 use crate::models::TokenRecord;
 use crate::quota::QuotaFetcher;
 use crate::routes;
-use crate::sources::load_all_sources;
-use crate::store::TokenStore;
+use crate::sources::{load_all_sources, load_changed_sources};
+use crate::store::{PendingBuffer, TokenStore};
 use axum::{
     routing::{get, post},
     Router,
@@ -14,18 +14,29 @@ use axum::{
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
+/// Records are written to disk in one batch at most this often.
+const FLUSH_DELAY: Duration = Duration::from_secs(120);
+/// How often the flush task checks whether a write is due.
+const FLUSH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Shared application state (thread-safe, arc-locked records).
 #[derive(Clone)]
 pub struct AppState {
+    /// Live in-memory records the frontend reads. Updated immediately on
+    /// refresh; a superset of the store (memory = DB + queued records).
     pub records: Arc<RwLock<Vec<TokenRecord>>>,
     /// Dedicated SQLite store: durable source of truth for token history.
-    /// `records` is always rebuilt as a snapshot of this store.
+    /// Writes are deferred through `pending` and batched at most once per
+    /// `FLUSH_DELAY` to avoid frequent SSD writes.
     pub store: Arc<TokenStore>,
+    /// Debounced disk-write buffer: records queued by refresh, drained by
+    /// the flush task (and unconditionally on shutdown).
+    pub pending: Arc<PendingBuffer>,
     pub quota_fetcher: Arc<QuotaFetcher>,
 }
 
@@ -45,6 +56,9 @@ impl AppState {
             .filter(|r| !seen.contains(&r.fingerprint()))
             .collect();
         let ingested = store.insert_batch(&new_from_sources);
+        // Newly ingested exclusive cmd rows can pair with older inclusive
+        // twins that were already in the store.
+        store.collapse_commandcode_inclusive_twins();
 
         let records = store.load_all();
         tracing::info!(
@@ -56,24 +70,30 @@ impl AppState {
         Self {
             records: Arc::new(RwLock::new(records)),
             store,
+            pending: Arc::new(PendingBuffer::new()),
             quota_fetcher: Arc::new(QuotaFetcher::new()),
         }
     }
 
     /// Incrementally refresh records from all data sources.
     ///
-    /// Returns the number of new records persisted.
+    /// Uses **incremental** loading: only files whose (mtime, size) changed
+    /// since the last pass are re-parsed, so the 2.4GB codex history (and
+    /// other large sources) is not re-read every 30s.
     ///
-    /// Newly discovered source records are written into the durable store
-    /// (idempotent, fingerprint-unique), then the in-memory snapshot is
-    /// rebuilt from the store. Memory therefore always mirrors the DB, and
-    /// any record that failed to persist is retried on the next refresh
-    /// because it never entered memory.
+    /// Returns the number of new records discovered.
+    ///
+    /// Newly discovered records are published to memory **immediately** so
+    /// the frontend always reads the latest data, and queued for a deferred
+    /// disk write (see [`Self::flush_pending_if_due`]). Memory and the
+    /// pending queue are updated under the same lock, so a shutdown flush
+    /// can never observe memory without the matching queued records.
     pub async fn refresh_records(&self) -> usize {
-        let new_records = load_all_sources();
+        let new_records = load_changed_sources();
 
-        // Phase 1: Filter records not yet in memory (which mirrors the DB).
-        let records_to_add: Vec<TokenRecord> = {
+        // Phase 1: Fast path — filter against memory under a read lock. Most
+        // refreshes find nothing new and never take the write lock.
+        let candidates: Vec<TokenRecord> = {
             let guard = self.records.read().await;
             let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
             new_records
@@ -82,7 +102,7 @@ impl AppState {
                 .collect()
         };
 
-        if records_to_add.is_empty() {
+        if candidates.is_empty() {
             tracing::debug!(
                 "Refreshed data: {} records (unchanged)",
                 self.records.read().await.len()
@@ -90,22 +110,65 @@ impl AppState {
             return 0;
         }
 
-        // Phase 2: Persist new records outside any lock. A failed batch is
-        // rolled back and retried next cycle, so the store never contains
-        // partial data.
-        let inserted = self.store.insert_batch(&records_to_add);
-
-        // Phase 3: Rebuild the in-memory snapshot from the store.
-        let reloaded = self.store.load_all();
+        // Phase 2: Re-filter under the write lock — a concurrent refresh may
+        // have added some of these between Phase 1 and now. Publish to memory
+        // and queue for the deferred write under the same lock (no await
+        // inside, so the two can never diverge).
         let mut guard = self.records.write().await;
-        *guard = reloaded;
+        let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
+        let records_to_add: Vec<TokenRecord> = candidates
+            .into_iter()
+            .filter(|r| !seen.contains(&r.fingerprint()))
+            .collect();
+        if records_to_add.is_empty() {
+            return 0;
+        }
+        guard.extend(records_to_add.iter().cloned());
+        drop_commandcode_inclusive_twins(&mut guard);
+        let added = records_to_add.len();
+        self.pending.queue(records_to_add);
+        self.store.collapse_commandcode_inclusive_twins();
         tracing::info!(
-            "Refreshed data: {} records ({} new, {} persisted)",
+            "Refreshed data: {} records ({} new, queued for deferred write)",
             guard.len(),
-            records_to_add.len(),
-            inserted
+            added
         );
+        added
+    }
+
+    /// Write a batch to the store. On total failure the batch is re-queued
+    /// so the next flush retries it (records stay visible in memory either
+    /// way). Returns the number of records persisted.
+    async fn write_batch(&self, batch: Vec<TokenRecord>) -> usize {
+        if batch.is_empty() {
+            return 0;
+        }
+        let inserted = self.store.insert_batch(&batch);
+        self.store.collapse_commandcode_inclusive_twins();
+        if inserted == 0 {
+            // Transaction rolled back — nothing was written. Re-queue so the
+            // next flush retries.
+            self.pending.queue(batch);
+            tracing::warn!(
+                "Token store write failed; {} record(s) re-queued for retry",
+                self.pending.len()
+            );
+            return 0;
+        }
+        tracing::info!("Flushed {} queued record(s) to token store", inserted);
         inserted
+    }
+
+    /// Drain the pending buffer unconditionally (shutdown path).
+    pub async fn flush_pending(&self) -> usize {
+        self.write_batch(self.pending.take_all()).await
+    }
+
+    /// Drain the pending buffer if a write is due (at most once per
+    /// `FLUSH_DELAY`).
+    pub async fn flush_pending_if_due(&self) -> usize {
+        self.write_batch(self.pending.take_if_due(FLUSH_DELAY, Instant::now()))
+            .await
     }
 
     /// Spawn a background task that reloads data sources periodically.
@@ -113,7 +176,10 @@ impl AppState {
     /// Uses **incremental** refresh: only adds new records, never removes
     /// existing ones. This preserves historical data even when a source
     /// directory (e.g. a project's runtime folder) is deleted.
-    pub fn spawn_refresh_task(&self) {
+    ///
+    /// Returns the task handle so shutdown can stop it before the final
+    /// flush.
+    pub fn spawn_refresh_task(&self) -> tokio::task::JoinHandle<()> {
         let state = self.clone();
         let refresh_interval = std::env::var("REFRESH_INTERVAL_SECS")
             .ok()
@@ -126,8 +192,56 @@ impl AppState {
                 interval.tick().await;
                 state.refresh_records().await;
             }
-        });
+        })
     }
+
+    /// Spawn the background task that drains the pending buffer into SQLite
+    /// at most once per `FLUSH_DELAY`.
+    pub fn spawn_flush_task(&self) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(FLUSH_CHECK_INTERVAL);
+            loop {
+                interval.tick().await;
+                state.flush_pending_if_due().await;
+            }
+        })
+    }
+}
+
+/// Keep the exclusive cmd row when an older cache-inclusive twin is present.
+fn drop_commandcode_inclusive_twins(records: &mut Vec<TokenRecord>) {
+    let exclusive: std::collections::HashSet<_> = records
+        .iter()
+        .filter(|r| r.source == "commandcode" && r.cache_read_tokens > 0)
+        .map(|r| {
+            (
+                r.time.clone(),
+                r.provider.clone(),
+                r.model.clone(),
+                r.output_tokens,
+                r.cache_read_tokens,
+                r.input_tokens,
+            )
+        })
+        .collect();
+    records.retain(|r| {
+        if r.source != "commandcode" || r.cache_read_tokens <= 0 {
+            return true;
+        }
+        let exclusive_input = r.input_tokens - r.cache_read_tokens;
+        if exclusive_input < 0 {
+            return true;
+        }
+        !exclusive.contains(&(
+            r.time.clone(),
+            r.provider.clone(),
+            r.model.clone(),
+            r.output_tokens,
+            r.cache_read_tokens,
+            exclusive_input,
+        ))
+    });
 }
 
 /// Build the Axum router with all API routes, CORS, and static file serving.
@@ -172,7 +286,16 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 /// Start the HTTP server on the configured port.
-pub async fn serve(router: Router) {
+///
+/// On SIGINT/SIGTERM the server drains in-flight requests, stops the
+/// background tasks, and writes everything still queued to disk exactly
+/// once before returning.
+pub async fn serve(
+    router: Router,
+    state: AppState,
+    refresh_task: tokio::task::JoinHandle<()>,
+    flush_task: tokio::task::JoinHandle<()>,
+) {
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
@@ -182,5 +305,47 @@ pub async fn serve(router: Router) {
     tracing::info!("Token Stats server listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, router).await.unwrap();
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
+
+    // Stop background tasks first so nothing can queue new records, then
+    // write everything still pending exactly once. Aborting a task only
+    // takes effect at its next await point, so awaiting the handles after
+    // abort guarantees no refresh is mid-queue when we flush.
+    refresh_task.abort();
+    flush_task.abort();
+    let _ = refresh_task.await;
+    let _ = flush_task.await;
+    let flushed = state.flush_pending().await;
+    tracing::info!(
+        "Shutdown complete; flushed {} pending record(s) to token store",
+        flushed
+    );
+}
+
+/// Resolve when the process receives SIGINT (Ctrl+C) or SIGTERM.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }

@@ -236,6 +236,24 @@ providers = ["freemodel", "FreeModel"]
         assert_eq!(records[0].provider, "openai");
     }
 
+    #[test]
+    fn real_config_merges_deepseek_official() {
+        // The shipped vendor_merge.toml must normalize the DSH provider
+        // "deepseek-official" to the canonical "deepseek" vendor.
+        let path = std::path::Path::new("vendor_merge.toml");
+        let map = load_vendor_merge_map(path).expect("vendor_merge.toml should load");
+        assert_eq!(map.get("deepseek-official"), Some(&"deepseek".to_string()));
+        assert_eq!(map.get("deepseek"), Some(&"deepseek".to_string()));
+
+        let mut records = vec![test_record("deepseek-official")];
+        apply_vendor_merge(&mut records, &map);
+        assert_eq!(records[0].provider, "deepseek");
+        assert_eq!(
+            records[0].original_provider,
+            Some("deepseek-official".to_string())
+        );
+    }
+
     // helpers
     fn build_map(config: &VendorMergeConfig) -> HashMap<String, String> {
         let mut map = HashMap::new();

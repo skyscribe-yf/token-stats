@@ -28,6 +28,24 @@ impl DataSource for QoderSource {
         records
     }
 
+    /// Incremental: only re-parse session jsonl files whose (mtime, size) changed.
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let base = Self::projects_path();
+        let files = Self::jsonl_files(&base);
+        let changed = self.changed_data_files();
+        let records = if changed.is_empty() {
+            Vec::new()
+        } else {
+            Self::parse_files(&files, &changed)
+        };
+        self.mark_files_parsed(&files);
+        records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        Self::jsonl_files(&Self::projects_path())
+    }
+
     fn is_available(&self) -> bool {
         Self::projects_path().exists()
     }
@@ -42,29 +60,36 @@ impl QoderSource {
         )
     }
 
-    fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
+    fn jsonl_files(base_path: &std::path::Path) -> Vec<std::path::PathBuf> {
         if !base_path.exists() {
-            tracing::warn!("Qoder projects dir not found at {:?}, skipping", base_path);
             return Vec::new();
         }
+        match super::walkdir(base_path) {
+            Ok(entries) => entries
+                .into_iter()
+                .filter(|p| p.to_string_lossy().ends_with(".jsonl"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 
+    fn parse(base_path: &std::path::Path) -> Vec<TokenRecord> {
+        Self::parse_files(&Self::jsonl_files(base_path), &[])
+    }
+
+    fn parse_files(
+        paths: &[std::path::PathBuf],
+        subset: &[std::path::PathBuf],
+    ) -> Vec<TokenRecord> {
         let mut records = Vec::new();
         let mut seen: HashSet<String> = HashSet::new(); // dedup by uuid
 
-        let entries = match super::walkdir(base_path) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("Failed to walk Qoder projects dir: {}", e);
-                return records;
-            }
-        };
-
-        for path in entries {
-            if !path.to_string_lossy().ends_with(".jsonl") {
+        for path in paths {
+            if !subset.is_empty() && !subset.contains(path) {
                 continue;
             }
 
-            let file = match File::open(&path) {
+            let file = match File::open(path) {
                 Ok(f) => f,
                 Err(_) => continue,
             };

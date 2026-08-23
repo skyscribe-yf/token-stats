@@ -38,6 +38,22 @@ impl DataSource for GrokCliSource {
             .collect()
     }
 
+    /// Incremental: only re-read the usage log when its (mtime, size) changed.
+    fn load_incremental(&self) -> Vec<TokenRecord> {
+        let path = grok_usage_log_path();
+        let files = vec![path.clone()];
+        if self.changed_data_files().is_empty() {
+            return Vec::new();
+        }
+        let records = self.load();
+        self.mark_files_parsed(&files);
+        records
+    }
+
+    fn data_files(&self) -> Vec<std::path::PathBuf> {
+        vec![grok_usage_log_path()]
+    }
+
     fn is_available(&self) -> bool {
         grok_usage_log_path().exists()
     }

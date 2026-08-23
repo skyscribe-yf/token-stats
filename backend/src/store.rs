@@ -5,19 +5,21 @@
 //! data survives even when the original session files are cleaned up.
 //!
 //! Design:
-//! - In-memory `records` in `AppState` is always rebuilt as a snapshot of
-//!   this DB (after startup, each refresh, and each restore), so the two
-//!   never diverge.
+//! - In-memory `records` in `AppState` is the live view the frontend
+//!   reads; it is updated immediately on refresh, while disk writes are
+//!   deferred through [`PendingBuffer`] and batched at most once per
+//!   `FLUSH_DELAY` to avoid frequent SSD writes. Memory is therefore a
+//!   superset of the DB (memory = DB + queued records).
 //! - Inserts are idempotent (`INSERT OR IGNORE` on a fingerprint unique
 //!   index): re-scanning sources never duplicates history.
-//! - A failed batch is rolled back and simply retried on the next refresh,
-//!   since the source logs still contain the records.
+//! - A failed batch is rolled back and re-queued for the next flush, since
+//!   the source logs still contain the records.
 
 use crate::models::TokenRecord;
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Env var overriding the token-stats database path.
 pub const DB_PATH_ENV: &str = "TOKEN_STATS_DB_PATH";
@@ -139,8 +141,13 @@ impl TokenStore {
         let _ = conn.pragma_update(None, "synchronous", "NORMAL");
 
         conn.execute_batch(SCHEMA).unwrap_or_else(|e| {
-            panic!("Failed to initialize token store schema at {:?}: {}", path, e)
+            panic!(
+                "Failed to initialize token store schema at {:?}: {}",
+                path, e
+            )
         });
+
+        apply_store_patches(&conn);
 
         tracing::info!("Token store ready at {:?}", path);
         Self {
@@ -148,7 +155,57 @@ impl TokenStore {
             conn: Mutex::new(conn),
         }
     }
+}
 
+fn apply_store_patches(conn: &Connection) {
+    // One-off fix: all dim-agent usage was miscategorized by model/prefix.
+    // Every record with source='dim' belongs to vendor `dim`.
+    let _ = conn.execute(
+        "UPDATE OR IGNORE token_records SET provider = 'dim' WHERE source = 'dim' AND provider != 'dim'",
+        [],
+    );
+    let _ = conn.execute(
+        "DELETE FROM token_records WHERE source = 'dim' AND provider != 'dim'",
+        [],
+    );
+
+    collapse_commandcode_inclusive_twins(conn);
+}
+
+/// Drop native cmd rows that stored OpenAI-inclusive `inputTokens` when the
+/// exclusive twin is also present. Safe to run on every open: exclusive
+/// leftovers (cache hit ≤ 50%) are left alone.
+fn collapse_commandcode_inclusive_twins(conn: &Connection) -> usize {
+    let deleted = conn
+        .execute(
+            "DELETE FROM token_records
+             WHERE id IN (
+                 SELECT a.id
+                 FROM token_records a
+                 JOIN token_records b
+                   ON a.source = b.source
+                  AND a.time = b.time
+                  AND a.provider = b.provider
+                  AND a.model = b.model
+                  AND a.output_tokens = b.output_tokens
+                  AND a.cache_read_tokens = b.cache_read_tokens
+                 WHERE a.source = 'commandcode'
+                   AND a.cache_read_tokens > 0
+                   AND a.input_tokens = b.input_tokens + a.cache_read_tokens
+             )",
+            [],
+        )
+        .unwrap_or(0);
+    if deleted > 0 {
+        tracing::info!(
+            "Removed {} commandcode row(s) that double-counted cache in input",
+            deleted
+        );
+    }
+    deleted
+}
+
+impl TokenStore {
     /// Path to the SQLite database file.
     pub fn path(&self) -> &Path {
         &self.path
@@ -194,6 +251,19 @@ impl TokenStore {
                 Vec::new()
             }
         }
+    }
+
+    /// Remove native cmd rows that stored cache-inclusive input when the
+    /// exclusive twin is also present. Idempotent.
+    pub fn collapse_commandcode_inclusive_twins(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        collapse_commandcode_inclusive_twins(&conn)
     }
 
     /// Insert records that are not already present (fingerprint-unique).
@@ -279,6 +349,88 @@ impl TokenStore {
     }
 }
 
+/// Debounced disk-write buffer.
+///
+/// The refresh task queues records here (and publishes them to memory
+/// immediately, so the frontend always sees the latest data). A background
+/// flush task drains the buffer into SQLite in one batch once `delay` has
+/// elapsed since the last queue *or* the last flush — at most one write per
+/// `delay`, and every queued record is persisted within `delay` of arrival.
+/// [`PendingBuffer::take_all`] is the shutdown path: it drains
+/// unconditionally so the final write on exit is reliable.
+///
+/// `take_if_due` takes an explicit `now` so the debounce logic is testable
+/// with fake time.
+pub struct PendingBuffer {
+    records: Mutex<Vec<TokenRecord>>,
+    last_queued: Mutex<Option<Instant>>,
+    last_flush: Mutex<Option<Instant>>,
+}
+
+impl PendingBuffer {
+    pub fn new() -> Self {
+        Self {
+            records: Mutex::new(Vec::new()),
+            last_queued: Mutex::new(None),
+            last_flush: Mutex::new(None),
+        }
+    }
+
+    /// Queue records for the next batched write.
+    pub fn queue(&self, records: Vec<TokenRecord>) {
+        self.queue_at(records, Instant::now());
+    }
+
+    /// Queue records, recording `now` as the queue time (testable with fake
+    /// time).
+    fn queue_at(&self, records: Vec<TokenRecord>, now: Instant) {
+        if records.is_empty() {
+            return;
+        }
+        let mut buf = self.records.lock().unwrap();
+        buf.extend(records);
+        *self.last_queued.lock().unwrap() = Some(now);
+    }
+
+    /// Number of records waiting to be written.
+    pub fn len(&self) -> usize {
+        self.records.lock().unwrap().len()
+    }
+
+    /// Drain the buffer if a write is due: at least `delay` since the last
+    /// queue or the last flush. Returns the batch to write (empty if not
+    /// due). A write that is drained here is considered a flush, so the
+    /// next one cannot happen before `delay` again.
+    pub fn take_if_due(&self, delay: Duration, now: Instant) -> Vec<TokenRecord> {
+        let mut buf = self.records.lock().unwrap();
+        if buf.is_empty() {
+            return Vec::new();
+        }
+        let queued_due = self
+            .last_queued
+            .lock()
+            .unwrap()
+            .is_some_and(|t| now.duration_since(t) >= delay);
+        let flush_due = self
+            .last_flush
+            .lock()
+            .unwrap()
+            .is_some_and(|t| now.duration_since(t) >= delay);
+        if queued_due || flush_due {
+            let batch = std::mem::take(&mut *buf);
+            *self.last_flush.lock().unwrap() = Some(now);
+            batch
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Drain unconditionally (shutdown flush).
+    pub fn take_all(&self) -> Vec<TokenRecord> {
+        std::mem::take(&mut *self.records.lock().unwrap())
+    }
+}
+
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenRecord> {
     Ok(TokenRecord {
         time: row.get(0)?,
@@ -332,7 +484,13 @@ mod tests {
     fn insert_and_load_roundtrip() {
         let store = temp_store();
         let records = vec![
-            fixture("pi", "deepseek", "deepseek-v4-pro", "2026-07-01T01:00:00Z", 100),
+            fixture(
+                "pi",
+                "deepseek",
+                "deepseek-v4-pro",
+                "2026-07-01T01:00:00Z",
+                100,
+            ),
             fixture("codex", "openai", "gpt-5.5", "2026-07-01T02:00:00Z", 200),
         ];
         assert_eq!(store.insert_batch(&records), 2);
@@ -352,7 +510,13 @@ mod tests {
     #[test]
     fn insert_ignores_duplicate_fingerprints() {
         let store = temp_store();
-        let a = fixture("pi", "deepseek", "deepseek-v4-pro", "2026-07-01T01:00:00Z", 100);
+        let a = fixture(
+            "pi",
+            "deepseek",
+            "deepseek-v4-pro",
+            "2026-07-01T01:00:00Z",
+            100,
+        );
         let mut b = a.clone();
         // Same fingerprint but different cost — treated as the same record.
         b.cost = 9.99;
@@ -371,9 +535,27 @@ mod tests {
     fn load_all_sorts_by_time() {
         let store = temp_store();
         let records = vec![
-            fixture("pi", "deepseek", "deepseek-v4-pro", "2026-07-02T01:00:00Z", 100),
-            fixture("pi", "deepseek", "deepseek-v4-pro", "2026-07-01T01:00:00Z", 100),
-            fixture("pi", "deepseek", "deepseek-v4-pro", "2026-07-03T01:00:00Z", 100),
+            fixture(
+                "pi",
+                "deepseek",
+                "deepseek-v4-pro",
+                "2026-07-02T01:00:00Z",
+                100,
+            ),
+            fixture(
+                "pi",
+                "deepseek",
+                "deepseek-v4-pro",
+                "2026-07-01T01:00:00Z",
+                100,
+            ),
+            fixture(
+                "pi",
+                "deepseek",
+                "deepseek-v4-pro",
+                "2026-07-03T01:00:00Z",
+                100,
+            ),
         ];
         store.insert_batch(&records);
         let loaded = store.load_all();
@@ -412,10 +594,7 @@ mod tests {
         let loaded = store.load_all();
         assert_eq!(loaded[0].ttft_ms, None);
         assert_eq!(loaded[0].tps, None);
-        assert_eq!(
-            loaded[0].original_provider.as_deref(),
-            Some("opencode-go")
-        );
+        assert_eq!(loaded[0].original_provider.as_deref(), Some("opencode-go"));
     }
 
     #[test]
@@ -437,5 +616,198 @@ mod tests {
                 );
             });
         });
+    }
+
+    fn seed_legacy_commandcode(
+        path: &Path,
+        rows: &[( &str, i64, i64, i64)],
+    ) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        for (time, input, cache_read, output) in rows {
+            conn.execute(
+                INSERT_SQL,
+                params![
+                    time,
+                    &time[..10],
+                    "N/A",
+                    "commandcode",
+                    None::<String>,
+                    "muse-spark-1.2-contributor",
+                    "commandcode",
+                    input,
+                    output,
+                    cache_read,
+                    0i64,
+                    input + output + cache_read,
+                    0.0f64,
+                    None::<f64>,
+                    None::<f64>,
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn reopen_drops_inclusive_commandcode_twin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        seed_legacy_commandcode(
+            &path,
+            &[
+                ("2026-08-18T23:37:11.318+00:00", 140505, 140209, 1197),
+                ("2026-08-18T23:37:11.318+00:00", 296, 140209, 1197),
+            ],
+        );
+
+        let store = TokenStore::open(&path);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].input_tokens, 296);
+        assert_eq!(loaded[0].cache_read_tokens, 140209);
+        assert_eq!(loaded[0].total_tokens, 296 + 1197 + 140209);
+    }
+
+    #[test]
+    fn reopen_keeps_exclusive_commandcode_when_no_twin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        // Already-normalized exclusive input can still be >= cache_read
+        // (cache hit ≤ 50%). Do not subtract again.
+        seed_legacy_commandcode(&path, &[("2026-08-23T12:32:48.057Z", 15600, 7424, 71)]);
+
+        let store = TokenStore::open(&path);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].input_tokens, 15600);
+        assert_eq!(loaded[0].total_tokens, 15600 + 71 + 7424);
+    }
+
+    #[test]
+    fn collapse_after_insert_drops_inclusive_twin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        seed_legacy_commandcode(&path, &[("2026-08-23T12:32:48.057Z", 23024, 7424, 71)]);
+
+        let store = TokenStore::open(&path);
+        assert_eq!(store.count(), 1);
+        let exclusive = TokenRecord {
+            date: "2026-08-23".to_string(),
+            time: "2026-08-23T12:32:48.057Z".to_string(),
+            api_key_prefix: "N/A".to_string(),
+            provider: "commandcode".to_string(),
+            original_provider: None,
+            model: "muse-spark-1.2-contributor".to_string(),
+            source: "commandcode".to_string(),
+            input_tokens: 15600,
+            output_tokens: 71,
+            cache_read_tokens: 7424,
+            cache_write_tokens: 0,
+            total_tokens: 15600 + 71 + 7424,
+            cost: 0.0,
+            ttft_ms: None,
+            tps: None,
+        };
+        assert_eq!(store.insert_batch(&[exclusive]), 1);
+        assert_eq!(store.collapse_commandcode_inclusive_twins(), 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].input_tokens, 15600);
+    }
+
+    // ── PendingBuffer (deferred disk writes) ────────────────────────────────
+
+    #[test]
+    fn pending_buffer_waits_for_delay_after_queue() {
+        let buf = PendingBuffer::new();
+        let t0 = Instant::now();
+        buf.queue_at(
+            vec![fixture(
+                "pi",
+                "deepseek",
+                "deepseek-v4-pro",
+                "2026-07-01T01:00:00Z",
+                100,
+            )],
+            t0,
+        );
+
+        // Not due yet: 1 min after the queue.
+        assert!(buf
+            .take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(60))
+            .is_empty());
+        // Due: 2 min after the queue.
+        let batch = buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(121));
+        assert_eq!(batch.len(), 1);
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn pending_buffer_flushes_at_most_once_per_delay_under_continuous_load() {
+        let buf = PendingBuffer::new();
+        let t0 = Instant::now();
+
+        // First batch: queued at t0, flushed 2 min later (due via last_queued).
+        buf.queue_at(
+            vec![fixture(
+                "pi",
+                "deepseek",
+                "deepseek-v4-pro",
+                "2026-07-01T01:00:00Z",
+                100,
+            )],
+            t0,
+        );
+        let first = buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(121));
+        assert_eq!(first.len(), 1);
+
+        // Continuous load: new data every 30s after the flush, pushing
+        // last_queued forward so the queued_due arm never fires.
+        for i in 1..=3 {
+            let at = t0 + Duration::from_secs(150 + 30 * (i - 1));
+            buf.queue_at(
+                vec![fixture(
+                    "pi",
+                    "deepseek",
+                    "deepseek-v4-pro",
+                    &format!("2026-07-01T01:0{}:00Z", i),
+                    100,
+                )],
+                at,
+            );
+            assert!(buf.take_if_due(Duration::from_secs(120), at).is_empty());
+        }
+
+        // 2 min after the last flush (t0+121s) the flush_due arm fires and
+        // drains everything in one batch.
+        let batch = buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(241));
+        assert_eq!(batch.len(), 3, "all queued records flush in one batch");
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn pending_buffer_take_all_drains_unconditionally() {
+        let buf = PendingBuffer::new();
+        buf.queue(vec![fixture(
+            "pi",
+            "deepseek",
+            "deepseek-v4-pro",
+            "2026-07-01T01:00:00Z",
+            100,
+        )]);
+        assert_eq!(buf.take_all().len(), 1);
+        assert_eq!(buf.len(), 0);
+        assert!(buf.take_all().is_empty());
+    }
+
+    #[test]
+    fn pending_buffer_empty_queue_is_noop() {
+        let buf = PendingBuffer::new();
+        buf.queue(Vec::new());
+        assert_eq!(buf.len(), 0);
+        assert!(buf
+            .take_if_due(Duration::from_secs(120), Instant::now())
+            .is_empty());
     }
 }

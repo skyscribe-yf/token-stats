@@ -104,8 +104,9 @@ async fn main() {
     }
 
     let state = app::AppState::new();
-    state.spawn_refresh_task();
+    let refresh_task = state.spawn_refresh_task();
+    let flush_task = state.spawn_flush_task();
 
-    let router = app::build_router(state);
-    app::serve(router).await;
+    let router = app::build_router(state.clone());
+    app::serve(router, state, refresh_task, flush_task).await;
 }

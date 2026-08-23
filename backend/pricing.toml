@@ -39,6 +39,14 @@ xiaomi_mimo_tp_per_token = 0.0000001237
 # OpenCode 折扣：官方 10 美金可用 60 美金额度，实际成本 = 原始 cost / 6
 opencode_divisor = 6.0
 
+# 模型级、按时间分段的额度覆盖。匹配到的记录使用该段 divisor，
+# 未匹配的模型/时间回落到 opencode_divisor。
+# 2026-08-18 00:00 UTC+8 起 DeepSeek v4 flash/pro 月额度 $60 → $30，
+# 即 $10 买 $30 额度 → divisor = 3。此前记录仍按 /6 计。
+opencode_model_segments = [
+    { models = ["deepseek-v4-flash", "deepseek-v4-pro"], effective_from = "2026-08-18T00:00:00+08:00", divisor = 3.0 },
+]
+
 # Ainaba (AI奶爸) 折扣：按时间段分段
 # 平台结算逻辑：充值 396 元 → 8000 元额度（倍率 8000/396 = 20.20202）
 # API 按美元面值计费，平台以固定汇率 ainaba_platform_rate 折算人民币额度扣减
@@ -229,6 +237,44 @@ output = 1.80
 cache_read = 0.04
 cache_write = 0.50
 
+# Yairouter confirmed that it is again charging the pre-2026-07-31 GPT-5.6
+# list prices from 2026-08-17 00:00 Beijing time. These are provider-scoped:
+# all other providers keep the official 2026-07-31 reduction above, and the
+# reduced Yairouter rate remains intact for the intervening historical period.
+[[yairouter_model]]
+name = "gpt-5.6-terra"
+effective_from = "2026-08-17T00:00:00+08:00"
+input = 2.50
+output = 15.00
+cache_read = 0.25
+cache_write = 3.125
+
+[[yairouter_model]]
+name = "gpt-5.6-terra"
+effective_from = "2026-08-17T00:00:00+08:00"
+tier_threshold = 272000
+input = 5.00
+output = 22.50
+cache_read = 0.50
+cache_write = 6.25
+
+[[yairouter_model]]
+name = "gpt-5.6-luna"
+effective_from = "2026-08-17T00:00:00+08:00"
+input = 1.00
+output = 6.00
+cache_read = 0.10
+cache_write = 1.25
+
+[[yairouter_model]]
+name = "gpt-5.6-luna"
+effective_from = "2026-08-17T00:00:00+08:00"
+tier_threshold = 272000
+input = 2.00
+output = 9.00
+cache_read = 0.20
+cache_write = 2.50
+
 [[model]]
 name = "gpt-5.4"
 input = 2.50
@@ -290,6 +336,24 @@ input = 4.105571848
 output = 12.316715543
 cache_read = 1.026392962
 
+# Official Grok 4.6 list price (USD / 1M). Yairouter bills at the fixed
+# platform rate (ainaba_platform_rate = 7.0) then applies ainaba_segments
+# divisor: actual CNY = USD × 7.0 / divisor. cache_write is omitted — xAI
+# does not publish a separate cache-write price.
+# https://docs.x.ai/developers/models
+[[model]]
+name = "grok-4.6"
+input = 2.00
+output = 6.00
+cache_read = 0.50
+
+[[model]]
+name = "grok-4.6"
+tier_threshold = 200000
+input = 4.00
+output = 12.00
+cache_read = 1.00
+
 # DeepSeek 模型价格（CNY per 1_000_000 tokens）
 # DeepSeek 官方按人民币定价，直接产出 CNY，不经过 USD→CNY 汇率换算。
 # 官方定价：v4-pro input=3, cache_read=0.025, output=6
@@ -320,6 +384,7 @@ cache_write_cny = 0.0
 # ═══════════════════════════════════════════════════════════════════════════
 # Command Code API pricing (USD per 1_000_000 tokens)
 # 来源：https://commandcode.ai/docs/resources/pricing-limits
+# 已按该官方价格页于 2026-08-16 校验；折扣价以页面当时显示为准。
 # 命名：cc: 前缀区分 Command Code 价格（部分与标准 API 价格不同）
 # 订阅折扣：实际成本 = 列表价格 / commandcode_divisor
 # ═══════════════════════════════════════════════════════════════════════════
@@ -361,44 +426,28 @@ name = "cc:gpt-5.5"
 input = 5.00
 output = 30.00
 cache_read = 0.50
-cache_write = 5.00
-
-[[model]]
-name = "cc:gpt-5.5"
-tier_threshold = 272000
-input = 10.00
-output = 45.00
-cache_read = 1.00
-cache_write = 10.00
+cache_write = 0.0
 
 [[model]]
 name = "cc:gpt-5.4"
 input = 2.50
 output = 15.00
 cache_read = 0.25
-cache_write = 2.50
-
-[[model]]
-name = "cc:gpt-5.4"
-tier_threshold = 272000
-input = 5.00
-output = 22.50
-cache_read = 0.50
-cache_write = 5.00
+cache_write = 0.0
 
 [[model]]
 name = "cc:gpt-5.4-mini"
 input = 0.75
 output = 4.50
 cache_read = 0.075
-cache_write = 0.75
+cache_write = 0.0
 
 [[model]]
 name = "cc:gpt-5.3-codex"
 input = 2.00
 output = 8.00
 cache_read = 0.50
-cache_write = 2.00
+cache_write = 0.0
 
 # ── CC Premium (Google) ──
 
@@ -413,15 +462,29 @@ cache_write = 0.0
 
 [[model]]
 name = "cc:deepseek-v4-pro"
-# 促销价 (4x usage, 75% off, 至 2026-05-31)
+# 75% 促销价；官方公告有效至 2026-08-16 16:00 UTC。
 input = 0.435
 output = 0.87
 cache_read = 0.003625
 cache_write = 0.0
 
 [[model]]
+name = "cc:deepseek-v4-pro"
+# DeepSeek 于该时点起切换为峰谷价；基础字段为低谷，peak_* 为高峰。
+effective_from = "2026-08-16T16:00:00Z"
+peak_hours_utc = [[1, 4], [6, 10]]
+input = 0.66
+output = 1.98
+cache_read = 0.022
+cache_write = 0.0
+peak_input = 1.32
+peak_output = 3.96
+peak_cache_read = 0.044
+peak_cache_write = 0.0
+
+[[model]]
 name = "cc:deepseek-v4-pro-full"
-# 原价 (促销结束后恢复)
+# 仅保留给历史 `deepseek-v4-pro-full` 记录；当前官方页不再列为现行价格。
 input = 1.74
 output = 3.48
 cache_read = 0.0145
@@ -431,8 +494,22 @@ cache_write = 0.0
 name = "cc:deepseek-v4-flash"
 input = 0.14
 output = 0.28
-cache_read = 0.01
+cache_read = 0.0028
 cache_write = 0.0
+
+[[model]]
+name = "cc:deepseek-v4-flash"
+# DeepSeek 于该时点起切换为峰谷价；基础字段为低谷，peak_* 为高峰。
+effective_from = "2026-08-16T16:00:00Z"
+peak_hours_utc = [[1, 4], [6, 10]]
+input = 0.22
+output = 0.66
+cache_read = 0.007
+cache_write = 0.0
+peak_input = 0.44
+peak_output = 1.32
+peak_cache_read = 0.014
+peak_cache_write = 0.0
 
 [[model]]
 name = "cc:kimi-k2.6"
@@ -449,10 +526,17 @@ cache_read = 0.16
 cache_write = 0.0
 
 [[model]]
+name = "cc:kimi-k3"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 0.0
+
+[[model]]
 name = "cc:kimi-k2.7"
 input = 0.95
 output = 4.00
-cache_read = 0.16
+cache_read = 0.19
 cache_write = 0.0
 
 [[model]]
@@ -484,6 +568,13 @@ cache_read = 0.26
 cache_write = 0.0
 
 [[model]]
+name = "cc:glm-5.2"
+input = 1.40
+output = 4.40
+cache_read = 0.26
+cache_write = 0.0
+
+[[model]]
 name = "cc:glm-5"
 input = 1.00
 output = 3.20
@@ -498,9 +589,16 @@ cache_read = 0.06
 cache_write = 0.0
 
 [[model]]
+name = "cc:mimo-v2.5-pro"
+input = 0.435
+output = 0.87
+cache_read = 0.0036
+cache_write = 0.0
+
+[[model]]
 name = "cc:minimax-m2.5"
-input = 0.27
-output = 0.95
+input = 0.30
+output = 1.20
 cache_read = 0.03
 cache_write = 0.0
 
@@ -520,11 +618,33 @@ cache_write = 0.0
 
 [[model]]
 name = "cc:qwen3.7-max"
-# 促销价 (2x usage, 50% off, 至 2026-06-22)
-input = 1.25
-output = 3.75
-cache_read = 0.25
-cache_write = 1.56
+# 当前官方价格（此前 50% 促销已结束）
+input = 2.50
+output = 7.50
+cache_read = 0.50
+cache_write = 3.13
+
+[[model]]
+name = "cc:gpt-5.6-luna"
+input = 0.20
+output = 1.20
+cache_read = 0.02
+cache_write = 0.25
+
+[[model]]
+name = "cc:gpt-5.6-luna"
+tier_threshold = 272000
+input = 0.40
+output = 1.80
+cache_read = 0.04
+cache_write = 0.50
+
+[[model]]
+name = "cc:muse-spark-1.2-contributor"
+input = 0.10
+output = 0.20
+cache_read = 0.002
+cache_write = 0.0
 
 [[model]]
 name = "cc:step-3.5-flash"
