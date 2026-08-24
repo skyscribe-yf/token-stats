@@ -88,10 +88,10 @@ impl CodexSource {
     /// Parse `files` (optionally limited to a subset of `paths`).
     ///
     /// Files are streamed line-by-line — never read wholesale into memory —
-    /// because individual codex rollouts can be hundreds of MB. The session
-    /// provider/model pre-scan is done on the first pass only when the file
-    /// hasn't been seen before (incremental append: model/provider never
-    /// change mid-file, so a changed file re-uses the known values).
+    /// because individual codex rollouts can be hundreds of MB. Every parse
+    /// (full or incremental) pre-scans session_meta / turn_context so
+    /// token_count events that appear before the first context still get
+    /// the right provider and model.
     fn parse_files(
         paths: &[std::path::PathBuf],
         subset: &[std::path::PathBuf],
@@ -111,36 +111,35 @@ impl CodexSource {
             // Pre-scan to discover the model from turn_context events.
             // Forked subagent sessions replay parent token_count events before
             // any turn_context appears, so a naive sequential parse would assign
-            // a wrong hardcoded default model. Skipped on incremental passes:
-            // provider/model never change within a file.
+            // a wrong hardcoded default model. Must also run on incremental
+            // re-parses: subset contains the changed file, and there is no
+            // cached provider/model to reuse.
             let mut session_provider = "openai".to_string();
             let mut session_model = "unknown".to_string();
-            if !subset.contains(path) {
-                let lines = BufReader::new(file);
-                for line in lines.lines().map_while(Result::ok) {
-                    if session_provider == "openai" && session_model != "unknown" {
-                        break;
+            let lines = BufReader::new(file);
+            for line in lines.lines().map_while(Result::ok) {
+                if session_provider == "openai" && session_model != "unknown" {
+                    break;
+                }
+                let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                if obj.get("type").and_then(|t| t.as_str()) == Some("session_meta") {
+                    if let Some(provider) = obj
+                        .get("payload")
+                        .and_then(|p| p.get("model_provider"))
+                        .and_then(|provider| provider.as_str())
+                        .filter(|provider| !provider.is_empty())
+                    {
+                        session_provider = provider.to_string();
                     }
-                    let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
-                        continue;
-                    };
-                    if obj.get("type").and_then(|t| t.as_str()) == Some("session_meta") {
-                        if let Some(provider) = obj
-                            .get("payload")
-                            .and_then(|p| p.get("model_provider"))
-                            .and_then(|provider| provider.as_str())
-                            .filter(|provider| !provider.is_empty())
-                        {
-                            session_provider = provider.to_string();
-                        }
-                    } else if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
-                        if let Some(model) = obj
-                            .get("payload")
-                            .and_then(|p| p.get("model"))
-                            .and_then(|m| m.as_str())
-                        {
-                            session_model = model.to_string();
-                        }
+                } else if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
+                    if let Some(model) = obj
+                        .get("payload")
+                        .and_then(|p| p.get("model"))
+                        .and_then(|m| m.as_str())
+                    {
+                        session_model = model.to_string();
                     }
                 }
             }
@@ -156,14 +155,12 @@ impl CodexSource {
                 }
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
                     if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
-                        if !subset.contains(path) {
-                            if let Some(model) = obj
-                                .get("payload")
-                                .and_then(|p| p.get("model"))
-                                .and_then(|m| m.as_str())
-                            {
-                                session_model = model.to_string();
-                            }
+                        if let Some(model) = obj
+                            .get("payload")
+                            .and_then(|p| p.get("model"))
+                            .and_then(|m| m.as_str())
+                        {
+                            session_model = model.to_string();
                         }
                         continue;
                     }
@@ -475,6 +472,26 @@ mod tests {
     }
 
     #[test]
+    fn incremental_reparse_keeps_session_model_and_provider() {
+        // load_incremental() passes the changed files as `subset`. Skipping
+        // the pre-scan on that path left every appended call as
+        // provider=openai / model=unknown.
+        let dir = tempdir().unwrap();
+        let session_meta = r#"{"type":"session_meta","payload":{"model_provider":"xai"}}"#;
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
+        let event = r#"{"timestamp":"2026-07-10T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"total_tokens":110}}}}"#;
+        let path = dir.path().join("rollout-a.jsonl");
+        fs::write(&path, format!("{session_meta}\n{context}\n{event}\n")).unwrap();
+
+        let all = vec![path.clone()];
+        let records = CodexSource::parse_files(&all, &all);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].model, "gpt-5.6-terra");
+        assert_eq!(records[0].provider, "xai");
+    }
+
+    #[test]
     fn incremental_only_reparses_changed_files() {
         let dir = tempdir().unwrap();
         let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
@@ -543,6 +560,11 @@ mod tests {
             records3.len(),
             2,
             "re-parsing the changed file returns all its records"
+        );
+        assert!(
+            records3.iter().all(|r| r.model == "gpt-5.6-terra"),
+            "incremental re-parse must keep the turn_context model, got {:?}",
+            records3.iter().map(|r| r.model.as_str()).collect::<Vec<_>>()
         );
         assert!(
             records3

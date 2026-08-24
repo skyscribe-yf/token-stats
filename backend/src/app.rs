@@ -66,6 +66,9 @@ impl AppState {
         if has_cc {
             store.collapse_commandcode_inclusive_twins();
         }
+        // Newly ingested named Codex rows pair with older unknown-model
+        // twins left by the incremental pre-scan skip.
+        store.collapse_unknown_codex_twins();
 
         // Build memory from the rows we already have instead of re-reading
         // the whole DB a second time; apply the same in-memory twin-drop the
@@ -77,6 +80,7 @@ impl AppState {
         if has_cc {
             drop_commandcode_inclusive_twins(&mut records);
         }
+        drop_unknown_codex_twins(&mut records);
         records.sort_by(|a, b| {
             a.time
                 .cmp(&b.time)
@@ -149,14 +153,21 @@ impl AppState {
         // New cmd rows only affect twin-collapsing when cmd rows actually
         // arrived; skip the full-vec and full-DB scans otherwise.
         let has_cc = records_to_add.iter().any(|r| r.source == "commandcode");
+        let has_codex = records_to_add.iter().any(|r| r.source == "codex");
         guard.extend(records_to_add.iter().cloned());
         if has_cc {
             drop_commandcode_inclusive_twins(&mut guard);
+        }
+        if has_codex {
+            drop_unknown_codex_twins(&mut guard);
         }
         let added = records_to_add.len();
         self.pending.queue(records_to_add);
         if has_cc {
             self.store.collapse_commandcode_inclusive_twins();
+        }
+        if has_codex {
+            self.store.collapse_unknown_codex_twins();
         }
         tracing::info!(
             "Refreshed data: {} records ({} new, queued for deferred write)",
@@ -176,6 +187,9 @@ impl AppState {
         let inserted = self.store.insert_batch(&batch);
         if batch.iter().any(|r| r.source == "commandcode") {
             self.store.collapse_commandcode_inclusive_twins();
+        }
+        if batch.iter().any(|r| r.source == "codex") {
+            self.store.collapse_unknown_codex_twins();
         }
         if inserted == 0 {
             // Transaction rolled back — nothing was written. Re-queue so the
@@ -270,6 +284,36 @@ fn drop_commandcode_inclusive_twins(records: &mut Vec<TokenRecord>) {
             return true;
         }
         !exclusive.contains(&cc_twin_key(r, exclusive_input))
+    });
+}
+
+/// Hash key for pairing a Codex unknown-model row with its named twin.
+/// Provider is excluded: incremental skip defaulted it to openai→ainaba.
+fn codex_unknown_twin_key(r: &TokenRecord) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    r.time.hash(&mut h);
+    r.input_tokens.hash(&mut h);
+    r.output_tokens.hash(&mut h);
+    r.cache_read_tokens.hash(&mut h);
+    h.finish()
+}
+
+/// Keep the named Codex row when an unknown-model twin is present.
+fn drop_unknown_codex_twins(records: &mut Vec<TokenRecord>) {
+    let named: std::collections::HashSet<u64> = records
+        .iter()
+        .filter(|r| r.source == "codex" && r.model != "unknown")
+        .map(codex_unknown_twin_key)
+        .collect();
+    if named.is_empty() {
+        return;
+    }
+    records.retain(|r| {
+        if r.source != "codex" || r.model != "unknown" {
+            return true;
+        }
+        !named.contains(&codex_unknown_twin_key(r))
     });
 }
 
@@ -376,5 +420,65 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drop_unknown_codex_twins;
+    use crate::models::TokenRecord;
+
+    fn rec(source: &str, provider: &str, model: &str, time: &str) -> TokenRecord {
+        TokenRecord {
+            date: time[..10].to_string(),
+            time: time.to_string(),
+            api_key_prefix: "N/A".to_string(),
+            provider: provider.to_string(),
+            original_provider: None,
+            model: model.to_string(),
+            source: source.to_string(),
+            input_tokens: 20,
+            output_tokens: 10,
+            cache_read_tokens: 80,
+            cache_write_tokens: 0,
+            total_tokens: 110,
+            cost: 0.0,
+            ttft_ms: None,
+            tps: None,
+        }
+    }
+
+    #[test]
+    fn drops_unknown_codex_when_named_twin_exists() {
+        let mut records = vec![
+            rec("codex", "ainaba", "unknown", "2026-08-25T10:00:00Z"),
+            rec("codex", "fenno", "gpt-5.6-terra", "2026-08-25T10:00:00Z"),
+            rec("pi", "ainaba", "unknown", "2026-08-25T10:00:00Z"),
+        ];
+        drop_unknown_codex_twins(&mut records);
+        let models: Vec<_> = records
+            .iter()
+            .map(|r| (r.source.as_str(), r.provider.as_str(), r.model.as_str()))
+            .collect();
+        assert_eq!(
+            models,
+            [
+                ("codex", "fenno", "gpt-5.6-terra"),
+                ("pi", "ainaba", "unknown"),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_unknown_codex_when_no_twin() {
+        let mut records = vec![rec(
+            "codex",
+            "ainaba",
+            "unknown",
+            "2026-08-25T10:00:00Z",
+        )];
+        drop_unknown_codex_twins(&mut records);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].model, "unknown");
     }
 }

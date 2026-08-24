@@ -170,6 +170,7 @@ fn apply_store_patches(conn: &Connection) {
     );
 
     collapse_commandcode_inclusive_twins(conn);
+    collapse_unknown_codex_twins(conn);
 }
 
 /// Drop native cmd rows that stored OpenAI-inclusive `inputTokens` when the
@@ -199,6 +200,38 @@ fn collapse_commandcode_inclusive_twins(conn: &Connection) -> usize {
     if deleted > 0 {
         tracing::info!(
             "Removed {} commandcode row(s) that double-counted cache in input",
+            deleted
+        );
+    }
+    deleted
+}
+
+/// Drop Codex rows that were stored as model=unknown when the same call
+/// also exists with the real model. Incremental re-parses used to skip
+/// session_meta / turn_context and emit openai/unknown twins.
+fn collapse_unknown_codex_twins(conn: &Connection) -> usize {
+    let deleted = conn
+        .execute(
+            "DELETE FROM token_records
+             WHERE id IN (
+                 SELECT a.id
+                 FROM token_records a
+                 JOIN token_records b
+                   ON a.source = b.source
+                  AND a.time = b.time
+                  AND a.input_tokens = b.input_tokens
+                  AND a.output_tokens = b.output_tokens
+                  AND a.cache_read_tokens = b.cache_read_tokens
+                 WHERE a.source = 'codex'
+                   AND a.model = 'unknown'
+                   AND b.model != 'unknown'
+             )",
+            [],
+        )
+        .unwrap_or(0);
+    if deleted > 0 {
+        tracing::info!(
+            "Removed {} codex row(s) whose model was unknown but a named twin exists",
             deleted
         );
     }
@@ -264,6 +297,19 @@ impl TokenStore {
             }
         };
         collapse_commandcode_inclusive_twins(&conn)
+    }
+
+    /// Remove Codex unknown-model rows when the same call is also stored
+    /// with a real model. Idempotent.
+    pub fn collapse_unknown_codex_twins(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        collapse_unknown_codex_twins(&conn)
     }
 
     /// Insert records that are not already present (fingerprint-unique).
@@ -714,6 +760,82 @@ mod tests {
         let loaded = store.load_all();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].input_tokens, 15600);
+    }
+
+    #[test]
+    fn reopen_drops_unknown_codex_twin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let store = TokenStore::open(&path);
+        let named = fixture(
+            "codex",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-08-25T10:00:00Z",
+            110,
+        );
+        let mut unknown = named.clone();
+        unknown.model = "unknown".to_string();
+        assert_eq!(store.insert_batch(&[named, unknown]), 2);
+
+        let reopened = TokenStore::open(&path);
+        let loaded = reopened.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].model, "gpt-5.6-terra");
+    }
+
+    #[test]
+    fn reopen_keeps_unknown_codex_when_no_twin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let store = TokenStore::open(&path);
+        let unknown = fixture("codex", "ainaba", "unknown", "2026-08-25T10:00:00Z", 110);
+        assert_eq!(store.insert_batch(&[unknown]), 1);
+
+        let reopened = TokenStore::open(&path);
+        let loaded = reopened.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].model, "unknown");
+    }
+
+    #[test]
+    fn collapse_after_insert_drops_unknown_codex_twin() {
+        let store = temp_store();
+        let unknown = fixture("codex", "ainaba", "unknown", "2026-08-25T10:00:00Z", 110);
+        let named = fixture(
+            "codex",
+            "ainaba",
+            "gpt-5.6-terra",
+            "2026-08-25T10:00:00Z",
+            110,
+        );
+        assert_eq!(store.insert_batch(&[unknown]), 1);
+        assert_eq!(store.insert_batch(&[named]), 1);
+        assert_eq!(store.collapse_unknown_codex_twins(), 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].model, "gpt-5.6-terra");
+    }
+
+    #[test]
+    fn collapse_drops_unknown_codex_twin_with_wrong_provider() {
+        // Incremental skip defaulted provider to openai→ainaba while the
+        // real call was fenno/ollama/xai. Match on time+tokens, not provider.
+        let store = temp_store();
+        let unknown = fixture("codex", "ainaba", "unknown", "2026-08-25T10:00:00Z", 110);
+        let named = fixture(
+            "codex",
+            "fenno",
+            "gpt-5.6-terra",
+            "2026-08-25T10:00:00Z",
+            110,
+        );
+        assert_eq!(store.insert_batch(&[unknown, named]), 2);
+        assert_eq!(store.collapse_unknown_codex_twins(), 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].provider, "fenno");
+        assert_eq!(loaded[0].model, "gpt-5.6-terra");
     }
 
     // ── PendingBuffer (deferred disk writes) ────────────────────────────────
