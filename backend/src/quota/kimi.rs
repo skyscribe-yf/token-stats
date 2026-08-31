@@ -373,8 +373,8 @@ mod tests {
 
     fn reset_env_var(name: &str, old: Option<String>) {
         match old {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
+            Some(v) => unsafe { std::env::set_var(name, v) },
+            None => unsafe { std::env::remove_var(name) },
         }
     }
 
@@ -471,8 +471,8 @@ mod tests {
 
         let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
         let old_url = std::env::var("KIMI_CODE_BASE_URL").ok();
-        std::env::set_var("KIMI_CREDENTIALS_PATH", cred_path.to_str().unwrap());
-        std::env::set_var("KIMI_CODE_BASE_URL", mock_server.uri());
+        unsafe { std::env::set_var("KIMI_CREDENTIALS_PATH", cred_path.to_str().unwrap()) };
+        unsafe { std::env::set_var("KIMI_CODE_BASE_URL", mock_server.uri()) };
 
         let client = reqwest::Client::new();
         let status = fetch_kimi_quota(&client).await;
@@ -492,10 +492,12 @@ mod tests {
     async fn test_fetch_kimi_quota_no_token() {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
-        std::env::set_var(
-            "KIMI_CREDENTIALS_PATH",
-            "/tmp/nonexistent-kimi-creds-test.json",
-        );
+        unsafe {
+            std::env::set_var(
+                "KIMI_CREDENTIALS_PATH",
+                "/tmp/nonexistent-kimi-creds-test.json",
+            );
+        }
 
         let client = reqwest::Client::new();
         let status = fetch_kimi_quota(&client).await;
@@ -533,8 +535,8 @@ mod tests {
 
         let old_path = std::env::var("KIMI_CREDENTIALS_PATH").ok();
         let old_url = std::env::var("KIMI_CODE_BASE_URL").ok();
-        std::env::set_var("KIMI_CREDENTIALS_PATH", cred_path.to_str().unwrap());
-        std::env::set_var("KIMI_CODE_BASE_URL", mock_server.uri());
+        unsafe { std::env::set_var("KIMI_CREDENTIALS_PATH", cred_path.to_str().unwrap()) };
+        unsafe { std::env::set_var("KIMI_CODE_BASE_URL", mock_server.uri()) };
 
         let client = reqwest::Client::new();
         let status = fetch_kimi_quota(&client).await;

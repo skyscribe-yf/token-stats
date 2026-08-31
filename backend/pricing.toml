@@ -18,6 +18,9 @@ rate = 6.7894
 # 讯飞订阅：199 元 / 90000 次调用
 xunfei_per_call = 0.002211111111
 
+# CodeBuddy：10 美元 / 3000 credits；实际人民币成本按记录时汇率换算
+codebuddy_usd_per_credit = 0.0033333333333333335
+
 # Kimi legacy flat rate (kept only for compatibility; no longer used)
 kimi_per_token = 0.000000071071429
 
@@ -78,13 +81,19 @@ ollama_cloud_empirical_weekly_quota = 292307692
 
 # Model-specific empirical multipliers relative to the glm-5.2 baseline.
 # Unlisted Ollama models keep the baseline multiplier of 1.0.
-ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2 }
+# glm-5.3-flash: 5h Session 配额多点实测（token/pct）：
+# 3.39M/3.0%=113.0M、3.67M/3.2%=114.7M、4.11M/3.7%=111.1M、4.23M/3.9%=108.5M
+# 均值 ≈ 111.8M（±3%，全在 0.1% 显示粒度舍入误差内，稳定）
+# 周配额 = 5 窗口 × 111.8M ≈ 559M；月 ≈ 2,423M；¥135.79 / 2,423M ≈ ¥0.0560/M
+# 倍率 = 0.0560 / 0.1072 ≈ 0.523；交叉验证：glm-5.2 每窗口 58.46M → 58.46/111.8 = 0.523 ✓
+ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "glm-5.3-flash" = 0.523, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2 }
 
 # FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.7894 / 0.1 = 67.894
 freemodel_divisor = 67.894
 
-# CommandCode 订阅折扣：实际成本 = 列出价格 / 10
-commandcode_divisor = 10.0
+# CommandCode 订阅折扣：实际成本 = 列出价格 / 9.95
+# （当前套餐已无 4x 用量倍率，2026-08-30 起按 9.95 折算）
+commandcode_divisor = 9.95
 
 # Fenno 订阅折扣：10 CNY 可买 150 USD 面值
 # 先按 USD→CNY 换算，再除以折扣倍率：150 × 6.7894 / 10 = 101.841
@@ -389,6 +398,37 @@ cache_write_cny = 0.0
 # 订阅折扣：实际成本 = 列表价格 / commandcode_divisor
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ── Crof ──
+# crof 平台定价（USD / 1M tokens），来自 models.json
+# usage.jsonl 中的 cost 字段计算有误，需从 token 数量重新计算
+[[model]]
+name = "crof:deepseek-v4-flash-0731"
+input = 0.08
+output = 0.10
+cache_read = 0.003
+cache_write = 0.0
+
+[[model]]
+name = "crof:deepseek-v4-flash"
+input = 0.08
+output = 0.10
+cache_read = 0.003
+cache_write = 0.0
+
+[[model]]
+name = "crof:deepseek-v4-pro-0813"
+input = 0.35
+output = 0.80
+cache_read = 0.01
+cache_write = 0.0
+
+[[model]]
+name = "crof:deepseek-v4-pro"
+input = 0.35
+output = 0.80
+cache_read = 0.01
+cache_write = 0.0
+
 # ── CC Premium (Anthropic) ──
 
 [[model]]
@@ -565,6 +605,20 @@ name = "cc:glm-5.1"
 input = 1.40
 output = 4.40
 cache_read = 0.26
+cache_write = 0.0
+
+[[model]]
+name = "cc:glm-5.3"
+input = 1.40
+output = 4.40
+cache_read = 0.26
+cache_write = 0.0
+
+[[model]]
+name = "cc:glm-5.3-flash"
+input = 0.15
+output = 0.50
+cache_read = 0.03
 cache_write = 0.0
 
 [[model]]

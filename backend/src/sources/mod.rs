@@ -1,11 +1,12 @@
 //! Data source abstractions for loading token usage records.
 //!
-//! Each data source (Pi, Codex, Claude Code, Kimi CLI, OpenCode, ccswitch)
+//! Each data source (Pi, Codex, Claude Code, CodeBuddy, Kimi CLI, OpenCode, ccswitch)
 //! implements the `DataSource` trait. The `load_all_sources()` function
 //! orchestrates loading all configured sources and applies vendor merging.
 
 mod ccswitch;
 mod claude_code;
+mod codebuddy;
 mod codex;
 mod commandcode;
 mod dim;
@@ -28,6 +29,7 @@ use std::sync::{Mutex, OnceLock};
 
 pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
+pub use codebuddy::CodeBuddySource;
 pub use codex::CodexSource;
 pub use commandcode::CommandCodeSource;
 pub use dim::DimSource;
@@ -250,7 +252,7 @@ fn file_stamps() -> &'static Mutex<HashMap<std::path::PathBuf, FileStamp>> {
 /// Return the current stamp of `path` (missing files are treated as
 /// "no stamp" so a previously-seen file that vanishes is re-parsed if it
 /// reappears with a different identity).
-pub(crate) fn stamp_of(path: &Path) -> Option<FileStamp> {
+fn stamp_of(path: &Path) -> Option<FileStamp> {
     let meta = std::fs::metadata(path).ok()?;
     let modified = meta.modified().ok()?;
     Some(FileStamp {
@@ -260,7 +262,7 @@ pub(crate) fn stamp_of(path: &Path) -> Option<FileStamp> {
 }
 
 /// Record that `path` has been fully parsed at the given stamp.
-pub(crate) fn remember_parsed(path: &Path, stamp: FileStamp) {
+fn remember_parsed(path: &Path, stamp: FileStamp) {
     if let Ok(mut map) = file_stamps().lock() {
         map.insert(path.to_path_buf(), stamp);
     }
@@ -318,6 +320,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
             Box::new(PiSource),
             Box::new(CodexSource),
             Box::new(ClaudeCodeSource),
+            Box::new(CodeBuddySource),
             Box::new(OpenCodeSource),
             Box::new(KimiCliSource),
             Box::new(KimiCodeSource),

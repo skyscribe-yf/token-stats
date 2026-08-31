@@ -214,25 +214,54 @@ function buildQuotaChips(
     }
   }
 
-  // CommandCode
-  if (quota?.commandcode?.available && quota.commandcode.data) {
-    const cc = quota.commandcode.data;
+  // CommandCode (primary + EX account)
+  const ccPairs: { status: QuotaResponse["commandcode"]; suffix: string; key: string }[] = quota
+    ? [
+        { status: quota.commandcode, suffix: "", key: "" },
+        { status: quota.commandcode_ex, suffix: " EX", key: "-ex" },
+      ]
+    : [];
+  for (const { status, suffix, key } of ccPairs) {
+    if (!status?.available || !status.data) continue;
+    const cc = status.data;
     if (cc.monthly_credits_total != null && cc.monthly_credits_total > 0) {
       const pct = (cc.monthly_credits_used / cc.monthly_credits_total) * 100;
       chips.push({
-        id: "commandcode-monthly",
-        cardId: "quota-commandcode",
-        vendor: "CmdCode",
+        id: `commandcode-monthly${key}`,
+        cardId: `quota-commandcode${key}`,
+        vendor: `CmdCode${suffix}`,
         scope: "月",
+        display: `${pct.toFixed(0)}%`,
+        pct,
+      });
+    }
+    if (cc.weekly && cc.weekly.cap > 0) {
+      const pct = (cc.weekly.used / cc.weekly.cap) * 100;
+      chips.push({
+        id: `commandcode-weekly${key}`,
+        cardId: `quota-commandcode${key}`,
+        vendor: `CmdCode${suffix}`,
+        scope: "周",
+        display: `${pct.toFixed(0)}%`,
+        pct,
+      });
+    }
+    if (cc.five_hour && cc.five_hour.cap > 0) {
+      const pct = (cc.five_hour.used / cc.five_hour.cap) * 100;
+      chips.push({
+        id: `commandcode-5h${key}`,
+        cardId: `quota-commandcode${key}`,
+        vendor: `CmdCode${suffix}`,
+        scope: "5h",
         display: `${pct.toFixed(0)}%`,
         pct,
       });
     }
     if (cc.purchased_credits > 0) {
       chips.push({
-        id: "commandcode-purchased",
-        cardId: "quota-commandcode",
-        vendor: "CmdCode",
+        id: `commandcode-purchased${key}`,
+        cardId: `quota-commandcode${key}`,
+        vendor: `CmdCode${suffix}`,
         scope: "余",
         display: `$${cc.purchased_credits.toFixed(2)}`,
         pct: null,

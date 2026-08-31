@@ -132,9 +132,14 @@ impl QuotaFetcher {
         xiaomi_mimo::fetch_xiaomi_mimo_quota(&self.client).await
     }
 
-    /// Fetch CommandCode subscription/quota info.
+    /// Fetch CommandCode subscription/quota info (primary auth.json account).
     pub async fn fetch_commandcode_quota(&self) -> CommandCodeQuotaStatus {
         commandcode::fetch_commandcode_quota(&self.client).await
+    }
+
+    /// Fetch CommandCode subscription/quota info (second auth*.json account).
+    pub async fn fetch_commandcode_quota_ex(&self) -> CommandCodeQuotaStatus {
+        commandcode::fetch_commandcode_quota_ex(&self.client).await
     }
 
     /// Fetch Ollama cloud subscription/quota info.

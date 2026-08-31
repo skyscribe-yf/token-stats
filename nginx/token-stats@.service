@@ -9,7 +9,9 @@ WorkingDirectory=/home/skyscribe/srcs/token-stats/backend
 Environment="RUST_LOG=info"
 Environment="PORT=%i"
 ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend
-Restart=on-failure
+# earlyoom 会 SIGTERM 杀掉本服务（--prefer 列表里有 token-stats-bac），
+# 后端优雅退出返回 0，on-failure 不会重启，因此必须 always。
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 

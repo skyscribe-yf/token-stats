@@ -342,6 +342,7 @@ export function SettingsDrawer({
                   ) : null}
                   <li>FreeModel: cost ÷ {pricingConfig.special.freemodel_divisor}</li>
                   <li>CommandCode: cost ÷ {pricingConfig.special.commandcode_divisor}</li>
+                  <li>CodeBuddy: credits × ${pricingConfig.special.codebuddy_usd_per_credit}/credit × 汇率</li>
                   <li>pi / ccswitch: USD → CNY</li>
                   <li>codex / claude-code: 按模型价格表换算</li>
                 </ul>

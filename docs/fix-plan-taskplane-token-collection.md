@@ -1,7 +1,16 @@
 # Fix Plan: Taskplane Token Collection Gaps
 
-> 调查日期：2026-05-19  
-> 状态：计划阶段，待修复
+> 调查日期：2026-05-19
+>
+> **状态更新（2026-08-24）：本计划中后端部分已实现。** 现状对照：
+> - ✅ **Bug 1（exit-summary.json 扫描）**：`backend/src/sources/pi.rs` 已同时探测
+>   `events-exit.json` 与 `exit-summary.json`（`pi.rs:198-201`）。
+> - ✅ **Bug 2（provider 回退）**：`read_agent_provider_model()` 已用
+>   `resolve_provider_from_model()` 回退（`pi.rs:384`），不再命中硬编码
+>   `"taskplane-worker"`。
+> - ⚠️ **Bug 3/4/5（token-tracker 扩展侧）**：修改目标在 `~/.pi/agent/extensions/token-tracker.ts`
+>   （本仓库之外），是否已同步修复需另行确认；Rust 端不受影响。
+> - 文档保留作为历史调查记录。
 
 ---
 

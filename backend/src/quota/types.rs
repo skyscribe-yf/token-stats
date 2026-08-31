@@ -174,6 +174,7 @@ pub struct QuotaResponse {
     pub opencode_go_ex: Option<OpenCodeQuotaStatus>,
     pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,
     pub commandcode: Option<CommandCodeQuotaStatus>,
+    pub commandcode_ex: Option<CommandCodeQuotaStatus>,
     pub ollama: Option<OllamaQuotaStatus>,
     pub meituan: Option<MeituanQuotaStatus>,
     pub fenno: Option<FennoQuotaStatus>,
@@ -278,12 +279,27 @@ pub struct XiaomiMiMoQuotaStatus {
 
 // ─── CommandCode types ───────────────────────────────────────────────────────
 
+/// A rolling-window usage limit (5h / weekly) returned by the credits API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandCodeWindowLimit {
+    pub used: f64,
+    pub cap: f64,
+    /// RFC 3339 timestamp when the window resets; `None` if unknown.
+    pub reset_at: Option<String>,
+}
+
 /// CommandCode subscription/quota data for the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandCodeQuotaData {
     pub plan_name: String,
     pub subscription_status: String,
     pub cancel_at_period_end: Option<bool>,
+    /// CLI account name from the auth file (e.g. "yanchenxin0924gbst").
+    #[serde(default)]
+    pub user_name: String,
+    /// CLI account user id from the auth file.
+    #[serde(default)]
+    pub user_id: String,
     pub monthly_credits_total: Option<f64>,
     pub monthly_credits_used: f64,
     pub monthly_credits_remaining: f64,
@@ -295,6 +311,12 @@ pub struct CommandCodeQuotaData {
     pub total_tokens: i64,
     pub total_tokens_in: i64,
     pub total_tokens_out: i64,
+    /// Rolling 5-hour window limit (credit cap).
+    #[serde(default)]
+    pub five_hour: Option<CommandCodeWindowLimit>,
+    /// Rolling weekly window limit (credit cap).
+    #[serde(default)]
+    pub weekly: Option<CommandCodeWindowLimit>,
 }
 
 /// CommandCode quota status for the dashboard.

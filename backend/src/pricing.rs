@@ -84,6 +84,9 @@ fn default_kimi_api_models() -> Vec<KimiApiModelPrice> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
+    /// CodeBuddy credits are priced at $10 per 3000 credits.
+    #[serde(default = "default_codebuddy_usd_per_credit")]
+    pub codebuddy_usd_per_credit: f64,
     /// Legacy flat Kimi rate, retained solely to parse existing pricing files.
     #[serde(default)]
     pub kimi_per_token: f64,
@@ -118,6 +121,11 @@ pub struct SpecialPricing {
     pub freemodel_divisor: f64,
     #[serde(default)]
     pub commandcode_divisor: f64,
+    /// CommandCode platform rate: fixed USD→CNY rate used for cost calculation.
+    /// CommandCode charges platform fees, so the effective rate differs from market.
+    /// Default: 7.0 (same as Ainaiba/YAI Router)
+    #[serde(default = "default_commandcode_platform_rate")]
+    pub commandcode_platform_rate: f64,
     #[serde(default = "default_fenno_divisor")]
     pub fenno_divisor: f64,
     /// Meituan LongCat per-token cost in CNY (resource pack billing).
@@ -150,6 +158,10 @@ pub struct SpecialPricing {
     pub xunfei_off_peak: Option<XunfeiOffPeakConfig>,
 }
 
+fn default_codebuddy_usd_per_credit() -> f64 {
+    10.0 / 3000.0
+}
+
 fn default_grok_divisor() -> f64 {
     1950.0 * 6.7894 / 50.0
 }
@@ -159,6 +171,10 @@ fn default_fenno_divisor() -> f64 {
 }
 
 fn default_ainaba_platform_rate() -> f64 {
+    7.0
+}
+
+fn default_commandcode_platform_rate() -> f64 {
     7.0
 }
 
@@ -309,6 +325,7 @@ impl Default for PricingConfig {
             usd_to_cny_segments: Vec::new(),
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
+                codebuddy_usd_per_credit: default_codebuddy_usd_per_credit(),
                 kimi_per_token: 199.0 / 2_800_000_000.0,
                 kimi_subscription_multiplier: default_kimi_subscription_multiplier(),
                 kimi_api_models: default_kimi_api_models(),
@@ -322,6 +339,7 @@ impl Default for PricingConfig {
                 ainaba_platform_rate: default_ainaba_platform_rate(),
                 freemodel_divisor: 67.894,
                 commandcode_divisor: 1.0,
+                commandcode_platform_rate: default_commandcode_platform_rate(),
                 fenno_divisor: default_fenno_divisor(),
                 meituan_per_token: default_meituan_per_token(),
                 ollama_cloud_empirical_per_token: 0.0000001072,
@@ -1072,6 +1090,8 @@ fn normalize_commandcode_model(model: &str) -> String {
         "kimi-k2.5" => "cc:kimi-k2.5",
 
         // Zhipu/GLM
+        "glm-5.3" => "cc:glm-5.3",
+        "glm-5.3-flash" => "cc:glm-5.3-flash",
         "glm-5.1" => "cc:glm-5.1",
         "glm-5" => "cc:glm-5",
 
@@ -1089,6 +1109,30 @@ fn normalize_commandcode_model(model: &str) -> String {
 
         // Fallback: try with cc: prefix
         other => return format!("cc:{}", other),
+    };
+
+    key.to_string()
+}
+
+/// Normalize a Crof model name to the `crof:` prefix used in pricing.toml.
+///
+/// Crof model names come as plain names like `deepseek-v4-flash-0731`.
+/// Maps to `crof:` prefixed keys in the pricing model map.
+fn resolve_crof_price<'a>(state: &'a PricingState, model: &str) -> Option<&'a ModelPrice> {
+    let crof_key = normalize_crof_model(model);
+    state.model_map.get(&crof_key)
+}
+
+fn normalize_crof_model(model: &str) -> String {
+    let lower = model.to_lowercase();
+
+    let key = match lower.as_str() {
+        "deepseek-v4-flash-0731" => "crof:deepseek-v4-flash-0731",
+        "deepseek-v4-flash" => "crof:deepseek-v4-flash",
+        "deepseek-v4-pro-0813" => "crof:deepseek-v4-pro-0813",
+        "deepseek-v4-pro" => "crof:deepseek-v4-pro",
+        // Fallback: try with crof: prefix
+        other => return format!("crof:{}", other),
     };
 
     key.to_string()
@@ -1297,6 +1341,7 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
 /// - Records with provider=deepseek and cost=0: derived from pricing.toml
 ///   deepseek rates (USD→CNY, no divisor). Covers session-recovery records
 ///   and DeepSeek platform CSV export.
+#[cfg(test)]
 pub fn display_cost(record: &TokenRecord) -> f64 {
     display_cost_in(&state_cell().read().unwrap(), record)
 }
@@ -1306,6 +1351,14 @@ pub fn display_cost(record: &TokenRecord) -> f64 {
 pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64 {
     let cfg = &state.config;
     let schedule = &state.rate_schedule;
+
+    // CodeBuddy stores the raw credit charge in TokenRecord.cost. Convert
+    // credits to USD, then use the record's historical USD→CNY rate.
+    if record.source == "codebuddy" {
+        return record.cost
+            * cfg.special.codebuddy_usd_per_credit
+            * schedule.rate_for(&record.time);
+    }
 
     // 1. 讯飞 (xunfei / xunfei-ex): flat per-call rate in CNY
     //    With off-peak (波谷) discount since 2026-06-18:
@@ -1387,6 +1440,25 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
                 &record.time,
             );
             return usd * schedule.rate_for(&record.time) / cfg.special.commandcode_divisor;
+        }
+    }
+
+    // 4a. Crof provider: always compute from normalized tokens using
+    //     crof model prices from pricing.toml. We ignore the extension's stored
+    //     cost because it was calculated with incorrect pricing.
+    //
+    //     Crof model prices in pricing.toml are the listed API rate (USD / 1M).
+    //     Convert to CNY using market rate.
+    if record.provider == "crof" {
+        if let Some(mp) = resolve_crof_price(&state, &record.model) {
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+            );
+            return usd * schedule.rate_for(&record.time);
         }
     }
 
@@ -1615,7 +1687,7 @@ mod tests {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        std::env::remove_var("PRICING_CONFIG");
+        unsafe { std::env::remove_var("PRICING_CONFIG") };
         let mut state = state_cell().write().unwrap();
         state.reload(PricingConfig::default());
         drop(state);
@@ -1628,7 +1700,7 @@ mod tests {
         use std::io::Write;
         let tmp = tempfile::NamedTempFile::new().unwrap();
         tmp.as_file().write_all(toml).unwrap();
-        std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap());
+        unsafe { std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap()) };
         reload();
         tmp
     }
@@ -1636,8 +1708,8 @@ mod tests {
     /// Restore PRICING_CONFIG env var after a temp config test.
     fn restore_pricing_env(prev: Option<String>) {
         match prev {
-            Some(v) => std::env::set_var("PRICING_CONFIG", v),
-            None => std::env::remove_var("PRICING_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("PRICING_CONFIG", v) },
+            None => unsafe { std::env::remove_var("PRICING_CONFIG") },
         }
         reload();
     }
@@ -1673,7 +1745,8 @@ mod tests {
         let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
             .expect("backend/pricing.toml should parse as PricingConfig");
 
-        assert_eq!(cfg.special.commandcode_divisor, 10.0);
+        assert_eq!(cfg.special.commandcode_divisor, 9.95);
+        assert!((cfg.special.codebuddy_usd_per_credit - 10.0 / 3000.0).abs() < 1e-15);
         assert_eq!(cfg.special.ainaba_segments.len(), 3);
         assert_eq!(cfg.special.ainaba_segments[1].divisor, 20.20202);
         assert_eq!(cfg.special.ainaba_segments[2].divisor, 21.538461538);
@@ -1728,6 +1801,35 @@ mod tests {
             Some("2026-08-18T00:00:00+08:00")
         );
         assert_eq!(cfg.special.opencode_model_segments[0].divisor, 3.0);
+    }
+
+    #[test]
+    fn codebuddy_credits_convert_to_rmb_with_record_rate() {
+        let _guard = pricing_test_guard();
+        let mut config = PricingConfig::default();
+        config.usd_to_cny = 6.0;
+        config.usd_to_cny_segments = vec![
+            UsdToCnySegment {
+                effective_from: None,
+                rate: 5.0,
+            },
+            UsdToCnySegment {
+                effective_from: Some("2026-08-01".to_string()),
+                rate: 7.0,
+            },
+        ];
+        state_cell().write().unwrap().reload(config);
+
+        let mut record = make_record("codebuddy", "codebuddy", "gpt-5.6-luna", 100, 3000.0);
+        record.date = "2026-08-29".to_string();
+        record.time = "2026-08-29T04:44:13.879Z".to_string();
+        assert!((display_cost(&record) - 70.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn codebuddy_default_price_is_ten_dollars_per_three_thousand_credits() {
+        let config = PricingConfig::default();
+        assert!((config.special.codebuddy_usd_per_credit - 10.0 / 3000.0).abs() < 1e-15);
     }
 
     #[test]
@@ -2438,7 +2540,7 @@ cache_write = 6.25
         // Save current config, then override with temp config
         let prev_config = get_config();
         let prev_env = std::env::var("PRICING_CONFIG").ok();
-        std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap());
+        unsafe { std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap()) };
         reload();
 
         let mut record = make_record("claude-code", "FreeModel", "claude-opus-4-7", 10_000, 0.0);
@@ -2471,13 +2573,13 @@ cache_write = 6.25
             .as_file()
             .write_all(restore_toml.as_bytes())
             .unwrap();
-        std::env::set_var("PRICING_CONFIG", restore_tmp.path().to_str().unwrap());
+        unsafe { std::env::set_var("PRICING_CONFIG", restore_tmp.path().to_str().unwrap()) };
         reload();
 
         // Restore env var
         match prev_env {
-            Some(v) => std::env::set_var("PRICING_CONFIG", v),
-            None => std::env::remove_var("PRICING_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("PRICING_CONFIG", v) },
+            None => unsafe { std::env::remove_var("PRICING_CONFIG") },
         }
     }
 
@@ -2510,7 +2612,7 @@ cache_write_cny = 0.0
             .unwrap();
 
         let prev_env = std::env::var("PRICING_CONFIG").ok();
-        std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap());
+        unsafe { std::env::set_var("PRICING_CONFIG", tmp.path().to_str().unwrap()) };
         reload();
 
         let mut record = make_record("deepseek-ai", "deepseek", "deepseek-v4-pro", 0, 0.0);
@@ -2541,8 +2643,8 @@ cache_write_cny = 0.0
         );
 
         match prev_env {
-            Some(v) => std::env::set_var("PRICING_CONFIG", v),
-            None => std::env::remove_var("PRICING_CONFIG"),
+            Some(v) => unsafe { std::env::set_var("PRICING_CONFIG", v) },
+            None => unsafe { std::env::remove_var("PRICING_CONFIG") },
         }
         reload();
     }

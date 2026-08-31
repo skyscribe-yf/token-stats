@@ -10,7 +10,7 @@ Environment="RUST_LOG=info"
 Environment="GROK_PROXY_PORT=3434"
 Environment="GROK_XAI_NETWORK_PROXY=http://127.0.0.1:7800"
 ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend --grok-proxy-only
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 

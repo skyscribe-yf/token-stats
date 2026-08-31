@@ -75,6 +75,7 @@ function CardHeader({
   href,
   suffix,
   cycleCountdown,
+  cycleCountdownSuffix,
 }: {
   active: boolean;
   loading: boolean;
@@ -82,6 +83,7 @@ function CardHeader({
   href?: string;
   suffix?: string;
   cycleCountdown?: CycleCountdown | null;
+  cycleCountdownSuffix?: React.ReactNode;
 }) {
   const dotClass = loading
     ? "bg-amber-400"
@@ -109,9 +111,24 @@ function CardHeader({
           suffix && <span className="text-[10px] text-slate-400">{suffix}</span>
         )}
       </div>
-      {cycleCountdown && (
-        <div className={cycleCountdownTextClass(cycleCountdown.isUrgent)}>
-          {cycleCountdown.text}
+      {(cycleCountdown || cycleCountdownSuffix) && (
+        <div
+          className={
+            cycleCountdown
+              ? cycleCountdownTextClass(cycleCountdown.isUrgent)
+              : "text-[10px] text-slate-400"
+          }
+        >
+          {cycleCountdown?.text}
+          {cycleCountdownSuffix && (
+            <span
+              className={`ml-1.5 font-normal ${
+                cycleCountdown ? "text-slate-400" : ""
+              }`}
+            >
+              {cycleCountdownSuffix}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -340,9 +357,11 @@ function AinaibaCard({
             />
           </div>
           {status.data.cards && status.data.cards.length > 1 && (
-            <div className="mt-2 pt-2 border-t border-slate-100">
-              <div className="text-[10px] text-slate-500 mb-1">到账卡明细</div>
-              <div className="space-y-1">
+            <details className="group mt-2 pt-2 border-t border-slate-100">
+              <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700 transition-colors">
+                到账卡明细（{status.data.cards.length}）
+              </summary>
+              <div className="mt-1.5 space-y-1">
                 {status.data.cards.map((card, i) => (
                   <div key={i} className="flex items-center justify-between text-[10px]">
                     <span className="text-slate-500">
@@ -359,7 +378,7 @@ function AinaibaCard({
                   </div>
                 ))}
               </div>
-            </div>
+            </details>
           )}
           <details className="group mt-1.5">
             <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700 transition-colors">
@@ -499,31 +518,52 @@ function CommandCodeCard({
   status,
   loading,
   highlightId,
+  suffix,
 }: {
   status: CommandCodeQuotaStatus | null;
   loading: boolean;
   highlightId: string | null;
+  suffix?: string;
 }) {
-  const cardId = "quota-commandcode";
+  const cardId = suffix === "EX" ? "quota-commandcode-ex" : "quota-commandcode";
   const flash = useHighlightFlash(highlightId, cardId);
   const cycleCountdown = buildCycleCountdown(
     status?.data?.current_period_end ?? null
   );
+  const userName = status?.data?.user_name ?? "";
+  const renewalDate = status?.data?.current_period_end;
   return (
-    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+    <CardShell
+      id={cardId}
+      available={!!status?.available}
+      highlight={flash}
+    >
       <CardHeader
         active={!!status?.available}
         loading={loading}
-        name="CommandCode"
+        name={`CommandCode${suffix === "EX" ? " EX" : ""}`}
         href="https://commandcode.ai"
         suffix="commandcode.ai"
         cycleCountdown={cycleCountdown}
+        cycleCountdownSuffix={
+          renewalDate ? (
+            <>
+              续订 {renewalDate.slice(0, 10)}
+              {status?.data?.cancel_at_period_end && " · 取消续订"}
+            </>
+          ) : null
+        }
       />
       {loading ? (
         <SkeletonBars />
       ) : status?.available && status.data ? (
         <>
           <div className="flex items-center gap-2 text-[11px] mb-1">
+            {userName && (
+              <span className="font-mono text-slate-500">
+                {userName}
+              </span>
+            )}
             <span className="font-medium text-slate-600">
               {status.data.plan_name}
             </span>
@@ -540,6 +580,26 @@ function CommandCodeCard({
             </span>
           </div>
           <div className="space-y-1">
+            {status.data.five_hour && status.data.five_hour.cap > 0 && (
+              <ProgressBar
+                label="5小时"
+                used={status.data.five_hour.used}
+                limit={status.data.five_hour.cap}
+                suffix={
+                  formatResetTime(status.data.five_hour.reset_at) ?? undefined
+                }
+              />
+            )}
+            {status.data.weekly && status.data.weekly.cap > 0 && (
+              <ProgressBar
+                label="周限额"
+                used={status.data.weekly.used}
+                limit={status.data.weekly.cap}
+                suffix={
+                  formatResetTime(status.data.weekly.reset_at) ?? undefined
+                }
+              />
+            )}
             {status.data.monthly_credits_total != null &&
               status.data.monthly_credits_total > 0 && (
                 <ProgressBar
@@ -580,12 +640,6 @@ function CommandCodeCard({
               输出 {formatNumber(status.data.total_tokens_out)}
             </span>
           </div>
-          {status.data.current_period_end && (
-            <div className="mt-1 text-[10px] text-slate-400">
-              续订 {status.data.current_period_end.slice(0, 10)}
-              {status.data.cancel_at_period_end && " · 取消续订"}
-            </div>
-          )}
         </>
       ) : (
         <p className="text-[11px] text-slate-400 italic">
@@ -1245,6 +1299,14 @@ export const QuotasSection = memo(function QuotasSection({
             status={quota?.commandcode ?? null}
             loading={quotaLoading}
             highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-commandcode-ex") && (
+          <CommandCodeCard
+            status={quota?.commandcode_ex ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+            suffix="EX"
           />
         )}
         {!isQuotaCardHidden(hiddenCards, "quota-fenno") && (

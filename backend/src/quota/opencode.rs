@@ -620,8 +620,8 @@ mod tests {
 
     fn reset_env_var(name: &str, old: Option<String>) {
         match old {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
+            Some(v) => unsafe { std::env::set_var(name, v) },
+            None => unsafe { std::env::remove_var(name) },
         }
     }
 
@@ -631,8 +631,10 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
         let old_cookie = std::env::var("OPENCODE_GO_AUTH_COOKIE").ok();
-        std::env::remove_var("OPENCODE_GO_WORKSPACE_ID");
-        std::env::remove_var("OPENCODE_GO_AUTH_COOKIE");
+        unsafe {
+            std::env::remove_var("OPENCODE_GO_WORKSPACE_ID");
+            std::env::remove_var("OPENCODE_GO_AUTH_COOKIE");
+        }
 
         let client = Client::new();
         let result = fetch_opencode_quota(&client).await;
@@ -650,8 +652,10 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap();
         let old_ws = std::env::var("OPENCODE_GO_WORKSPACE_ID").ok();
         let old_cookie = std::env::var("OPENCODE_GO_AUTH_COOKIE").ok();
-        std::env::set_var("OPENCODE_GO_WORKSPACE_ID", "wrk_test");
-        std::env::remove_var("OPENCODE_GO_AUTH_COOKIE");
+        unsafe {
+            std::env::set_var("OPENCODE_GO_WORKSPACE_ID", "wrk_test");
+            std::env::remove_var("OPENCODE_GO_AUTH_COOKIE");
+        }
 
         let client = Client::new();
         let result = fetch_opencode_quota(&client).await;

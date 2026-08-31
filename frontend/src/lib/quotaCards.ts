@@ -12,6 +12,7 @@ export const QUOTA_CARD_DEFS: QuotaCardDef[] = [
   { key: "opencode", label: "OpenCode-go", matches: (id) => id === "quota-opencode-primary" },
   { key: "opencode-ex", label: "OpenCode-go EX", matches: (id) => id === "quota-opencode-ex" },
   { key: "commandcode", label: "CommandCode", matches: (id) => id === "quota-commandcode" },
+  { key: "commandcode-ex", label: "CommandCode EX", matches: (id) => id === "quota-commandcode-ex" },
   { key: "fenno", label: "Fenno", matches: (id) => id === "quota-fenno" },
   { key: "fenno-ex", label: "Fenno EX", matches: (id) => id === "quota-fenno-ex" },
   { key: "ollama", label: "Ollama", matches: (id) => id === "quota-ollama" },

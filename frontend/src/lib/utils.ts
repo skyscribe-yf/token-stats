@@ -171,6 +171,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   dsh: "#22d3ee", // cyan-400
   commandcode: "#f472b6", // pink-400
   dim: "#f97316", // orange-500 - Dim (dimcode)
+  codebuddy: "#0ea5e9", // sky-500
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -238,6 +239,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   dsh: "DSH",
   commandcode: "Command Code",
   dim: "Dim",
+  codebuddy: "CodeBuddy",
 };
 
 export function getSourceColor(source: string): string {

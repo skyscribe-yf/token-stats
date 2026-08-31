@@ -335,6 +335,7 @@ export interface QuotaResponse {
   opencode_go_ex: OpenCodeQuotaStatus | null;
   xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
   commandcode: CommandCodeQuotaStatus | null;
+  commandcode_ex: CommandCodeQuotaStatus | null;
   ollama: OllamaQuotaStatus | null;
   meituan: MeituanQuotaStatus | null;
   fenno: FennoQuotaStatus | null;
@@ -460,10 +461,18 @@ export interface GrokQuotaStatus {
 
 // ─── CommandCode Quota ───────────────────────────────────────────────────────
 
+export interface CommandCodeWindowLimit {
+  used: number;
+  cap: number;
+  reset_at: string | null;
+}
+
 export interface CommandCodeQuotaData {
   plan_name: string;
   subscription_status: string;
   cancel_at_period_end: boolean | null;
+  user_name: string;
+  user_id: string;
   monthly_credits_total: number | null;
   monthly_credits_used: number;
   monthly_credits_remaining: number;
@@ -475,6 +484,8 @@ export interface CommandCodeQuotaData {
   total_tokens: number;
   total_tokens_in: number;
   total_tokens_out: number;
+  five_hour: CommandCodeWindowLimit | null;
+  weekly: CommandCodeWindowLimit | null;
 }
 
 export interface CommandCodeQuotaStatus {
@@ -728,6 +739,7 @@ export interface KimiApiModelPrice {
 
 export interface SpecialPricing {
   xunfei_per_call: number;
+  codebuddy_usd_per_credit: number;
   kimi_per_token: number;
   kimi_subscription_multiplier: number;
   kimi_api_models: KimiApiModelPrice[];

@@ -554,6 +554,24 @@ mod tests {
     }
 
     #[test]
+    fn codebuddy_raw_credit_survives_roundtrip() {
+        let store = temp_store();
+        let mut record = fixture(
+            "codebuddy",
+            "codebuddy",
+            "gpt-5.6-luna",
+            "2026-08-29T04:44:13.879Z",
+            100,
+        );
+        record.cost = 1.04;
+
+        assert_eq!(store.insert_batch(&[record.clone()]), 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0], record);
+    }
+
+    #[test]
     fn insert_ignores_duplicate_fingerprints() {
         let store = temp_store();
         let a = fixture(
