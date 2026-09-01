@@ -710,7 +710,7 @@ export const UsageSection = React.memo(function UsageSection({
                     label="Token"
                     value={formatNumber(s.total_tokens)}
                   />
-                  <Metric label="费用" value={formatCost(s.cost, s.source)} />
+                  <Metric label="费用" value={formatCost(s.cost)} />
                   <Metric
                     label="命中率"
                     value={formatPercent(s.cache_hit_ratio)}

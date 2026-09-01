@@ -1,408 +1,412 @@
+//! DimAgent (dim) source: polls the DimAgent console API
+//! (`https://dimagent.cn/api/log/self`), the same endpoint the console
+//! "Activity" page ([https://dimagent.cn/console/activity]) uses.
+//!
+//! This replaces the previous SQLite collection
+//! (`~/.dimcode/v2/dimcode.sqlite`, per-run aggregates in `usage_run_stats`):
+//! the console API exposes *per-request* usage — timestamp, model, token
+//! counts (input / output / cache hit), TTFT and TPS — which is the granular
+//! shape the dashboard wants, and it requires no local DB at all.
+//!
+//! Endpoint (reverse-engineered from the console frontend bundle):
+//!   GET /api/log/self?p={page}&page_size=100&type=2
+//!   → `{"data": {items: [...], page, page_size, total, total_capped}}`
+//!
+//! - `p` is the page number (`page` is ignored by the server) and
+//!   `page_size` is capped at 100.
+//! - `type=2` is the usage log filter the Activity page uses.
+//! - Items are ordered newest-first by `id`.
+//! - Token convention is OpenAI-style: `prompt_tokens` **includes**
+//!   `cache_tokens` (verified against `/api/user/daily-stats`, where
+//!   `total_tokens = prompt_tokens + completion_tokens`). We subtract cache
+//!   to normalize to the Anthropic convention used everywhere else (same as
+//!   the old codex / zcode / qoder / dim parsers). The API has no cache-write
+//!   field (daily-stats `cache_creation_tokens` is always 0), so
+//!   `cache_write_tokens = 0`.
+//!
+//! Authentication: `DIMAGENT_SESSION_COOKIE` (browser `session` cookie value;
+//! sent as `Cookie: session=<value>`), same credential as the quota card.
+//! Without it the source is unavailable (graceful degradation).
+//!
+//! Polling: every refresh cycle (`REFRESH_INTERVAL_SECS`, default 30s) we
+//! fetch page 1 and, only when new items appeared, the following pages up to
+//! the last already-ingested id. Fingerprinting in the refresh path dedups
+//! anything already persisted (e.g. after a page fetch fails mid-way and the
+//! same pages are re-fetched on the next poll).
+
 use super::DataSource;
 use crate::models::TokenRecord;
-use std::path::PathBuf;
+use chrono::TimeZone;
+use serde::Deserialize;
+use std::sync::{Mutex, OnceLock};
 
-/// Dim (dimcode) source: reads `~/.dimcode/v2/dimcode.sqlite` (SQLite).
-///
-/// Dim is an OpenCode fork and persists per-run usage into the
-/// `usage_run_stats` table (one row per completed run). Each row carries the
-/// final token counts plus an exact USD cost computed from the provider
-/// catalog (Dim's claimed "deepseek July pre-increase" API prices).
-///
-/// Token convention is OpenAI-style: `inputTokens` INCLUDES `cacheReadTokens`.
-/// We subtract to normalize to the Anthropic convention used everywhere else
-/// (same as the Codex / ZCode / Qoder parsers).
 #[derive(Default)]
 pub struct DimSource;
+
+/// Console API base URL (overridable for tests / future environments).
+const API_BASE: &str = "https://dimagent.cn/api";
+/// Server caps page_size at 100.
+const PAGE_SIZE: u64 = 100;
+const HTTP_TIMEOUT_SECS: u64 = 15;
+/// Safety cap on the number of pages fetched in one backfill (~40k records).
+const MAX_PAGES: u64 = 400;
+
+// ─── JSON payload shapes ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct LogPage {
+    items: Vec<LogItem>,
+    #[serde(default)]
+    total: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LogItem {
+    id: i64,
+    /// Unix timestamp (seconds).
+    created_at: i64,
+    /// `type` is a keyword; serde renames it.
+    #[serde(rename = "type")]
+    kind: i64,
+    #[serde(default)]
+    model_name: String,
+    #[serde(default)]
+    prompt_tokens: i64,
+    #[serde(default)]
+    completion_tokens: i64,
+    #[serde(default)]
+    cache_tokens: i64,
+    #[serde(default)]
+    ttft_ms: Option<f64>,
+    #[serde(default)]
+    tps: Option<f64>,
+}
+
+// ─── Polling state ───────────────────────────────────────────────────────────
+
+/// Polling state for the console API.
+struct DimPollState {
+    /// Newest `id` already ingested; poll stops fetching pages once it
+    /// crosses back to an id ≤ this value.
+    last_seen_id: Option<i64>,
+    /// Whether the most recent sync ran to completion (every page up to the
+    /// watermark / end of history was fetched without error). Only complete
+    /// syncs may advance `last_seen_id` and are safe to build the legacy-row
+    /// migration purge on.
+    last_sync_complete: bool,
+}
+
+static POLL_STATE: Mutex<DimPollState> = Mutex::new(DimPollState {
+    last_seen_id: None,
+    last_sync_complete: false,
+});
+
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build DimAgent HTTP client")
+    })
+}
 
 impl DataSource for DimSource {
     fn name(&self) -> &'static str {
         "dim"
     }
 
+    /// Full sync: fetch every available page (used at startup/restore).
     fn load(&self) -> Vec<TokenRecord> {
-        let path = Self::db_path();
-        tracing::info!("Loading Dim data from: {:?}", path);
-        let records = Self::parse(&path);
-        tracing::info!("Loaded {} dim records", records.len());
-        records
+        let (items, complete) = match Self::sync(None) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("DimAgent API sync failed: {e}");
+                return Vec::new();
+            }
+        };
+        Self::commit(items, complete)
     }
 
-    /// Incremental: skip entirely when the DB file (mtime, size) is unchanged.
+    /// Incremental: fetch only pages that contain ids newer than the last
+    /// ingested one (usually just one page → one HTTP request per poll).
     fn load_incremental(&self) -> Vec<TokenRecord> {
-        let path = Self::db_path();
-        let files = vec![path.clone()];
-        if self.changed_data_files().is_empty() {
-            return Vec::new();
-        }
-        let records = Self::parse(&path);
-        self.mark_files_parsed(&files);
-        records
-    }
-
-    fn data_files(&self) -> Vec<std::path::PathBuf> {
-        vec![Self::db_path()]
+        let last_seen = POLL_STATE.lock().unwrap().last_seen_id;
+        let (items, complete) = match Self::sync(last_seen) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("DimAgent API sync failed: {e}");
+                return Vec::new();
+            }
+        };
+        Self::commit(items, complete)
     }
 
     fn is_available(&self) -> bool {
-        Self::db_path().exists()
+        std::env::var("DIMAGENT_SESSION_COOKIE").is_ok()
     }
 }
 
 impl DimSource {
-    fn db_path() -> PathBuf {
-        std::env::var("DIM_DB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                super::home_dir()
-                    .join(".dimcode")
-                    .join("v2")
-                    .join("dimcode.sqlite")
-            })
+    /// Whether the most recent console-API sync completed successfully (no
+    /// page fetch failed / no safety-cap stop). Used by the startup migration
+    /// to decide it is safe to drop the legacy per-run rows.
+    pub fn last_sync_completed() -> bool {
+        POLL_STATE.lock().unwrap().last_sync_complete
     }
 
-    fn parse(path: &std::path::Path) -> Vec<TokenRecord> {
-        if !path.exists() {
-            tracing::warn!("Dim DB not found at {:?}, skipping", path);
-            return Vec::new();
-        }
-
-        let conn = match rusqlite::Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to open Dim DB: {}, skipping", e);
-                return Vec::new();
-            }
-        };
-
-        // One row per completed run. Skip incomplete runs and zero-usage rows
-        // (the aggregated ledger row for a still-active session or an empty run).
-        let sql = "SELECT sessionId, providerId, modelId,
-                          startedAt, endedAt, createdAt,
-                          inputTokens, outputTokens,
-                          cacheReadTokens, cacheWriteTokens, cost
-                   FROM usage_run_stats
-                   WHERE status = 'completed'
-                     AND (inputTokens > 0 OR outputTokens > 0
-                          OR cacheReadTokens > 0 OR cacheWriteTokens > 0)";
-
-        let mut stmt = match conn.prepare(sql) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("Failed to prepare Dim query: {}, skipping", e);
-                return Vec::new();
-            }
-        };
-
-        let mut records = Vec::new();
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, Option<i64>>(8)?,
-                row.get::<_, Option<i64>>(9)?,
-                row.get::<_, String>(10)?,
-            ))
-        });
-
-        match rows {
-            Ok(r) => {
-                for row in r.flatten() {
-                    let (
-                        _session_id,
-                        provider_id,
-                        model_id,
-                        started_at,
-                        ended_at,
-                        created_at,
-                        input_tokens,
-                        output_tokens,
-                        cache_read_tokens,
-                        cache_write_tokens,
-                        cost_json,
-                    ) = row;
-                    if let Some(record) = Self::to_record(
-                        &provider_id,
-                        &model_id,
-                        started_at.as_deref(),
-                        ended_at.as_deref(),
-                        &created_at,
-                        input_tokens,
-                        output_tokens,
-                        cache_read_tokens,
-                        cache_write_tokens,
-                        &cost_json,
-                    ) {
-                        records.push(record);
-                    }
+    /// Fetch pages from the console API, newest first, until either:
+    /// - a page contains an item with `id <= last_seen` (incremental mode —
+    ///   everything newer has been collected), or
+    /// - the last page is reached (full backfill: `last_seen == None`).
+    ///
+    /// Returns (items, complete): `complete` means the full new range was
+    /// fetched without error — only then may `last_seen_id` advance. A page
+    /// fetch failure stops the scan with `complete = false`: the caller still
+    /// ingests the pages collected so far (fingerprints dedup them on the
+    /// next poll) but keeps the old watermark.
+    ///
+    /// Runs on a dedicated std thread: `reqwest::blocking` must not be
+    /// created or used inside a tokio runtime context (it would panic when
+    /// its internal runtime is dropped). Calls here happen from
+    /// `#[tokio::main]` startup and from the refresh task.
+    fn sync(last_seen: Option<i64>) -> Result<(Vec<LogItem>, bool), String> {
+        let cookie = cookie()?;
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(move || Self::sync_inner(&cookie, last_seen));
+            match handle.join() {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!("DimAgent API sync thread panicked");
+                    Ok((Vec::new(), false))
                 }
             }
-            Err(e) => tracing::warn!("Failed to iterate Dim usage_run_stats rows: {}", e),
-        }
-
-        records
-    }
-
-    fn to_record(
-        _provider_id: &str,
-        model_id: &str,
-        started_at: Option<&str>,
-        ended_at: Option<&str>,
-        created_at: &str,
-        input_tokens: i64,
-        output_tokens: i64,
-        cache_read_tokens: Option<i64>,
-        cache_write_tokens: Option<i64>,
-        cost_json: &str,
-    ) -> Option<TokenRecord> {
-        let cache_read_tokens = cache_read_tokens.unwrap_or(0);
-        let cache_write_tokens = cache_write_tokens.unwrap_or(0);
-        // OpenAI convention: inputTokens includes cacheReadTokens → subtract.
-        let effective_input = (input_tokens - cache_read_tokens).max(0);
-        let total = effective_input + output_tokens + cache_read_tokens + cache_write_tokens;
-
-        // Prefer completion time, fall back to start, then creation.
-        let ts = ended_at.or(started_at).unwrap_or(created_at);
-        let (date, time) = super::parse_iso_timestamp(ts);
-
-        // All usage from the dim agent belongs to the `dim` vendor.
-        let provider = "dim".to_string();
-
-        // Exact catalog-computed USD cost (Dim's provider catalog = July
-        // deepseek API prices). Parse totalCostUsd from the cost JSON.
-        let cost = serde_json::from_str::<serde_json::Value>(cost_json)
-            .ok()
-            .and_then(|v| v.get("totalCostUsd").and_then(|c| c.as_f64()))
-            .unwrap_or(0.0);
-
-        // Dim bills in USD. Mark original_provider so the provider=="deepseek"
-        // CNY-as-is special case in display_cost() is bypassed; this routes the
-        // stored USD cost through the standard USD→CNY conversion instead.
-        let original_provider = Some("dim".to_string());
-
-        Some(TokenRecord {
-            date,
-            time,
-            api_key_prefix: "N/A".to_string(),
-            provider,
-            original_provider,
-            model: model_id.to_string(),
-            source: "dim".to_string(),
-            input_tokens: effective_input,
-            output_tokens,
-            cache_read_tokens: cache_read_tokens,
-            cache_write_tokens: cache_write_tokens,
-            total_tokens: total,
-            cost,
-            ttft_ms: None,
-            tps: None,
         })
     }
+
+    fn sync_inner(
+        cookie: &str,
+        last_seen: Option<i64>,
+    ) -> Result<(Vec<LogItem>, bool), String> {
+        let client = http_client();
+        let mut items = Vec::new();
+        let mut page = 1u64;
+
+        loop {
+            let data = match fetch_page(client, cookie, page) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(
+                        "DimAgent API: page {page} failed after {} item(s): {e}; \
+                         stopping, will retry next refresh",
+                        items.len()
+                    );
+                    return Ok((items, false));
+                }
+            };
+            let done = match last_seen {
+                Some(ls) => data.items.iter().any(|it| it.id <= ls),
+                None => data.items.len() < PAGE_SIZE as usize,
+            };
+            let n = data.items.len();
+            items.extend(data.items);
+            if done {
+                tracing::info!(
+                    "DimAgent API: fetched {} item(s) across {page} page(s) (total={})",
+                    items.len(),
+                    data.total
+                );
+                return Ok((items, true));
+            }
+            if n < PAGE_SIZE as usize {
+                // Server returned fewer than requested even though the page
+                // was not "done" — treat as end of history.
+                return Ok((items, true));
+            }
+            page += 1;
+            if page > MAX_PAGES {
+                tracing::warn!(
+                    "DimAgent API backfill hit MAX_PAGES ({MAX_PAGES}); stopping"
+                );
+                return Ok((items, false));
+            }
+        }
+    }
+
+    /// Convert fetched items to records and advance the watermark when the
+    /// sync completed. Items with zero total tokens (e.g. failed calls) are
+    /// dropped, matching the dashboard's zero-token convention.
+    fn commit(items: Vec<LogItem>, complete: bool) -> Vec<TokenRecord> {
+        let records: Vec<TokenRecord> =
+            items.iter().filter_map(item_to_record).collect();
+        {
+            let mut state = POLL_STATE.lock().unwrap();
+            state.last_sync_complete = complete;
+            if complete {
+                if let Some(max_id) = items.iter().map(|it| it.id).max() {
+                    state.last_seen_id = Some(max_id);
+                }
+            }
+        }
+        if !records.is_empty() {
+            tracing::info!(
+                "Loaded {} dim records{}",
+                records.len(),
+                if complete { "" } else { " (partial sync)" }
+            );
+        }
+        records
+    }
+}
+
+fn cookie() -> Result<String, String> {
+    std::env::var("DIMAGENT_SESSION_COOKIE")
+        .map_err(|_| "DIMAGENT_SESSION_COOKIE not set".to_string())
+}
+
+fn fetch_page(
+    client: &reqwest::blocking::Client,
+    cookie: &str,
+    page: u64,
+) -> Result<LogPage, String> {
+    let url = format!("{API_BASE}/log/self");
+    let resp = client
+        .get(&url)
+        .header("Cookie", format!("session={cookie}"))
+        .header("Accept", "application/json")
+        .query(&[
+            ("p", page.to_string()),
+            ("page_size", PAGE_SIZE.to_string()),
+            ("type", "2".to_string()),
+        ])
+        .send()
+        .map_err(|e| format!("GET {url}: {e}"))?;
+
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        const MAX_BODY: usize = 200;
+        let snippet = if body.chars().count() > MAX_BODY {
+            let short: String = body.chars().take(MAX_BODY).collect();
+            format!("{short}...")
+        } else {
+            body.clone()
+        };
+        return Err(format!("GET {url}: HTTP {status}: {snippet}"));
+    }
+
+    // `{"data": {...}}` envelope.
+    #[derive(Deserialize)]
+    struct Envelope {
+        data: LogPage,
+    }
+    serde_json::from_str::<Envelope>(&body)
+        .map(|e| e.data)
+        .map_err(|e| format!("parse {url}: {e}"))
+}
+
+/// Map one console-API log item to a [`TokenRecord`].
+///
+/// OpenAI cache convention: `prompt_tokens` includes `cache_tokens` →
+/// subtract to get the non-cached input. `cache_tokens` is a cache *read*
+/// (the API has no cache-write metric; daily reports show 0).
+fn item_to_record(item: &LogItem) -> Option<TokenRecord> {
+    if item.kind != 2 {
+        // Only usage entries (the Activity page's `type=2` filter).
+        return None;
+    }
+    let cache_read = item.cache_tokens.max(0);
+    let effective_input = (item.prompt_tokens - cache_read).max(0);
+    let output = item.completion_tokens.max(0);
+    let total = effective_input + output + cache_read;
+    if total == 0 {
+        // Zero-token row (e.g. failed/429 call) — skip, see dashboard norms.
+        return None;
+    }
+
+    let dt = chrono::Utc.timestamp_opt(item.created_at, 0).single()?;
+    let (date, time) = super::parse_iso_timestamp(&dt.to_rfc3339());
+
+    Some(TokenRecord {
+        date,
+        time,
+        api_key_prefix: "N/A".to_string(),
+        provider: "dim".to_string(),
+        original_provider: Some("dim".to_string()),
+        model: item.model_name.clone(),
+        source: "dim".to_string(),
+        input_tokens: effective_input,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: 0,
+        total_tokens: total,
+        // Estimated at display time from pricing.toml (see display_cost:
+        // source "dim" → per-model token rates, CNY-priced for DeepSeek).
+        cost: 0.0,
+        ttft_ms: item.ttft_ms,
+        tps: item.tps,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
-    /// Build a temp dim DB with one completed row per entry.
-    /// Each entry is `model|createdAt|endedAt|input|output|cacheRead|cacheWrite|totalCostUsd`.
-    fn make_db(entries: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("dimcode.sqlite");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE usage_run_stats (
-                runId text primary key,
-                sessionId text not null,
-                providerId text not null,
-                modelId text not null,
-                status text not null,
-                startedAt text,
-                endedAt text,
-                inputTokens integer not null,
-                outputTokens integer not null,
-                totalTokens integer not null,
-                cacheReadTokens integer,
-                cacheWriteTokens integer,
-                cost text not null,
-                pricing text not null,
-                createdAt text not null,
-                updatedAt text not null
-            );",
+    fn sample_item() -> LogItem {
+        serde_json::from_str(
+            r#"{"id":10339681,"created_at":1788298903,"type":2,
+                "token_name":"oauth:DimAgent Public",
+                "model_name":"deepseek-v4-flash-vision-exp",
+                "prompt_tokens":49182,"completion_tokens":635,
+                "cache_tokens":48896,"use_time":6,"use_time_ms":6365,
+                "ttft_ms":275,"tps":104.26929392446634,"is_stream":true}"#,
         )
-        .unwrap();
-        for (i, entry) in entries.iter().enumerate() {
-            let f: Vec<&str> = entry.split('|').collect();
-            let input: i64 = f[3].parse().unwrap();
-            let output: i64 = f[4].parse().unwrap();
-            let cache_read: i64 = f[5].parse().unwrap();
-            let cache_write: i64 = f[6].parse().unwrap();
-            let cost: f64 = f[7].parse().unwrap();
-            conn.execute(
-                "INSERT INTO usage_run_stats (runId, sessionId, providerId,
-                    modelId, status, startedAt, endedAt, inputTokens,
-                    outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens,
-                    cost, pricing, createdAt, updatedAt)
-                 VALUES (?1, 'sess-1', 'dimcode-api-oauth', ?2, 'completed',
-                         ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '{}', '2026-08-22T00:00:00Z',
-                         '2026-08-22T00:00:00Z')",
-                rusqlite::params![
-                    format!("run-{i}"),
-                    f[0],
-                    f[1],
-                    f[2],
-                    input,
-                    output,
-                    input + output,
-                    cache_read,
-                    cache_write,
-                    format!(
-                        "{{\"inputCostUsd\":0,\"outputCostUsd\":0,\"cacheReadCostUsd\":0,\"totalCostUsd\":{cost},\"quality\":\"exact\"}}"
-                    ),
-                ],
-            )
-            .unwrap();
-        }
-        drop(conn);
-        (dir, db_path)
+        .unwrap()
     }
 
     #[test]
-    fn normalizes_openai_cache_convention() {
-        // Real dim sample: input=5321963 includes cacheRead=5246464.
-        let (_dir, db_path) = make_db(&[
-            "deepseek-v4-flash-vision-exp|2026-08-22T12:11:31Z|2026-08-22T12:22:26Z|5321963|46865|5246464|0|0.0383821592",
-        ]);
-        let records = DimSource::parse(&db_path);
-
-        assert_eq!(records.len(), 1);
-        let r = &records[0];
+    fn maps_item_to_record_with_openai_cache_subtraction() {
+        let r = item_to_record(&sample_item()).unwrap();
         assert_eq!(r.provider, "dim");
-        assert_eq!(r.model, "deepseek-v4-flash-vision-exp");
-        assert_eq!(r.source, "dim");
-        assert_eq!(r.input_tokens, 75499); // 5321963 - 5246464
-        assert_eq!(r.output_tokens, 46865);
-        assert_eq!(r.cache_read_tokens, 5246464);
-        assert_eq!(r.cache_write_tokens, 0);
-        // effective_input + output + cache_read + cache_write = 5368828
-        assert_eq!(r.total_tokens, 75499 + 46865 + 5246464 + 0);
-        assert!((r.cost - 0.0383821592).abs() < 1e-9);
         assert_eq!(r.original_provider.as_deref(), Some("dim"));
-        assert_eq!(r.date, "2026-08-22");
-    }
-
-    #[test]
-    fn handles_null_cache_columns() {
-        // Real dim DB has NULL cacheWriteTokens (and possibly cacheReadTokens).
-        // These must not cause the row to be dropped (flake via row.get::<i64>).
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("dimcode.sqlite");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE usage_run_stats (
-                runId text primary key, sessionId text not null,
-                providerId text not null, modelId text not null, status text not null,
-                startedAt text, endedAt text, inputTokens integer not null,
-                outputTokens integer not null, totalTokens integer not null,
-                cacheReadTokens integer, cacheWriteTokens integer,
-                cost text not null, pricing text not null,
-                createdAt text not null, updatedAt text not null
-            );",
-        )
-        .unwrap();
-        // cacheReadTokens and cacheWriteTokens left NULL.
-        conn.execute(
-            "INSERT INTO usage_run_stats (runId, sessionId, providerId,
-                modelId, status, startedAt, endedAt, inputTokens,
-                outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens,
-                cost, pricing, createdAt, updatedAt)
-             VALUES ('run-1', 'sess', 'dimcode-api-oauth', 'deepseek-v4-flash',
-                     'completed', '2026-08-22T00:00:00Z', '2026-08-22T00:01:00Z',
-                     1000, 50, 1050, NULL, NULL, '{}', '{}',
-                     '2026-08-22T00:00:00Z', '2026-08-22T00:00:00Z')",
-            [],
-        )
-        .unwrap();
-        drop(conn);
-
-        let records = DimSource::parse(&db_path);
-        assert_eq!(records.len(), 1, "NULL cache columns must not drop the row");
-        let r = &records[0];
-        assert_eq!(r.input_tokens, 1000);
-        assert_eq!(r.cache_read_tokens, 0);
+        assert_eq!(r.source, "dim");
+        assert_eq!(r.model, "deepseek-v4-flash-vision-exp");
+        // prompt 49182 includes cache 48896 → non-cached input is 286.
+        assert_eq!(r.input_tokens, 286);
+        assert_eq!(r.output_tokens, 635);
+        assert_eq!(r.cache_read_tokens, 48896);
         assert_eq!(r.cache_write_tokens, 0);
-        assert_eq!(r.total_tokens, 1050);
+        assert_eq!(r.total_tokens, 286 + 635 + 48896);
+        assert_eq!(r.cost, 0.0);
+        assert_eq!(r.ttft_ms, Some(275.0));
+        assert!(r.tps.is_some());
+        assert_eq!(r.date, "2026-09-01");
     }
 
     #[test]
-    fn maps_non_deepseek_model_to_resolved_provider_or_raw_id() {
-        // All dim records are attributed to the `dim` vendor regardless of model/providerId.
-        let (_dir, db_path) = make_db(&[
-            "glm-5.2|2026-08-22T12:11:31Z|2026-08-22T12:22:26Z|1000|200|300|0|0.001",
-        ]);
-        let records = DimSource::parse(&db_path);
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].provider, "dim");
+    fn cache_ratio_uses_normalized_input() {
+        let r = item_to_record(&sample_item()).unwrap();
+        // 48896 / (286 + 48896) ≈ 99.4% — the UI formula.
+        assert!(r.cache_hit_ratio() > 99.0);
     }
 
     #[test]
-    fn skips_zero_usage_and_non_completed_rows() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("dimcode.sqlite");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE usage_run_stats (
-                runId text primary key, sessionId text not null,
-                providerId text not null, modelId text not null, status text not null,
-                startedAt text, endedAt text, inputTokens integer not null,
-                outputTokens integer not null, totalTokens integer not null,
-                cacheReadTokens integer, cacheWriteTokens integer,
-                cost text not null, pricing text not null,
-                createdAt text not null, updatedAt text not null
-            );",
-        )
-        .unwrap();
-        for (id, status, input, output) in [
-            ("ok", "completed", 100, 20),
-            ("err", "error", 500, 0),
-            ("zero", "completed", 0, 0),
-        ] {
-            conn.execute(
-                "INSERT INTO usage_run_stats (runId, sessionId, providerId,
-                    modelId, status, startedAt, endedAt, inputTokens,
-                    outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens,
-                    cost, pricing, createdAt, updatedAt)
-                 VALUES (?1, 'sess', 'p', 'deepseek-v4-flash', ?2,
-                         '2026-08-22T00:00:00Z', '2026-08-22T00:01:00Z', ?3, ?4,
-                         ?5, 0, 0, '{}', '{}', '2026-08-22T00:00:00Z',
-                         '2026-08-22T00:00:00Z')",
-                rusqlite::params![id, status, input, output, input + output],
-            )
-            .unwrap();
-        }
-        drop(conn);
+    fn drops_zero_token_and_non_usage_items() {
+        let mut zero = sample_item();
+        zero.prompt_tokens = 0;
+        zero.completion_tokens = 0;
+        zero.cache_tokens = 0;
+        assert!(item_to_record(&zero).is_none());
 
-        let records = DimSource::parse(&db_path);
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].input_tokens, 100);
-        assert_eq!(records[0].output_tokens, 20);
-        assert_eq!(records[0].total_tokens, 120);
+        let mut other = sample_item();
+        other.kind = 1;
+        assert!(item_to_record(&other).is_none());
     }
 
     #[test]
-    fn missing_db_returns_empty() {
-        let dir = tempdir().unwrap();
-        let records = DimSource::parse(&dir.path().join("nope.sqlite"));
-        assert!(records.is_empty());
+    fn clock_roundtrip_is_rfc3339_utc() {
+        let r = item_to_record(&sample_item()).unwrap();
+        assert!(r.time.starts_with("2026-09-01T21:41:43"));
+        assert!(r.time.ends_with("+00:00"));
     }
 }

@@ -17,12 +17,22 @@
 
 use crate::models::TokenRecord;
 use rusqlite::{params, Connection, OpenFlags};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// Env var overriding the token-stats database path.
 pub const DB_PATH_ENV: &str = "TOKEN_STATS_DB_PATH";
+
+/// `count()` is queried by the store-info endpoint on every poll; cache it
+/// briefly so we don't run a `SELECT COUNT(*)` against SQLite each time.
+/// The DB is only written in batches every `FLUSH_DELAY` (120s), so a 60s
+/// staleness window can't drift far from reality.
+const COUNT_CACHE_TTL: Duration = Duration::from_secs(60);
+
+static COUNT_CACHE: LazyLock<Mutex<HashMap<PathBuf, (Instant, usize)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Default database location: `~/.config/token-stats/token-stats.db`
 /// (same directory family as the persisted Fenno auth state).
@@ -246,6 +256,24 @@ impl TokenStore {
 
     /// Number of records currently persisted.
     pub fn count(&self) -> usize {
+        let path = self.path().to_path_buf();
+        let now = Instant::now();
+        {
+            let guard = COUNT_CACHE.lock().unwrap();
+            if let Some((fetched_at, n)) = guard.get(&path) {
+                if now.duration_since(*fetched_at) < COUNT_CACHE_TTL {
+                    return *n;
+                }
+            }
+        }
+        let n = self.count_uncached();
+        COUNT_CACHE.lock().unwrap().insert(path, (now, n));
+        n
+    }
+
+    /// Uncached `COUNT(*)` — used after every disk write so the cache stays
+    /// accurate shortly after new records are persisted.
+    fn count_uncached(&self) -> usize {
         let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(e) => {
@@ -310,6 +338,120 @@ impl TokenStore {
             }
         };
         collapse_unknown_codex_twins(&conn)
+    }
+
+    /// One-time migration helper: remove persisted legacy `source='dim'` rows
+    /// (per-run aggregates collected from the local SQLite before the console
+    /// API source existed) once per-request console-API records have taken
+    /// over. `keep` holds the fingerprints of the dim records just loaded
+    /// from the API (full backfill).
+    ///
+    /// A row is deleted only when its fingerprint is NOT in `keep`, so
+    /// console-API rows are never removed even if they lack ttft/tps. Returns
+    /// the number of rows removed; idempotent (no-op once legacy rows are
+    /// gone).
+    pub fn purge_dim_legacy(&self, keep: &std::collections::HashSet<u64>) -> usize {
+        let mut conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let rows: Vec<i64> = {
+            let mut stmt = match conn.prepare(
+                "SELECT id, time, provider, model, source,
+                        input_tokens, output_tokens, cache_read_tokens
+                 FROM token_records WHERE source = 'dim'",
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("Failed to prepare dim purge query: {}", e);
+                    return 0;
+                }
+            };
+            let iter = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            });
+            let mut to_delete = Vec::new();
+            match iter {
+                Ok(rows) => {
+                    for row in rows.flatten() {
+                        let (id, time, provider, model, source, input, output, cache_read) = row;
+                        let rec = TokenRecord {
+                            time,
+                            provider,
+                            model,
+                            source,
+                            input_tokens: input,
+                            output_tokens: output,
+                            cache_read_tokens: cache_read,
+                            // Remaining fields are irrelevant for fingerprint().
+                            date: String::new(),
+                            api_key_prefix: String::new(),
+                            original_provider: None,
+                            cache_write_tokens: 0,
+                            total_tokens: 0,
+                            cost: 0.0,
+                            ttft_ms: None,
+                            tps: None,
+                        };
+                        if !keep.contains(&rec.fingerprint()) {
+                            to_delete.push(id);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to iterate dim rows for purge: {}", e);
+                    return 0;
+                }
+            }
+            to_delete
+        };
+        if rows.is_empty() {
+            return 0;
+        }
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("Failed to start dim purge transaction: {}", e);
+                return 0;
+            }
+        };
+        let mut deleted = 0usize;
+        for id in &rows {
+            match tx.execute("DELETE FROM token_records WHERE id = ?1", params![id]) {
+                Ok(n) => deleted += n,
+                Err(e) => {
+                    tracing::warn!("Failed to delete legacy dim row {id}: {e}");
+                    break;
+                }
+            }
+        }
+        match tx.commit() {
+            Ok(()) => {
+                if deleted > 0 {
+                    tracing::info!(
+                        "Migrated dim collection: removed {deleted} legacy per-run \
+                         record(s) replaced by console-API per-request records"
+                    );
+                }
+                deleted
+            }
+            Err(e) => {
+                tracing::warn!("Failed to commit dim purge: {e}");
+                0
+            }
+        }
     }
 
     /// Insert records that are not already present (fingerprint-unique).

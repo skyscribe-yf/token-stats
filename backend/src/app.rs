@@ -5,7 +5,7 @@
 use crate::models::TokenRecord;
 use crate::quota::QuotaFetcher;
 use crate::routes;
-use crate::sources::{load_all_sources, load_changed_sources};
+use crate::sources::{load_all_sources, load_changed_sources, DimSource};
 use crate::store::{PendingBuffer, TokenStore};
 use axum::{
     routing::{get, post},
@@ -24,12 +24,79 @@ const FLUSH_DELAY: Duration = Duration::from_secs(120);
 /// How often the flush task checks whether a write is due.
 const FLUSH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
+/// In-memory records plus the fingerprint set used to dedup new arrivals,
+/// behind a single lock so the two can never diverge.
+///
+/// `seen` is a *maintained* superset: a fingerprint is inserted when its
+/// record is added and never removed. A dropped twin's fingerprint staying
+/// in the set is harmless — it merely prevents re-adding a genuine
+/// duplicate — so the set only grows, which removes the per-cycle HashSet
+/// rebuild that the refresh fast path used to pay on every pass.
+pub struct RecordTable {
+    pub records: Vec<TokenRecord>,
+    pub seen: HashSet<u64>,
+}
+
+impl RecordTable {
+    pub fn new(records: Vec<TokenRecord>) -> Self {
+        let seen = records.iter().map(TokenRecord::fingerprint).collect();
+        Self { records, seen }
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, TokenRecord> {
+        self.records.iter()
+    }
+
+    /// Insert a single record if its fingerprint is new. Returns true if it
+    /// was added.
+    pub fn push(&mut self, r: TokenRecord) -> bool {
+        let fp = r.fingerprint();
+        if self.seen.insert(fp) {
+            self.records.push(r);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Insert many records, skipping any whose fingerprint is already present.
+    pub fn extend(&mut self, new: impl IntoIterator<Item = TokenRecord>) {
+        for r in new {
+            self.push(r);
+        }
+    }
+
+    /// Replace the entire table (store/backup restore). Rebuilds the
+    /// fingerprint set from the new records.
+    pub fn replace_all(&mut self, records: Vec<TokenRecord>) {
+        self.seen = records.iter().map(TokenRecord::fingerprint).collect();
+        self.records = records;
+    }
+}
+
+impl std::ops::Deref for RecordTable {
+    type Target = Vec<TokenRecord>;
+    fn deref(&self) -> &Vec<TokenRecord> {
+        &self.records
+    }
+}
+
+impl std::ops::DerefMut for RecordTable {
+    fn deref_mut(&mut self) -> &mut Vec<TokenRecord> {
+        &mut self.records
+    }
+}
+
 /// Shared application state (thread-safe, arc-locked records).
 #[derive(Clone)]
 pub struct AppState {
     /// Live in-memory records the frontend reads. Updated immediately on
     /// refresh; a superset of the store (memory = DB + queued records).
-    pub records: Arc<RwLock<Vec<TokenRecord>>>,
+    pub records: Arc<RwLock<RecordTable>>,
     /// Dedicated SQLite store: durable source of truth for token history.
     /// Writes are deferred through `pending` and batched at most once per
     /// `FLUSH_DELAY` to avoid frequent SSD writes.
@@ -55,6 +122,25 @@ impl AppState {
         let source_records = load_all_sources();
         let source_total = source_records.len();
         let has_cc = source_records.iter().any(|r| r.source == "commandcode");
+
+        // ── Dim collection migration ────────────────────────────────────
+        // The dim source now ingests per-request records from the DimAgent
+        // console API. Legacy per-run rows (collected from the local SQLite
+        // before the API source) would double-count the same usage at a
+        // coarser granularity, so once a complete API backfill has delivered
+        // records we drop the legacy rows (fingerprint-guarded: only rows
+        // NOT matching an API record are removed). Until the API backfill
+        // completes (or is unavailable), the legacy history is kept intact.
+        let dim_keep: HashSet<u64> = source_records
+            .iter()
+            .filter(|r| r.source == "dim")
+            .map(TokenRecord::fingerprint)
+            .collect();
+        let dim_migrated = !dim_keep.is_empty() && DimSource::last_sync_completed();
+        if dim_migrated {
+            store.purge_dim_legacy(&dim_keep);
+        }
+
         let new_from_sources: Vec<TokenRecord> = source_records
             .into_iter()
             .filter(|r| seen.insert(r.fingerprint()))
@@ -75,6 +161,13 @@ impl AppState {
         // refresh path uses and the load_all ORDER BY for identical shape.
         let mut records: Vec<TokenRecord> = db_records
             .into_iter()
+            .filter(|r| {
+                // Drop the legacy per-run dim rows the migration purge just
+                // removed from the store so memory and DB stay in sync.
+                !(dim_migrated
+                    && r.source == "dim"
+                    && !dim_keep.contains(&r.fingerprint()))
+            })
             .chain(new_from_sources)
             .collect();
         if has_cc {
@@ -95,7 +188,7 @@ impl AppState {
             source_total
         );
         Self {
-            records: Arc::new(RwLock::new(records)),
+            records: Arc::new(RwLock::new(RecordTable::new(records))),
             store,
             pending: Arc::new(PendingBuffer::new()),
             quota_fetcher: Arc::new(QuotaFetcher::new()),
@@ -118,14 +211,14 @@ impl AppState {
     pub async fn refresh_records(&self) -> usize {
         let new_records = load_changed_sources();
 
-        // Phase 1: Fast path — filter against memory under a read lock. Most
-        // refreshes find nothing new and never take the write lock.
+        // Phase 1: Fast path — check against the maintained fingerprint set
+        // under a read lock. Most refreshes find nothing new and never take
+        // the write lock, and (unlike before) no per-cycle HashSet is built.
         let candidates: Vec<TokenRecord> = {
             let guard = self.records.read().await;
-            let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
             new_records
                 .into_iter()
-                .filter(|r| !seen.contains(&r.fingerprint()))
+                .filter(|r| !guard.seen.contains(&r.fingerprint()))
                 .collect()
         };
 
@@ -142,10 +235,9 @@ impl AppState {
         // and queue for the deferred write under the same lock (no await
         // inside, so the two can never diverge).
         let mut guard = self.records.write().await;
-        let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
         let records_to_add: Vec<TokenRecord> = candidates
             .into_iter()
-            .filter(|r| !seen.contains(&r.fingerprint()))
+            .filter(|r| !guard.seen.contains(&r.fingerprint()))
             .collect();
         if records_to_add.is_empty() {
             return 0;
@@ -156,19 +248,18 @@ impl AppState {
         let has_codex = records_to_add.iter().any(|r| r.source == "codex");
         guard.extend(records_to_add.iter().cloned());
         if has_cc {
-            drop_commandcode_inclusive_twins(&mut guard);
+            drop_commandcode_inclusive_twins(&mut guard.records);
         }
         if has_codex {
-            drop_unknown_codex_twins(&mut guard);
+            drop_unknown_codex_twins(&mut guard.records);
         }
         let added = records_to_add.len();
         self.pending.queue(records_to_add);
-        if has_cc {
-            self.store.collapse_commandcode_inclusive_twins();
-        }
-        if has_codex {
-            self.store.collapse_unknown_codex_twins();
-        }
+        // DB-level twin collapse is deferred to startup (AppState::new already
+        // collapses the whole store) and to the flush path. Scanning the full
+        // DB here on every refresh where cc/codex rows arrive was a steady
+        // SSD/CPU cost for no runtime benefit — the in-memory `seen` set and
+        // the `drop_*_twins` above already keep the live view deduplicated.
         tracing::info!(
             "Refreshed data: {} records ({} new, queued for deferred write)",
             guard.len(),

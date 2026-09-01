@@ -13,6 +13,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tracing::{info, warn};
 
 const XAI_API_BASE: &str = "https://api.x.ai";
@@ -21,7 +22,9 @@ const XAI_TIMEOUT_SECS: u64 = 15;
 const GROK_CREDITS_TIMEOUT_SECS: u64 = 15;
 const EMPTY_GRPC_WEB_BODY: &[u8] = &[0, 0, 0, 0, 0];
 
-/// Build a reqwest Client for api.x.ai calls.
+/// Shared reqwest Client for api.x.ai calls: reuses one connection pool
+/// across every grok quota fetch instead of building (and tearing down) a
+/// client — and its proxy wiring — on each request.
 ///
 /// api.x.ai is not reachable directly from this host (both IPv4 and IPv6
 /// TCP connections time out). It can be reached through the local HTTP
@@ -29,6 +32,8 @@ const EMPTY_GRPC_WEB_BODY: &[u8] = &[0, 0, 0, 0, 0];
 /// relying on env vars so the fetcher works under systemd (where env vars
 /// differ from the interactive shell). Falls back to direct connection if
 /// no proxy env vars are set.
+static XAI_CLIENT: LazyLock<Client> = LazyLock::new(build_xai_client);
+
 fn build_xai_client() -> Client {
     // Honor explicit proxy env vars if set, otherwise configure the local proxy.
     let mut builder = reqwest::Client::builder();
@@ -142,8 +147,8 @@ pub async fn fetch_grok_quota(_client: &Client, grok_records: &[TokenRecord]) ->
     };
 
     // Use IPv4-only client to avoid broken IPv6 on this host
-    let client = build_xai_client();
-    let me_result = fetch_me(&client, &api_key).await;
+    let client = &XAI_CLIENT;
+    let me_result = fetch_me(client, &api_key).await;
 
     let (user_id, team_id, zdr_status) = match me_result {
         Ok(me) => (me.user_id, me.team_id, me.zdr_status),

@@ -55,17 +55,19 @@ impl DataSource for KimiCodeSource {
     /// Incremental: only re-parse wire.jsonl files whose (mtime, size)
     /// changed since the last pass.
     fn load_incremental(&self) -> Vec<TokenRecord> {
-        let mut all_records = Vec::new();
-        for data_dir in Self::data_dirs() {
-            let base = data_dir.join("sessions");
-            let files = Self::wire_files(&base);
-            let changed = self.changed_data_files();
-            if !changed.is_empty() {
-                all_records.extend(Self::parse_files(&files, &changed));
-            }
-            self.mark_files_parsed(&files);
-        }
-        all_records
+        // One walk over every data dir. `parse_files` already skips paths that
+        // aren't in `changed`, so the previous per-directory loop only re-walked
+        // the tree — and calling `changed_data_files()` inside it made that
+        // O(dirs²) walks per refresh.
+        let files = self.data_files();
+        let changed = super::changed_files(&files);
+        let records = if changed.is_empty() {
+            Vec::new()
+        } else {
+            Self::parse_files(&files, &changed)
+        };
+        self.mark_files_parsed(&files);
+        records
     }
 
     fn data_files(&self) -> Vec<std::path::PathBuf> {

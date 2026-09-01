@@ -84,9 +84,9 @@ fn default_kimi_api_models() -> Vec<KimiApiModelPrice> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
-    /// CodeBuddy credits are priced at $10 per 3000 credits.
-    #[serde(default = "default_codebuddy_usd_per_credit")]
-    pub codebuddy_usd_per_credit: f64,
+    /// CodeBuddy credits are priced at ¥70 per 4000 credits (CNY, no FX).
+    #[serde(default = "default_codebuddy_cny_per_credit")]
+    pub codebuddy_cny_per_credit: f64,
     /// Legacy flat Kimi rate, retained solely to parse existing pricing files.
     #[serde(default)]
     pub kimi_per_token: f64,
@@ -158,8 +158,8 @@ pub struct SpecialPricing {
     pub xunfei_off_peak: Option<XunfeiOffPeakConfig>,
 }
 
-fn default_codebuddy_usd_per_credit() -> f64 {
-    10.0 / 3000.0
+fn default_codebuddy_cny_per_credit() -> f64 {
+    70.0 / 4000.0
 }
 
 fn default_grok_divisor() -> f64 {
@@ -325,7 +325,7 @@ impl Default for PricingConfig {
             usd_to_cny_segments: Vec::new(),
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
-                codebuddy_usd_per_credit: default_codebuddy_usd_per_credit(),
+                codebuddy_cny_per_credit: default_codebuddy_cny_per_credit(),
                 kimi_per_token: 199.0 / 2_800_000_000.0,
                 kimi_subscription_multiplier: default_kimi_subscription_multiplier(),
                 kimi_api_models: default_kimi_api_models(),
@@ -1353,11 +1353,9 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     let schedule = &state.rate_schedule;
 
     // CodeBuddy stores the raw credit charge in TokenRecord.cost. Convert
-    // credits to USD, then use the record's historical USD→CNY rate.
+    // credits to CNY at the flat domestic rate (¥70 / 4000 credits).
     if record.source == "codebuddy" {
-        return record.cost
-            * cfg.special.codebuddy_usd_per_credit
-            * schedule.rate_for(&record.time);
+        return record.cost * cfg.special.codebuddy_cny_per_credit;
     }
 
     // 1. 讯飞 (xunfei / xunfei-ex): flat per-call rate in CNY
@@ -1624,6 +1622,7 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         || record.source == "grok-cli"
         || record.source == "zcode"
         || record.source == "dsh"
+        || record.source == "dim"
     {
         if let Some(mp) = resolve_model_price(&state, record) {
             let base_rate = if is_yairouter_billed(record) {
@@ -1672,8 +1671,15 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         }
     }
 
-    // Fallback: keep as-is (likely 0)
-    record.cost
+    // Fallback: no pricing entry for this model. Pi records always carry a
+    // real stored cost, so 0 there means genuinely free. Other sources:
+    // return -1 to signal "unknown cost" — the frontend renders N/A and the
+    // aggregator skips it in sums (totals stay 0, same as before).
+    if record.source == "pi" {
+        record.cost
+    } else {
+        -1.0
+    }
 }
 
 #[cfg(test)]
@@ -1746,7 +1752,7 @@ mod tests {
             .expect("backend/pricing.toml should parse as PricingConfig");
 
         assert_eq!(cfg.special.commandcode_divisor, 9.95);
-        assert!((cfg.special.codebuddy_usd_per_credit - 10.0 / 3000.0).abs() < 1e-15);
+        assert!((cfg.special.codebuddy_cny_per_credit - 70.0 / 4000.0).abs() < 1e-15);
         assert_eq!(cfg.special.ainaba_segments.len(), 3);
         assert_eq!(cfg.special.ainaba_segments[1].divisor, 20.20202);
         assert_eq!(cfg.special.ainaba_segments[2].divisor, 21.538461538);
@@ -1804,7 +1810,7 @@ mod tests {
     }
 
     #[test]
-    fn codebuddy_credits_convert_to_rmb_with_record_rate() {
+    fn codebuddy_credits_convert_to_cny_at_flat_rate() {
         let _guard = pricing_test_guard();
         let mut config = PricingConfig::default();
         config.usd_to_cny = 6.0;
@@ -1823,13 +1829,14 @@ mod tests {
         let mut record = make_record("codebuddy", "codebuddy", "gpt-5.6-luna", 100, 3000.0);
         record.date = "2026-08-29".to_string();
         record.time = "2026-08-29T04:44:13.879Z".to_string();
-        assert!((display_cost(&record) - 70.0).abs() < 1e-12);
+        // 3000 credits × ¥0.0175 = ¥52.5, regardless of FX segments.
+        assert!((display_cost(&record) - 52.5).abs() < 1e-12);
     }
 
     #[test]
-    fn codebuddy_default_price_is_ten_dollars_per_three_thousand_credits() {
+    fn codebuddy_default_price_is_seventy_yuan_per_four_thousand_credits() {
         let config = PricingConfig::default();
-        assert!((config.special.codebuddy_usd_per_credit - 10.0 / 3000.0).abs() < 1e-15);
+        assert!((config.special.codebuddy_cny_per_credit - 70.0 / 4000.0).abs() < 1e-15);
     }
 
     #[test]
@@ -2104,6 +2111,81 @@ mod tests {
             expected,
             cost
         );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_console_api_cost_estimated_from_cny_model_price() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // Console-API dim records carry no stored cost; the derived-source
+        // branch prices them from pricing.toml (DeepSeek priced in CNY
+        // directly — no USD→CNY conversion).
+        let mut record =
+            make_record("dim", "dim", "deepseek-v4-flash-vision-exp", 1_000_000, 0.0);
+        record.input_tokens = 15276;
+        record.output_tokens = 1048;
+        record.cache_read_tokens = 17664;
+        record.cache_write_tokens = 0;
+        record.time = "2026-08-01T00:00:00Z".to_string();
+        let cost = display_cost(&record);
+        let expected = 15276.0 / 1_000_000.0 * 1.0 // input_cny
+            + 1048.0 / 1_000_000.0 * 2.0 // output_cny
+            + 17664.0 / 1_000_000.0 * 0.02; // cache_read_cny
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "dim cost: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn zcode_free_model_costs_zero() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // z-ai/glm-5.3-free is billed via Tokenrouter and priced at 0 in
+        // pricing.toml → display cost is exactly 0 (free), not N/A.
+        let mut record = make_record("zcode", "tokenrouter", "z-ai/glm-5.3-free", 0, 0.0);
+        record.input_tokens = 15276;
+        record.output_tokens = 1048;
+        record.cache_read_tokens = 17664;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 33988;
+        record.time = "2026-08-01T00:00:00Z".to_string();
+        assert_eq!(display_cost(&record), 0.0);
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn unknown_model_cost_is_negative_sentinel() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // No pricing.toml entry → -1 signals "unknown cost" (frontend N/A).
+        let mut record = make_record("zcode", "tokenrouter", "some-unknown-model", 0, 0.0);
+        record.input_tokens = 100;
+        record.output_tokens = 20;
+        record.total_tokens = 120;
+        record.time = "2026-08-01T00:00:00Z".to_string();
+        assert_eq!(display_cost(&record), -1.0);
+
+        // Pi records keep 0 (stored cost is real; 0 = free).
+        let mut pi = make_record("pi", "openai", "some-unknown-model", 0, 0.0);
+        pi.input_tokens = 100;
+        pi.output_tokens = 20;
+        pi.total_tokens = 120;
+        pi.time = "2026-08-01T00:00:00Z".to_string();
+        assert_eq!(display_cost(&pi), 0.0);
 
         restore_pricing_env(prev_env);
     }

@@ -32,7 +32,9 @@ impl DataSource for CodeBuddySource {
     fn load_incremental(&self) -> Vec<TokenRecord> {
         let base = Self::projects_path();
         let files = Self::jsonl_files(&base);
-        let changed = self.changed_data_files();
+        // Reuse the list we just built: the trait default for
+        // `changed_data_files` would walk the projects tree again.
+        let changed = super::changed_files(&files);
         let records = if changed.is_empty() {
             Vec::new()
         } else {

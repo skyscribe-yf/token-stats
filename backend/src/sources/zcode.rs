@@ -1,6 +1,7 @@
 use super::DataSource;
 use crate::models::TokenRecord;
 use chrono::{TimeZone, Utc};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// ZCode source: reads `~/.zcode/cli/db/db.sqlite` (SQLite) `model_usage` table.
@@ -11,9 +12,11 @@ use std::path::PathBuf;
 /// and `cache_creation_input_tokens` — so the parser subtracts them to match
 /// the Anthropic convention used everywhere else (same as the Codex parser).
 ///
-/// All requests are billed through the OpenCode Go subscription
-/// (`provider_metadata_json` = `{"OpenCodeGo": {}}`), so records are tagged
-/// with provider="opencode-go" to apply the plan divisor in display_cost().
+/// Billing provider comes from `provider_metadata_json` (e.g.
+/// `{"OpenCodeGo": {}}` / `{"Tokenrouter": {}}`), which names the provider
+/// that billed the request. Records are tagged with that provider so
+/// display_cost() applies the right formula (opencode-go → plan divisor,
+/// tokenrouter → free/listed pricing).
 #[derive(Default)]
 pub struct ZcodeSource;
 
@@ -43,12 +46,52 @@ impl DataSource for ZcodeSource {
     }
 
     fn data_files(&self) -> Vec<std::path::PathBuf> {
-        vec![Self::db_path()]
+        Self::with_wal_sidecar(Self::db_path())
     }
 
     fn is_available(&self) -> bool {
         Self::db_path().exists()
     }
+}
+
+/// Map a billing-provider name from `provider_metadata_json` to the
+/// canonical provider tag used by the dashboard.
+fn normalize_billing_provider(name: &str) -> String {
+    match name {
+        "OpenCodeGo" => "opencode-go".to_string(),
+        other => other.to_lowercase(),
+    }
+}
+
+/// Build provider_id → billing provider from rows whose
+/// `provider_metadata_json` names the billing provider (e.g.
+/// `{"OpenCodeGo":{}}`, `{"Tokenrouter":{}}`). Most rows only carry
+/// `{"rawFinishReason":...}` or empty metadata, so the map is built from
+/// the few rows that name the provider.
+fn billing_provider_map(conn: &rusqlite::Connection) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let sql = "SELECT provider_id, provider_metadata_json FROM model_usage
+               WHERE provider_metadata_json IS NOT NULL AND provider_metadata_json != ''";
+    if let Ok(mut stmt) = conn.prepare(sql) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                let (pid, meta) = row;
+                if let Ok(serde_json::Value::Object(fields)) =
+                    serde_json::from_str::<serde_json::Value>(&meta)
+                {
+                    for key in fields.keys() {
+                        if key != "rawFinishReason" {
+                            map.entry(pid.clone())
+                                .or_insert_with(|| normalize_billing_provider(key));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    map
 }
 
 impl ZcodeSource {
@@ -84,7 +127,8 @@ impl ZcodeSource {
         // One row per completed model request (retries are separate rows with
         // their own attempt). Skip non-completed statuses (running / error /
         // cancelled) and zero-usage rows (intermediate streaming states).
-        let sql = "SELECT model_id, started_at, completed_at,
+        let billing = billing_provider_map(&conn);
+        let sql = "SELECT provider_id, model_id, started_at, completed_at,
                           input_tokens, output_tokens,
                           cache_creation_input_tokens, cache_read_input_tokens,
                           time_to_first_token_ms
@@ -105,13 +149,14 @@ impl ZcodeSource {
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, i64>(3)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<i64>>(3)?,
                 row.get::<_, i64>(4)?,
                 row.get::<_, i64>(5)?,
                 row.get::<_, i64>(6)?,
-                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<i64>>(8)?,
             ))
         });
 
@@ -119,6 +164,7 @@ impl ZcodeSource {
             Ok(r) => {
                 for row in r.flatten() {
                     let (
+                        provider_id,
                         model_id,
                         started_at,
                         completed_at,
@@ -153,9 +199,12 @@ impl ZcodeSource {
                         date,
                         time,
                         api_key_prefix: "N/A".to_string(),
-                        // Billed through the OpenCode Go subscription → apply
-                        // the opencode plan divisor in display_cost().
-                        provider: "opencode-go".to_string(),
+                        // Billing provider from provider_metadata_json;
+                        // unknown provider_ids keep the historical default.
+                        provider: billing
+                            .get(&provider_id)
+                            .cloned()
+                            .unwrap_or_else(|| "opencode-go".to_string()),
                         original_provider: None,
                         model: model_id,
                         source: "zcode".to_string(),
@@ -206,7 +255,8 @@ mod tests {
                 input_tokens integer not null default 0,
                 output_tokens integer not null default 0,
                 cache_creation_input_tokens integer not null default 0,
-                cache_read_input_tokens integer not null default 0
+                cache_read_input_tokens integer not null default 0,
+                provider_metadata_json text
             );",
         )
         .unwrap();
@@ -318,6 +368,60 @@ mod tests {
         assert_eq!(records[0].input_tokens, 100);
         assert_eq!(records[0].output_tokens, 20);
         assert_eq!(records[0].total_tokens, 120);
+    }
+
+    #[test]
+    fn tags_provider_from_metadata() {
+        // provider-1 is billed via OpenCodeGo, provider-2 via Tokenrouter.
+        // Only a few rows carry the billing metadata; the rest have
+        // rawFinishReason or empty metadata.
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage (
+                id text primary key, logical_request_id text not null,
+                session_id text not null, query_source text not null,
+                provider_id text not null, model_id text not null,
+                status text not null, started_at integer not null,
+                completed_at integer,
+                time_to_first_token_ms integer,
+                input_tokens integer not null default 0,
+                output_tokens integer not null default 0,
+                cache_creation_input_tokens integer not null default 0,
+                cache_read_input_tokens integer not null default 0,
+                provider_metadata_json text
+            );",
+        )
+        .unwrap();
+        for (id, pid, model, meta) in [
+            ("a", "p-1", "deepseek-v4-flash", "{\"OpenCodeGo\":{}}"),
+            ("b", "p-1", "deepseek-v4-flash", "{\"rawFinishReason\":\"tool_calls\"}"),
+            ("c", "p-2", "z-ai/glm-5.3-free", "{\"Tokenrouter\":{}}"),
+            ("d", "p-2", "z-ai/glm-5.3-free", ""),
+            ("e", "p-3", "some-model", "{\"rawFinishReason\":\"stop\"}"),
+        ] {
+            conn.execute(
+                "INSERT INTO model_usage (id, logical_request_id, session_id,
+                    query_source, provider_id, model_id, status, started_at,
+                    completed_at, time_to_first_token_ms, input_tokens,
+                    output_tokens, cache_creation_input_tokens,
+                    cache_read_input_tokens, provider_metadata_json)
+                 VALUES (?1, 'r', 's', 'main_turn', ?2, ?3, 'completed',
+                         1786539125181, 1786539126181, 50, 100, 20, 0, 0, ?4)",
+                rusqlite::params![id, pid, model, meta],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let records = ZcodeSource::parse(&db_path);
+        let by_id: std::collections::HashMap<_, _> =
+            records.iter().map(|r| (r.model.clone(), r.provider.clone())).collect();
+        assert_eq!(by_id["deepseek-v4-flash"], "opencode-go");
+        assert_eq!(by_id["z-ai/glm-5.3-free"], "tokenrouter");
+        // Provider with no billing metadata keeps the historical default.
+        assert_eq!(by_id["some-model"], "opencode-go");
     }
 
     #[test]

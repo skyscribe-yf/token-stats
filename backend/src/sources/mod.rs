@@ -90,6 +90,26 @@ pub trait DataSource: Send + Sync {
     fn is_available(&self) -> bool {
         true
     }
+
+    /// For SQLite databases in WAL journal mode, commits append to the
+    /// `-wal` sidecar while the main DB file's (mtime, size) can stay
+    /// unchanged for long stretches — a stamp check on the main file alone
+    /// would then skip re-parsing forever. Call this instead of returning
+    /// just the DB path from [`Self::data_files`]; the `-wal` file (when
+    /// present) participates in the change detection.
+    fn with_wal_sidecar(path: std::path::PathBuf) -> Vec<std::path::PathBuf>
+    where
+        Self: Sized,
+    {
+        let mut files = vec![path.clone()];
+        let mut wal = path.into_os_string();
+        wal.push("-wal");
+        let wal = std::path::PathBuf::from(wal);
+        if wal.exists() {
+            files.push(wal);
+        }
+        files
+    }
 }
 
 // ─── Shared utilities ────────────────────────────────────────────────────────
@@ -109,7 +129,13 @@ fn walkdir_recursive(
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let p = entry.path();
-            if p.is_dir() {
+            // `file_type()` comes straight from the directory entry on Linux,
+            // saving one `stat` per entry. It reports symlinks as symlinks, so
+            // those still need an explicit `stat` to see whether the target is
+            // a directory (session dirs are sometimes symlinked).
+            let ft = entry.file_type()?;
+            let is_dir = if ft.is_symlink() { p.is_dir() } else { ft.is_dir() };
+            if is_dir {
                 walkdir_recursive(&p, result)?;
             } else {
                 result.push(p);
@@ -271,16 +297,19 @@ fn remember_parsed(path: &Path, stamp: FileStamp) {
 /// Filter `paths` down to those whose (mtime, size) differs from the last
 /// time they were parsed. Paths never seen before are always included.
 pub(crate) fn changed_files(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
-    let map = match file_stamps().lock() {
-        Ok(m) => m,
+    // Snapshot the known stamps for just these paths, then stat outside the
+    // lock. Holding the global lock across the stats would serialize every
+    // source behind thousands of syscalls (codex alone has ~1500 rollouts).
+    let known: Vec<Option<FileStamp>> = match file_stamps().lock() {
+        Ok(map) => paths.iter().map(|p| map.get(p).copied()).collect(),
         Err(_) => return paths.to_vec(),
     };
+
     paths
         .iter()
-        .filter(|p| {
-            stamp_of(p).map_or(true, |stamp| map.get(*p) != Some(&stamp))
-        })
-        .cloned()
+        .zip(known)
+        .filter(|(p, known)| stamp_of(p).map_or(true, |stamp| *known != Some(stamp)))
+        .map(|(p, _)| p.clone())
         .collect()
 }
 
@@ -430,10 +459,10 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
         }
     }
 
-    // Apply vendor merging from config
-    let merge_config_path = config::get_vendor_merge_config_path();
-    if let Some(merge_map) = config::load_vendor_merge_map(&merge_config_path) {
-        config::apply_vendor_merge(&mut all_records, &merge_map);
+    // Apply vendor merging from config (loaded once per process; the file
+    // never changes at runtime).
+    if let Some(merge_map) = config::vendor_merge_map_cached() {
+        config::apply_vendor_merge(&mut all_records, merge_map);
     }
 
     // ── Kimi model upgrade: kimi-for-coding → kimi-k2.7 ──────────────────────
@@ -472,9 +501,49 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
 
     all_records
 }
+
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn with_wal_sidecar_includes_existing_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("test.sqlite");
+        std::fs::write(&db, b"db").unwrap();
+        // No sidecar yet → only the main path.
+        assert_eq!(
+            <DimSource as DataSource>::with_wal_sidecar(db.clone()),
+            vec![db.clone()]
+        );
+        std::fs::write(dir.path().join("test.sqlite-wal"), b"wal").unwrap();
+        let files = <DimSource as DataSource>::with_wal_sidecar(db.clone());
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[1], dir.path().join("test.sqlite-wal"));
+    }
+
+    #[test]
+    fn changed_files_detects_wal_only_changes() {
+        // Simulates a WAL-mode SQLite DB: commits touch the -wal sidecar
+        // while the main file's (mtime, size) stays the same.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let wal = dir.path().join("db.sqlite-wal");
+        std::fs::write(&db, b"main").unwrap();
+        std::fs::write(&wal, b"commit1").unwrap();
+
+        let files = vec![db.clone(), wal.clone()];
+        mark_files_parsed_for_test(&files);
+        assert!(
+            changed_files(&files).is_empty(),
+            "no changes yet → nothing to re-parse"
+        );
+
+        // A new commit lands in the WAL only; main file untouched.
+        std::fs::write(&wal, b"commit1-commit2").unwrap();
+        let changed = changed_files(&files);
+        assert_eq!(changed, vec![wal.clone()], "WAL change must trigger re-parse");
+    }
 
     #[test]
     fn resolve_claude_model_to_anthropic() {

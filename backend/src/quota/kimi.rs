@@ -5,6 +5,8 @@
 
 use super::types::*;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 // ─── Auth helpers ────────────────────────────────────────────────────────────
 
@@ -47,7 +49,42 @@ pub fn get_kimi_credentials_path_ex() -> PathBuf {
 
 /// Read Kimi Code OAuth access token from a credentials file.
 /// Returns None if the file is missing, unreadable, or the token is expired.
+///
+/// The resolved token is cached for [`KIMI_TOKEN_CACHE_TTL`] keyed by the
+/// credentials path, so the per-poll `/api/quota` calls don't re-read and
+/// re-parse the JSON file every time. The key includes the path so a
+/// `KIMI_CREDENTIALS_PATH` change (as in tests) always re-reads.
 fn read_kimi_access_token(path: &std::path::Path) -> Option<String> {
+    let now = Instant::now();
+    {
+        let guard = KIMI_TOKEN_CACHE.lock().unwrap();
+        if let Some(cache) = guard.as_ref() {
+            if cache.path.as_path() == path && now.duration_since(cache.fetched_at) < KIMI_TOKEN_CACHE_TTL
+            {
+                return cache.token.clone();
+            }
+        }
+    }
+    let token = read_kimi_access_token_inner(path);
+    *KIMI_TOKEN_CACHE.lock().unwrap() = Some(TokenCache {
+        path: path.to_path_buf(),
+        fetched_at: now,
+        token: token.clone(),
+    });
+    token
+}
+
+const KIMI_TOKEN_CACHE_TTL: Duration = Duration::from_secs(30);
+
+struct TokenCache {
+    path: PathBuf,
+    fetched_at: Instant,
+    token: Option<String>,
+}
+
+static KIMI_TOKEN_CACHE: Mutex<Option<TokenCache>> = Mutex::new(None);
+
+fn read_kimi_access_token_inner(path: &std::path::Path) -> Option<String> {
     if !path.exists() {
         tracing::debug!("Kimi credentials file not found at {:?}", path);
         return None;

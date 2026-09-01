@@ -18,6 +18,7 @@ export const QUOTA_CARD_DEFS: QuotaCardDef[] = [
   { key: "ollama", label: "Ollama", matches: (id) => id === "quota-ollama" },
   { key: "meituan", label: "美团 LongCat", matches: (id) => id === "quota-meituan" },
   { key: "grok", label: "Super Grok", matches: (id) => id === "quota-grok" },
+  { key: "dimagent", label: "DimAgent", matches: (id) => id === "quota-dimagent" },
 ];
 
 export function isQuotaCardHidden(

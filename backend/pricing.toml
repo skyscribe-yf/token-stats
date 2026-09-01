@@ -18,8 +18,8 @@ rate = 6.7894
 # 讯飞订阅：199 元 / 90000 次调用
 xunfei_per_call = 0.002211111111
 
-# CodeBuddy：10 美元 / 3000 credits；实际人民币成本按记录时汇率换算
-codebuddy_usd_per_credit = 0.0033333333333333335
+# CodeBuddy：国内版连续包月活动价 70 元 / 4000 credits（0.0175 元/credit，直接人民币计价，不经过汇率）
+codebuddy_cny_per_credit = 0.0175
 
 # Kimi legacy flat rate (kept only for compatibility; no longer used)
 kimi_per_token = 0.000000071071429
@@ -385,6 +385,13 @@ cache_write_cny = 0.0
 
 [[model]]
 name = "deepseek-v4-flash-free"
+input_cny = 0.0
+output_cny = 0.0
+cache_read_cny = 0.0
+cache_write_cny = 0.0
+
+[[model]]
+name = "z-ai/glm-5.3-free"
 input_cny = 0.0
 output_cny = 0.0
 cache_read_cny = 0.0

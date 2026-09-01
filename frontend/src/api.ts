@@ -341,6 +341,52 @@ export interface QuotaResponse {
   fenno: FennoQuotaStatus | null;
   fenno_ex: FennoQuotaStatus | null;
   grok: GrokQuotaStatus | null;
+  dimagent: DimAgentQuotaStatus | null;
+}
+
+// ─── DimAgent Subscription Quota ────────────────────────────────────────────
+
+export interface DimAgentFeatureMeter {
+  feature_key: string;
+  unit: string;
+  unlimited: boolean;
+  used: number;
+  allowance: number;
+  remaining: number;
+  period_end: string | null;
+}
+
+export interface DimAgentRecent30d {
+  calls: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_tokens: number;
+  quota_units: number;
+}
+
+export interface DimAgentQuotaData {
+  plan_name: string;
+  plan_description: string | null;
+  price_cny: number;
+  billing_interval: string;
+  subscription_status: string;
+  cancel_at_period_end: boolean;
+  period_start: string;
+  period_end: string;
+  total_units: number;
+  used_units: number;
+  remaining_units: number;
+  estimated_remaining_calls: number | null;
+  request_count_total: number;
+  feature_meters: DimAgentFeatureMeter[];
+  recent_30d: DimAgentRecent30d | null;
+}
+
+export interface DimAgentQuotaStatus {
+  available: boolean;
+  data: DimAgentQuotaData | null;
+  error: string | null;
 }
 
 // ─── Ollama Quota ───────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ impl DataSource for OpenCodeSource {
     }
 
     fn data_files(&self) -> Vec<std::path::PathBuf> {
-        vec![Self::db_path()]
+        Self::with_wal_sidecar(Self::db_path())
     }
 
     fn is_available(&self) -> bool {

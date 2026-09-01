@@ -27,7 +27,9 @@ impl DataSource for CodexSource {
     fn load_incremental(&self) -> Vec<TokenRecord> {
         let base = Self::sessions_path();
         let all = Self::rollout_files(&base);
-        let changed = self.changed_data_files();
+        // Reuse the list we just built: the trait default for
+        // `changed_data_files` would walk the whole sessions tree again.
+        let changed = super::changed_files(&all);
         let records = if changed.is_empty() {
             Vec::new()
         } else {
@@ -116,11 +118,17 @@ impl CodexSource {
             // cached provider/model to reuse.
             let mut session_provider = "openai".to_string();
             let mut session_model = "unknown".to_string();
+            // Track what we actually *observed* rather than comparing against
+            // the defaults: `session_provider == "openai"` is the unset
+            // sentinel, so a session that resolves to a real non-openai
+            // provider (fenno, xai, …) used to make the exit test permanently
+            // false and scan the entire rollout — before the main loop below
+            // opened and read the whole file a second time.
+            let mut have_provider = false;
+            let mut have_model = false;
+            let mut saw_non_meta = false;
             let lines = BufReader::new(file);
             for line in lines.lines().map_while(Result::ok) {
-                if session_provider == "openai" && session_model != "unknown" {
-                    break;
-                }
                 let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
@@ -132,15 +140,26 @@ impl CodexSource {
                         .filter(|provider| !provider.is_empty())
                     {
                         session_provider = provider.to_string();
+                        have_provider = true;
                     }
-                } else if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
-                    if let Some(model) = obj
-                        .get("payload")
-                        .and_then(|p| p.get("model"))
-                        .and_then(|m| m.as_str())
-                    {
-                        session_model = model.to_string();
+                } else {
+                    saw_non_meta = true;
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
+                        if let Some(model) = obj
+                            .get("payload")
+                            .and_then(|p| p.get("model"))
+                            .and_then(|m| m.as_str())
+                        {
+                            session_model = model.to_string();
+                            have_model = true;
+                        }
                     }
+                }
+                // Both resolved. `session_meta` is always the header line, so
+                // once we have a model and have either seen it or moved past
+                // it, no later line can change either value.
+                if have_model && (have_provider || saw_non_meta) {
+                    break;
                 }
             }
 
@@ -458,6 +477,40 @@ mod tests {
                 "Records replayed before turn_context must still get the correct model"
             );
         }
+    }
+
+    #[test]
+    fn prescan_stops_at_first_turn_context_for_non_default_provider() {
+        // Guards the fix for the inverted break condition: a session whose
+        // `session_meta` names a real non-openai provider used to make the exit
+        // test permanently false, so the pre-scan read the whole rollout and the
+        // model came from the LAST turn_context. Now the pre-scan stops at the
+        // first turn_context, so the FIRST one wins.
+        let dir = tempdir().unwrap();
+        let session_meta = r#"{"type":"session_meta","payload":{"model_provider":"fenno"}}"#;
+        let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let mk_count = |ts: &str, cum_input: i64| {
+            format!("{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{usage},\"total_token_usage\":{{\"input_tokens\":{cum_input}}}}}}}}}")
+        };
+        fs::write(
+            dir.path().join("rollout-fenno.jsonl"),
+            format!(
+                "{session_meta}\n{}\n{}\n{}\n{}\n",
+                r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#,
+                mk_count("2026-07-10T10:00:00Z", 100),
+                r#"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+                mk_count("2026-07-10T10:01:00Z", 200),
+            ),
+        )
+        .unwrap();
+
+        let records = CodexSource::parse(dir.path());
+
+        // The replayed-style event before any turn_context gets the first
+        // turn_context's model; the later event gets the second one.
+        let models: Vec<_> = records.iter().map(|r| r.model.as_str()).collect();
+        assert_eq!(models, ["gpt-5.6-terra", "gpt-5.6-sol"]);
+        assert!(records.iter().all(|r| r.provider == "fenno"));
     }
 
     #[test]

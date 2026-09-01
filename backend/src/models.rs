@@ -1,5 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TokenRecord {
@@ -81,9 +83,7 @@ impl TokenRecord {
     }
 
     pub fn parsed_time(&self) -> Option<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(&self.time)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc))
+        cached_parse_time(&self.time)
     }
 
     /// Returns the UTC minute index (minutes since Unix epoch) for RPM calculations.
@@ -373,4 +373,63 @@ impl TokenRecord {
             tps: None,
         }
     }
+}
+
+// ── RFC3339 parse memoization ──────────────────────────────────────────────
+//
+// `parsed_time()` is hot: the filter path parses every record once, and each
+// `compute_*` aggregation re-parses the same records. Across a full-history
+// `/api/stats` that is several million RFC3339 parses per request. Timestamp
+// strings repeat heavily (bursty requests share a second), so a bounded,
+// sharded cache keyed by the `time` string amortizes the parse to ~one per
+// distinct timestamp — at the cost of a short-lived lock per call instead of a
+// full chrono parse. Sharding keeps lock contention low under the async runtime.
+
+const TIME_CACHE_SHARDS: usize = 64;
+/// Per-shard capacity; total resident entries ≈ SHARDS × this. ~16k/shard ⇒
+/// ~250k distinct timestamps (~20 MB) — far more than a real history holds,
+/// while bounding memory if ever exceeded (the shard is cleared on overflow).
+const TIME_CACHE_PER_SHARD: usize = 16_384;
+
+struct TimeParseCache {
+    shards: [Mutex<HashMap<String, DateTime<Utc>>>; TIME_CACHE_SHARDS],
+}
+
+static TIME_PARSE_CACHE: LazyLock<TimeParseCache> = LazyLock::new(|| TimeParseCache {
+    shards: std::array::from_fn(|_| Mutex::new(HashMap::new())),
+});
+
+fn cached_parse_time(time: &str) -> Option<DateTime<Utc>> {
+    use std::hash::{Hash, Hasher};
+
+    let shard_idx = {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        time.hash(&mut h);
+        (h.finish() as usize) % TIME_CACHE_SHARDS
+    };
+
+    {
+        let guard = TIME_PARSE_CACHE.shards[shard_idx]
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(dt) = guard.get(time) {
+            return Some(*dt);
+        }
+    }
+
+    let parsed = DateTime::parse_from_rfc3339(time)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc));
+
+    if let Some(dt) = parsed {
+        let mut guard = TIME_PARSE_CACHE.shards[shard_idx]
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard.len() >= TIME_CACHE_PER_SHARD {
+            guard.clear();
+        }
+        guard.insert(time.to_string(), dt);
+    }
+
+    parsed
 }

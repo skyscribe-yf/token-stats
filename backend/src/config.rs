@@ -82,6 +82,24 @@ pub fn get_vendor_merge_config_path() -> std::path::PathBuf {
     std::path::PathBuf::from("vendor_merge.toml")
 }
 
+/// The vendor-merge table, loaded at most once per process.
+///
+/// `load_sources_impl` runs every 30s and needs this map on every pass; the
+/// file never changes at runtime, so re-stat'ing, re-reading and re-parsing it
+/// (plus logging the resulting mapping) on every refresh is pure waste.
+static VENDOR_MERGE_MAP: std::sync::OnceLock<Option<HashMap<String, String>>> =
+    std::sync::OnceLock::new();
+
+/// Cached vendor-merge lookup table from the default config path.
+///
+/// Returns `None` when the config file is missing or malformed — the same
+/// graceful degradation as [`load_vendor_merge_map`], but only logged once.
+pub fn vendor_merge_map_cached() -> Option<&'static HashMap<String, String>> {
+    VENDOR_MERGE_MAP
+        .get_or_init(|| load_vendor_merge_map(&get_vendor_merge_config_path()))
+        .as_ref()
+}
+
 /// Apply vendor merging to a batch of records in-place.
 ///
 /// For each record whose `provider` matches a key in `merge_map`, the provider

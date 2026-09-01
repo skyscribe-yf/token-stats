@@ -55,7 +55,9 @@ impl DataSource for DshSource {
     fn load_incremental(&self) -> Vec<TokenRecord> {
         let root = dsh_sessions_path();
         let files = Self::session_files(&root);
-        let changed = self.changed_data_files();
+        // Reuse the list we just built: the trait default for
+        // `changed_data_files` would walk the sessions tree again.
+        let changed = super::changed_files(&files);
         if changed.is_empty() {
             return Vec::new();
         }

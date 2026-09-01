@@ -18,6 +18,8 @@ use super::types::*;
 use reqwest::Client;
 use serde::{de, Deserialize, Deserializer};
 use std::fmt;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -65,7 +67,45 @@ fn read_auth_file(path: &std::path::Path) -> Option<CommandCodeAccount> {
 /// Read the primary account (`auth.json`) plus extra accounts
 /// (`auth*.json`, e.g. `auth_frank.json`). Env-specific files
 /// (`auth.local.json` / `auth.staging.json`) are skipped.
+///
+/// Results are cached for [`ACCOUNTS_CACHE_TTL`] keyed by the resolved
+/// `~/.commandcode` directory, so the per-poll calls (primary + EX) and
+/// repeated `/api/quota` polls don't re-read the auth files from disk every
+/// time. The directory is part of the key so a `HOME` change (e.g. in tests)
+/// always re-reads.
 pub fn load_accounts() -> (Option<CommandCodeAccount>, Vec<CommandCodeAccount>) {
+    let dir = commandcode_dir();
+    let now = Instant::now();
+    {
+        let guard = ACCOUNTS_CACHE.lock().unwrap();
+        if let Some(cache) = guard.as_ref() {
+            if cache.dir.as_deref() == Some(dir.as_path())
+                && now.duration_since(cache.fetched_at) < ACCOUNTS_CACHE_TTL
+            {
+                return cache.value.clone();
+            }
+        }
+    }
+    let value = load_accounts_inner();
+    *ACCOUNTS_CACHE.lock().unwrap() = Some(AccountsCache {
+        dir: Some(dir),
+        fetched_at: now,
+        value: value.clone(),
+    });
+    value
+}
+
+const ACCOUNTS_CACHE_TTL: Duration = Duration::from_secs(30);
+
+struct AccountsCache {
+    dir: Option<std::path::PathBuf>,
+    fetched_at: Instant,
+    value: (Option<CommandCodeAccount>, Vec<CommandCodeAccount>),
+}
+
+static ACCOUNTS_CACHE: Mutex<Option<AccountsCache>> = Mutex::new(None);
+
+fn load_accounts_inner() -> (Option<CommandCodeAccount>, Vec<CommandCodeAccount>) {
     let dir = commandcode_dir();
     let primary = read_auth_file(&dir.join("auth.json"));
 

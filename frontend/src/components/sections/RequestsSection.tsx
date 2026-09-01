@@ -1008,7 +1008,7 @@ export const RequestsSection = memo(function RequestsSection({
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-600">
-                    {formatCostDetailed(r.cost, r.source)}
+                    {formatCostDetailed(r.cost)}
                   </td>
                   <td className="px-3 py-2 text-right text-slate-600">
                     {r.ttft_ms != null ? (

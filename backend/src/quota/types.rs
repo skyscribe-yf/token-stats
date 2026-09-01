@@ -180,6 +180,7 @@ pub struct QuotaResponse {
     pub fenno: Option<FennoQuotaStatus>,
     pub fenno_ex: Option<FennoQuotaStatus>,
     pub grok: Option<GrokQuotaStatus>,
+    pub dimagent: Option<DimAgentQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -448,5 +449,77 @@ pub struct GrokQuotaBreakdown {
 pub struct GrokQuotaStatus {
     pub available: bool,
     pub data: Option<GrokQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── DimAgent (dimcode) types ────────────────────────────────────────────────
+
+/// A DimAgent per-call feature allowance (e.g. web_search 20 calls/term).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DimAgentFeatureMeter {
+    pub feature_key: String,
+    pub unit: String,
+    pub unlimited: bool,
+    pub used: i64,
+    pub allowance: i64,
+    pub remaining: i64,
+    /// RFC 3339 timestamp when the meter resets; `None` if unknown.
+    #[serde(default)]
+    pub period_end: Option<String>,
+}
+
+/// Last-30d call/token summary from the DimAgent console activity API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DimAgentRecent30d {
+    pub calls: i64,
+    pub total_tokens: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cache_tokens: i64,
+    /// Quota units consumed in the window (as reported by the console).
+    #[serde(default)]
+    pub quota_units: f64,
+}
+
+/// DimAgent subscription/quota data for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DimAgentQuotaData {
+    pub plan_name: String,
+    #[serde(default)]
+    pub plan_description: Option<String>,
+    /// Price in CNY per billing interval (e.g. 9.9 for ¥9.9/月).
+    #[serde(default)]
+    pub price_cny: f64,
+    /// Billing interval from the price catalog (e.g. "month").
+    #[serde(default)]
+    pub billing_interval: String,
+    pub subscription_status: String,
+    #[serde(default)]
+    pub cancel_at_period_end: bool,
+    /// RFC 3339 start of the current term.
+    pub period_start: String,
+    /// RFC 3339 end of the current term (renewal/expiry).
+    pub period_end: String,
+    pub total_units: i64,
+    pub used_units: i64,
+    pub remaining_units: i64,
+    /// Estimated remaining calls derived from average units/call (quota-estimate).
+    #[serde(default)]
+    pub estimated_remaining_calls: Option<i64>,
+    /// Total request count on the account (quota-estimate).
+    #[serde(default)]
+    pub request_count_total: i64,
+    #[serde(default)]
+    pub feature_meters: Vec<DimAgentFeatureMeter>,
+    /// Last-30d stats; only present when `DIMAGENT_SESSION_COOKIE` is set.
+    #[serde(default)]
+    pub recent_30d: Option<DimAgentRecent30d>,
+}
+
+/// DimAgent quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DimAgentQuotaStatus {
+    pub available: bool,
+    pub data: Option<DimAgentQuotaData>,
     pub error: Option<String>,
 }

@@ -21,6 +21,7 @@ import type {
   MeituanQuotaStatus,
   FennoQuotaStatus,
   GrokQuotaStatus,
+  DimAgentQuotaStatus,
   SubscriptionSettings,
 } from "../../api";
 import { remainingQuota } from "../../lib/fennoQuota";
@@ -1236,6 +1237,127 @@ function GrokCard({
   );
 }
 
+function DimAgentCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: DimAgentQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-dimagent";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+  const cycleCountdown = buildCycleCountdown(data?.period_end ?? null);
+  const renewalDate = data?.period_end;
+  const priceText =
+    data && data.price_cny > 0
+      ? `¥${data.price_cny.toFixed(2)}${data.billing_interval === "month" ? "/月" : `/${data.billing_interval}`}`
+      : null;
+  const active = data?.subscription_status === "active";
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="DimAgent"
+        href="https://dimagent.cn/console/subscription"
+        suffix="dimagent.cn"
+        cycleCountdown={cycleCountdown}
+        cycleCountdownSuffix={
+          renewalDate ? (
+            <>
+              到期 {renewalDate.slice(0, 10)}
+              {data?.cancel_at_period_end && " · 取消续订"}
+            </>
+          ) : null
+        }
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data ? (
+        <>
+          <div className="flex items-center gap-2 text-[11px] mb-1">
+            {data.plan_description && (
+              <span className="text-slate-400">{data.plan_description}</span>
+            )}
+            <span className="font-medium text-slate-600">{data.plan_name}</span>
+            {priceText && (
+              <span className="font-mono text-[10px] text-slate-500">
+                {priceText}
+              </span>
+            )}
+            <span
+              className={`px-1 py-0 rounded-full text-[10px] font-medium ${
+                active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {active ? "有效" : data.subscription_status}
+            </span>
+          </div>
+          {data.total_units > 0 && (
+            <ProgressBar
+              label="本周期额度（次调用）"
+              used={data.used_units}
+              limit={data.total_units}
+              suffix={`剩余 ${formatNumber(data.remaining_units)}`}
+            />
+          )}
+          {data.estimated_remaining_calls != null && (
+            <div className="mt-1 flex justify-between text-[10px] text-slate-500">
+              <span>按平均用量估算</span>
+              <span className="font-medium text-slate-700">
+                还可约 {formatNumber(data.estimated_remaining_calls)} 次调用
+              </span>
+            </div>
+          )}
+          {data.feature_meters.length > 0 && (
+            <div className="mt-2 pt-1.5 border-t border-slate-100 space-y-1">
+              {data.feature_meters.map((m) => (
+                <div
+                  key={m.feature_key}
+                  className="flex items-center justify-between text-[10px] text-slate-500"
+                >
+                  <span>{m.feature_key}</span>
+                  <span className="tabular-nums">
+                    {m.unlimited
+                      ? "不限"
+                      : `${formatNumber(m.used)}/${formatNumber(m.allowance)} 次`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {data.recent_30d && (
+            <div className="mt-2 pt-1.5 border-t border-slate-100 space-y-0.5 text-[10px] text-slate-500">
+              <div className="flex justify-between">
+                <span>近 30 天调用</span>
+                <span className="tabular-nums">{formatCalls(data.recent_30d.calls)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>近 30 天 tokens</span>
+                <span className="tabular-nums">
+                  {formatNumber(data.recent_30d.total_tokens)}
+                  {data.recent_30d.cache_tokens > 0 &&
+                    `（缓存 ${formatNumber(data.recent_30d.cache_tokens)}）`}
+                </span>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error && status.error.length > 120
+            ? "获取失败（详见后端日志）"
+            : status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 export const QuotasSection = memo(function QuotasSection({
   quota,
   xunfei,
@@ -1341,6 +1463,13 @@ export const QuotasSection = memo(function QuotasSection({
         {!isQuotaCardHidden(hiddenCards, "quota-grok") && (
           <GrokCard
             status={quota?.grok ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-dimagent") && (
+          <DimAgentCard
+            status={quota?.dimagent ?? null}
             loading={quotaLoading}
             highlightId={highlightCardId}
           />

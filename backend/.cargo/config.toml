@@ -1,0 +1,3 @@
+# Treat all warnings as errors so the build stays warning-free.
+[build]
+rustflags = ["-D", "warnings"]

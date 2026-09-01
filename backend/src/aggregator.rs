@@ -28,7 +28,12 @@ impl StatAccum {
         self.cache_read_tokens += r.cache_read_tokens;
         self.cache_write_tokens += r.cache_write_tokens;
         self.total_tokens += r.total_tokens;
-        self.cost += pricing::display_cost_in(ps, r);
+        let cost = pricing::display_cost_in(ps, r);
+        // -1 signals "unknown cost" (no pricing entry); skip so aggregates
+        // stay 0 for unpriced models, same as before.
+        if cost > 0.0 {
+            self.cost += cost;
+        }
     }
 
     fn cache_hit_ratio(&self) -> f64 {
@@ -108,6 +113,7 @@ pub fn aggregate_records(
     }
 }
 
+#[cfg(test)]
 pub fn filter_records<'a>(
     records: &'a [TokenRecord],
     filters: &FilterCriteria,
@@ -144,6 +150,30 @@ pub fn filter_records<'a>(
     });
 
     keyed.into_iter().map(|(_, r)| r).collect()
+}
+
+/// Same filtering as [`filter_records`] but without the final time sort.
+///
+/// Used by analyses that only bucket/aggregate records (RPM, TPS) and never
+/// need the global time ordering — skipping the `O(N log N)` sort removes a
+/// real cost on the large full-history result sets those endpoints can hit.
+pub fn filter_records_unsorted<'a>(
+    records: &'a [TokenRecord],
+    filters: &FilterCriteria,
+) -> Vec<&'a TokenRecord> {
+    let sources = parse_csv_filter(filters.source);
+    let providers = parse_csv_filter(filters.provider);
+    let models = parse_csv_filter(filters.model);
+    records
+        .iter()
+        .filter(|r| {
+            record_matches_bound(r, r.parsed_time().as_ref(), filters.from, filters.to, filters.tz)
+                && (providers.is_empty() || providers.contains(&r.provider.as_str()))
+                && (models.is_empty() || models.contains(&r.model.as_str()))
+                && (sources.is_empty() || sources.contains(&r.source.as_str()))
+                && (!filters.exclude_zero_tokens || !r.is_zero_token())
+        })
+        .collect()
 }
 
 /// `parsed` is the record's precomputed UTC time (parsed once by the caller).
@@ -198,8 +228,22 @@ fn record_matches_bound(
     from_ok && to_ok
 }
 
+/// Ordering for the requests table: time descending, then source / provider /
+/// model ascending. Shared by [`filter_records`] and [`paginate_requests`].
+fn cmp_records_newest_first(a: &TokenRecord, b: &TokenRecord) -> std::cmp::Ordering {
+    let (at, bt) = (a.parsed_time(), b.parsed_time());
+    let time_order = match (at, bt) {
+        (Some(at), Some(bt)) => bt.cmp(&at),
+        _ => b.time.cmp(&a.time),
+    };
+    time_order
+        .then_with(|| a.source.cmp(&b.source))
+        .then_with(|| a.provider.cmp(&b.provider))
+        .then_with(|| a.model.cmp(&b.model))
+}
+
 pub fn paginate_requests(
-    records: Vec<&TokenRecord>,
+    mut records: Vec<&TokenRecord>,
     page: usize,
     limit: usize,
     tz: Option<&FixedOffset>,
@@ -213,7 +257,29 @@ pub fn paginate_requests(
     let start = ((page - 1) * limit).min(total);
     let end = (start + limit).min(total);
 
-    let data: Vec<DetailedRequest> = records[start..end]
+    // `records` arrives unsorted. For typical sizes a single stable sort is
+    // cheapest, but full-history request views can hand us hundreds of
+    // thousands of records just to display one page — an O(N log N) sort of the
+    // whole set is pure waste. When the set is large, partition with
+    // `select_nth_unstable_by` so only the newest `end` records (the ones the
+    // page can possibly touch) are brought to the front, then stable-sort just
+    // that window. Small/typical queries keep the exact prior ordering.
+    const PARTIAL_SORT_THRESHOLD: usize = 5000;
+    let window = if total > PARTIAL_SORT_THRESHOLD {
+        let keep = total - end; // newest `end` records live in tail [keep, total)
+        if keep > 0 {
+            records.select_nth_unstable_by(keep, |a, b| cmp_records_newest_first(a, b));
+            records[keep..].sort_by(|a, b| cmp_records_newest_first(a, b));
+        } else {
+            records.sort_by(|a, b| cmp_records_newest_first(a, b));
+        }
+        (keep + start)..(keep + end)
+    } else {
+        records.sort_by(|a, b| cmp_records_newest_first(a, b));
+        start..end
+    };
+
+    let data: Vec<DetailedRequest> = records[window]
         .iter()
         .map(|r| {
             let local_date = local_date_for_record(r, tz);
@@ -275,21 +341,26 @@ fn compute_overall_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -
     }
 }
 
-fn compute_vendor_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> Vec<VendorStats> {
-    let mut map: HashMap<String, StatAccum> = HashMap::new();
-    let mut ttft_map: HashMap<String, Vec<f64>> = HashMap::new();
-    let mut tps_map: HashMap<String, (i64, f64)> = HashMap::new(); // (output_tokens_sum, duration_secs_sum)
+fn compute_vendor_stats<'a>(
+    records: &'a [&'a TokenRecord],
+    ps: &pricing::PricingState,
+) -> Vec<VendorStats> {
+    let mut map: HashMap<&'a str, StatAccum> = HashMap::new();
+    let mut ttft_map: HashMap<&'a str, Vec<f64>> = HashMap::new();
+    let mut tps_map: HashMap<&'a str, (i64, f64)> = HashMap::new(); // (output_tokens_sum, duration_secs_sum)
 
     for r in records {
-        map.entry(r.provider.clone()).or_default().accumulate(ps, r);
+        // Borrow the provider string from the record instead of cloning it for
+        // every record — the clone only happens once per distinct provider below.
+        map.entry(r.provider.as_str()).or_default().accumulate(ps, r);
         if let Some(ttft) = r.ttft_ms {
             if ttft > 0.0 {
-                ttft_map.entry(r.provider.clone()).or_default().push(ttft);
+                ttft_map.entry(r.provider.as_str()).or_default().push(ttft);
             }
         }
         if let Some(tps) = r.tps {
             if tps > 0.0 && r.output_tokens > 0 {
-                let entry = tps_map.entry(r.provider.clone()).or_default();
+                let entry = tps_map.entry(r.provider.as_str()).or_default();
                 entry.0 += r.output_tokens;
                 entry.1 += r.output_tokens as f64 / tps;
             }
@@ -310,7 +381,7 @@ fn compute_vendor_stats(records: &[&TokenRecord], ps: &pricing::PricingState) ->
                 .map(|(out, dur)| *out as f64 / *dur)
                 .unwrap_or(0.0);
             VendorStats {
-                provider,
+                provider: provider.to_string(),
                 calls: acc.calls,
                 input_tokens: acc.input_tokens,
                 output_tokens: acc.output_tokens,
@@ -512,29 +583,34 @@ fn count_window_minutes(keys: &[i64], minute_map: &HashMap<i64, i64>) -> (i64, i
     (duration_minutes, total_requests)
 }
 
-fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> Vec<ModelStats> {
-    struct Agg {
+fn compute_model_stats<'a>(
+    records: &'a [&'a TokenRecord],
+    ps: &pricing::PricingState,
+) -> Vec<ModelStats> {
+    struct Agg<'a> {
         accum: StatAccum,
-        source_set: HashSet<String>,
-        source_aggs: HashMap<String, StatAccum>,
+        source_set: HashSet<&'a str>,
+        source_aggs: HashMap<&'a str, StatAccum>,
         /// Collect UTC minute indices for RPM calculation (provider+model level)
         times: Vec<i64>,
         /// Collect UTC minute indices per source for RPM calculation
-        source_times: HashMap<String, Vec<i64>>,
+        source_times: HashMap<&'a str, Vec<i64>>,
         /// Collect TTFT values for averaging
         ttft_values: Vec<f64>,
         /// Collect TPS data for weighted averaging: (output_tokens_sum, duration_secs_sum)
         tps_data: (i64, f64),
         /// Collect TTFT values per source
-        source_ttft: HashMap<String, Vec<f64>>,
+        source_ttft: HashMap<&'a str, Vec<f64>>,
         /// Collect TPS data per source for weighted averaging
-        source_tps_data: HashMap<String, (i64, f64)>,
+        source_tps_data: HashMap<&'a str, (i64, f64)>,
     }
 
-    let mut map: HashMap<(String, String), Agg> = HashMap::new();
+    let mut map: HashMap<(&'a str, &'a str), Agg<'a>> = HashMap::new();
 
     for r in records {
-        let key = (r.provider.clone(), r.model.clone());
+        // Borrow provider+model from the record for the grouping key instead of
+        // cloning two Strings per record; inner maps borrow source the same way.
+        let key = (r.provider.as_str(), r.model.as_str());
         let agg = map.entry(key).or_insert_with(|| Agg {
             accum: StatAccum::default(),
             source_set: HashSet::new(),
@@ -547,15 +623,15 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
             source_tps_data: HashMap::new(),
         });
         agg.accum.accumulate(ps, r);
-        agg.source_set.insert(r.source.clone());
+        agg.source_set.insert(r.source.as_str());
         agg.source_aggs
-            .entry(r.source.clone())
+            .entry(r.source.as_str())
             .or_default()
             .accumulate(ps, r);
         if let Some(minute) = r.minute_index_utc() {
             agg.times.push(minute);
             agg.source_times
-                .entry(r.source.clone())
+                .entry(r.source.as_str())
                 .or_default()
                 .push(minute);
         }
@@ -563,7 +639,7 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
             if ttft > 0.0 {
                 agg.ttft_values.push(ttft);
                 agg.source_ttft
-                    .entry(r.source.clone())
+                    .entry(r.source.as_str())
                     .or_default()
                     .push(ttft);
             }
@@ -573,7 +649,7 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
                 let dur = r.output_tokens as f64 / tps;
                 agg.tps_data.0 += r.output_tokens;
                 agg.tps_data.1 += dur;
-                let entry = agg.source_tps_data.entry(r.source.clone()).or_default();
+                let entry = agg.source_tps_data.entry(r.source.as_str()).or_default();
                 entry.0 += r.output_tokens;
                 entry.1 += dur;
             }
@@ -583,7 +659,7 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
     let mut result: Vec<ModelStats> = map
         .into_iter()
         .map(|((provider, model), agg)| {
-            let mut sources: Vec<String> = agg.source_set.into_iter().collect();
+            let mut sources: Vec<String> = agg.source_set.iter().map(|s| s.to_string()).collect();
             sources.sort();
             // Compute RPM for this provider+model from its minute indices
             let (avg_rpm, peak_rpm) = compute_rpm_from_minutes(&agg.times);
@@ -620,7 +696,7 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
                         .map(|(out, dur)| *out as f64 / *dur)
                         .unwrap_or(0.0);
                     SourceDetailStats {
-                        source,
+                        source: source.to_string(),
                         calls: acc.calls,
                         input_tokens: acc.input_tokens,
                         output_tokens: acc.output_tokens,
@@ -638,8 +714,8 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
                 .collect();
             source_details.sort_by_key(|s| std::cmp::Reverse(s.total_tokens));
             ModelStats {
-                model,
-                provider,
+                model: model.to_string(),
+                provider: provider.to_string(),
                 sources,
                 calls: agg.accum.calls,
                 input_tokens: agg.accum.input_tokens,
@@ -662,17 +738,21 @@ fn compute_model_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> 
     result
 }
 
-fn compute_source_stats(records: &[&TokenRecord], ps: &pricing::PricingState) -> Vec<SourceStats> {
-    let mut map: HashMap<String, StatAccum> = HashMap::new();
+fn compute_source_stats<'a>(
+    records: &'a [&'a TokenRecord],
+    ps: &pricing::PricingState,
+) -> Vec<SourceStats> {
+    let mut map: HashMap<&'a str, StatAccum> = HashMap::new();
 
     for r in records {
-        map.entry(r.source.clone()).or_default().accumulate(ps, r);
+        // Borrow the source string instead of cloning per record.
+        map.entry(r.source.as_str()).or_default().accumulate(ps, r);
     }
 
     let mut result: Vec<SourceStats> = map
         .into_iter()
         .map(|(source, acc)| SourceStats {
-            source,
+            source: source.to_string(),
             calls: acc.calls,
             input_tokens: acc.input_tokens,
             output_tokens: acc.output_tokens,
@@ -881,7 +961,7 @@ pub fn compute_tps_analysis(
     filters: &FilterCriteria,
     models_filter: Option<&str>,
 ) -> TpsAnalysis {
-    let filtered = filter_records(records, filters);
+    let filtered = filter_records_unsorted(records, filters);
 
     let model_set: HashSet<&str> = models_filter
         .map(|s| s.split(',').filter(|x| !x.is_empty()).collect())

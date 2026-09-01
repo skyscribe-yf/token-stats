@@ -12,10 +12,10 @@ export function formatCalls(n: number): string {
   return n.toLocaleString();
 }
 
-export function formatCost(cost: number, source?: string): string {
+export function formatCost(cost: number): string {
   if (cost == null || Number.isNaN(cost)) return "-";
-  // For non-pi sources with zero cost, show N/A
-  if (cost === 0 && source && source !== "pi") return "N/A";
+  // Negative cost = backend "unknown" sentinel (no pricing entry) → N/A
+  if (cost < 0) return "N/A";
   if (cost === 0) return "¥0.00";
   if (cost < 0.01) return "<¥0.01";
   return "¥" + cost.toFixed(2);
@@ -23,9 +23,9 @@ export function formatCost(cost: number, source?: string): string {
 
 /** Format a single request's cost with 4 decimal places (detailed request list).
  *  Shows the full precision needed to distinguish tiny per-call amounts. */
-export function formatCostDetailed(cost: number, source?: string): string {
+export function formatCostDetailed(cost: number): string {
   if (cost == null || Number.isNaN(cost)) return "-";
-  if (cost === 0 && source && source !== "pi") return "N/A";
+  if (cost < 0) return "N/A";
   if (cost === 0) return "¥0.0000";
   return "¥" + cost.toFixed(4);
 }
@@ -184,6 +184,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   guancha: "#ec4899",      // pink-500
   "opencode-go": "#f97316", // orange-500
   opencode: "#fb923c",     // orange-400
+  tokenrouter: "#a3e635",   // lime-400
   "xiaomi-mimo": "#ef4444", // red-500
   anthropic: "#6366f1",    // indigo-500
   openai: "#06b6d4",       // cyan-500

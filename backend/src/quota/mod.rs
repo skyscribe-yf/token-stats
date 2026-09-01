@@ -5,6 +5,7 @@
 //! - **OpenCode-go**: Usage via direct HTTP request to workspace dashboard (HTML parsing)
 
 pub mod commandcode;
+pub mod dimagent;
 pub mod fenno;
 pub mod grok;
 pub mod kimi;
@@ -15,8 +16,9 @@ pub mod types;
 pub mod xiaomi_mimo;
 
 pub use types::{
-    CommandCodeQuotaStatus, FennoQuotaStatus, GrokQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus,
-    OllamaQuotaStatus, OpenCodeQuotaStatus, QuotaResponse, XiaomiMiMoQuotaStatus,
+    CommandCodeQuotaStatus, DimAgentQuotaStatus, FennoQuotaStatus, GrokQuotaStatus,
+    KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
+    QuotaResponse, XiaomiMiMoQuotaStatus,
 };
 
 use serde::de;
@@ -169,6 +171,14 @@ impl QuotaFetcher {
         grok_records: &[crate::models::TokenRecord],
     ) -> GrokQuotaStatus {
         grok::fetch_grok_quota(&self.client, grok_records).await
+    }
+
+    /// Fetch DimAgent (dimcode) subscription/quota info.
+    /// Reads it via the local `dim usage --json` CLI (OAuth refresh token in
+    /// `~/.dimcode/v2/auth.json`); falls back to the console API when
+    /// `DIMAGENT_SESSION_COOKIE` is set.
+    pub async fn fetch_dimagent_quota(&self) -> DimAgentQuotaStatus {
+        dimagent::fetch_dimagent_quota(&self.client).await
     }
 }
 

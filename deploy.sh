@@ -308,11 +308,30 @@ if [ -n "${FENNO_AUTH_STATE_PATH_EX:-}" ]; then
     echo "✅ Injected FENNO_AUTH_STATE_PATH_EX"
 fi
 
+if [ -n "${DIMAGENT_SESSION_COOKIE:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "DIMAGENT_SESSION_COOKIE" "$DIMAGENT_SESSION_COOKIE"
+    echo "✅ Injected DIMAGENT_SESSION_COOKIE (dim console API source)"
+else
+    echo "⚠️  DIMAGENT_SESSION_COOKIE not set (dim source will be skipped)"
+fi
+
 if [ -n "${GROK_XAI_API_KEY:-}" ]; then
     inject_env_dropin "$NEW_INSTANCE" "GROK_XAI_API_KEY" "$GROK_XAI_API_KEY"
     echo "✅ Injected GROK_XAI_API_KEY"
 else
     echo "⚠️  GROK_XAI_API_KEY not set (Grok quota card will use ~/.grok/auth.json fallback)"
+fi
+
+if [ -n "${DIMAGENT_SESSION_COOKIE:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "DIMAGENT_SESSION_COOKIE" "$DIMAGENT_SESSION_COOKIE"
+    echo "✅ Injected DIMAGENT_SESSION_COOKIE (DimAgent 30d stats)"
+else
+    echo "⚠️  DIMAGENT_SESSION_COOKIE not set (DimAgent card uses dim CLI only, no 30d stats)"
+fi
+
+if [ -n "${DIM_USAGE_BIN:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "DIM_USAGE_BIN" "$DIM_USAGE_BIN"
+    echo "✅ Injected DIM_USAGE_BIN"
 fi
 
 sudo systemctl daemon-reload

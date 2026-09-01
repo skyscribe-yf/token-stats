@@ -14,7 +14,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -204,9 +203,11 @@ pub async fn get_requests(
         tz: tz.as_ref(),
         exclude_zero_tokens,
     };
-    let filtered = aggregator::filter_records(&records, &filters);
+    let filtered = aggregator::filter_records_unsorted(&records, &filters);
     let (page, limit) = validate_pagination(query.page, query.limit);
     // One pricing read guard for the whole page, not one lock per record.
+    // `paginate_requests` owns the sort now (partial-sort fast path for large
+    // history), so we feed it the unsorted, filtered set.
     let pricing_guard = crate::pricing::state_read();
     let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref(), &pricing_guard);
 
@@ -262,6 +263,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fenno_result,
         fenno_ex_result,
         grok_result,
+        dimagent_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -275,6 +277,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fetcher.fetch_fenno_quota(),
         fetcher.fetch_fenno_quota_ex(),
         fetcher.fetch_grok_quota(&grok_records),
+        fetcher.fetch_dimagent_quota(),
     );
 
     let response = QuotaResponse {
@@ -290,6 +293,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fenno: Some(fenno_result),
         fenno_ex: Some(fenno_ex_result),
         grok: Some(grok_result),
+        dimagent: Some(dimagent_result),
     };
 
     Json(response)
@@ -376,14 +380,16 @@ pub async fn restore_store(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let mut guard = state.records.write().await;
     let before_count = guard.len();
 
-    let seen: HashSet<_> = guard.iter().map(TokenRecord::fingerprint).collect();
-    let added = db_records
-        .iter()
-        .filter(|r| !seen.contains(&r.fingerprint()))
-        .count();
-    let skipped = db_records.len() - added;
+    let (added, skipped) = {
+        let seen = &guard.seen;
+        let added = db_records
+            .iter()
+            .filter(|r| !seen.contains(&r.fingerprint()))
+            .count();
+        (added, db_records.len() - added)
+    };
 
-    *guard = db_records;
+    guard.replace_all(db_records);
     let after_count = guard.len();
 
     tracing::info!(
@@ -564,12 +570,6 @@ pub async fn restore_backup(
     let mut guard = state.records.write().await;
     let before_count = guard.len();
 
-    // Build dedup fingerprint set from existing records
-    let mut seen: HashSet<_> = HashSet::with_capacity(guard.len());
-    for r in guard.iter() {
-        seen.insert(r.fingerprint());
-    }
-
     let mut added_records: Vec<TokenRecord> = Vec::new();
     let mut skipped = 0usize;
     let mut errors: Vec<String> = Vec::new();
@@ -648,7 +648,7 @@ pub async fn restore_backup(
                 record
             };
 
-            if seen.insert(record.fingerprint()) {
+            if guard.seen.insert(record.fingerprint()) {
                 added_records.push(record);
             } else {
                 skipped += 1;
@@ -669,7 +669,7 @@ pub async fn restore_backup(
         }
     }
     let reloaded = state.store.load_all();
-    *guard = reloaded;
+    guard.replace_all(reloaded);
 
     let after_count = guard.len();
     let added = after_count.saturating_sub(before_count);

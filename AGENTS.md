@@ -45,7 +45,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 10 | `commandcode` | `~/.commandcode/projects/<slug>/<session-id>.jsonl` | JSONL；`type=message` 行含 `usage`；跳过侧车 `*.checkpoints.jsonl`（`COMMANDCODE_PROJECTS_PATH` 可覆盖） |
 | 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖） |
 | 12 | `dsh` | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` | zstd 压缩 JSONL，DeepSeek Harness；usage chunk 与 `finish` replayState 配对取 provider/model（`DSH_SESSIONS_PATH` 可覆盖） |
-| 13 | `dim` | `~/.dimcode/v2/dimcode.sqlite` | SQLite `usage_run_stats` 表（OpenCode 分支，每完成一个 run 一行，含精确 token 数与目录计算的 USD cost；`DIM_DB_PATH` 可覆盖） |
+| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`；不再读本地 SQLite（`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
 | 14 | `ccswitch` | `~/.cc-switch/cc-switch.db` | 仅当设置了 `USE_CC_SWITCH` 环境变量才加载（`CCSWITCH_DB_PATH` 可覆盖） |
 | 15 | `codebuddy` | `~/.codebuddy/projects/**/*.jsonl` | JSONL；事件的 `providerData.rawUsage` 含 credits 与 token 用量（`CODEBUDDY_PROJECTS_PATH` 可覆盖） |
 
@@ -68,6 +68,15 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | Fenno / Fenno EX | `https://api.fenno.ai/api/v1/subscriptions/active` | `FENNO_AUTH_TOKEN` + `FENNO_REFRESH_TOKEN` 引导凭据管理器；轮换凭据持久化到 `FENNO_AUTH_STATE_PATH`（默认 `~/.config/token-stats/fenno-auth.json`）并自动刷新 |
 | Grok | 基于 `grok-cli` 记录 + 订阅配额页面 | `grok_proxy.rs` 读取的用量记录；配额逻辑在 `quota/grok.rs` |
 | Ainaiba 余额 | `api-xai.ainaibahub.com` | `YAI_API_KEY`（`/api/ainaiba-credit` 端点） |
+| DimAgent | **主路径**：本地 `dim usage --json`（CLI 自动发现，见 `quota/dimagent.rs`；OAuth 凭据在 `~/.dimcode/v2/auth.json`，CLI 自动刷新，无需任何环境变量）。**回退**：console API `dimagent.cn/api`（`/me/subscription` + `/me/credits` + `/me/feature-meters` + `/user/quota-estimate`） | `DIMAGENT_SESSION_COOKIE`（浏览器 `session` cookie 值）仅用于回退和近 30 天统计增强；`DIM_USAGE_BIN` 可覆盖 CLI 二进制 |
+
+**DimAgent console API 逆向结论**（`quota/dimagent.rs` / `sources/dim.rs` 验证过）：
+- `GET /api/user/self`、`/api/log/self`（逐次调用明细：`prompt_tokens`/`completion_tokens`/`cache_tokens`/`use_time_ms`/`ttft_ms`/`tps`/`model_name`/`token_name`）、`/api/user/daily-stats`（按日汇总：各 token 字段 + `request_count` + `quota_consumed`）、`/api/me/subscription`、`/api/me/credits`、`/api/me/feature-meters`、`/api/user/quota-estimate` —— 全部只需 `session` cookie（GET）。
+- **`/api/log/self` 分页参数是 `p`**（`page` 会被服务端忽略，总是返回第 1 页）；`page_size` 上限 100；`type=2` 为用量日志筛选（Activity 页同款）；响应按 id 倒序（新→旧），带 `total`/`total_capped`。
+- token 约定为 OpenAI 式：`prompt_tokens` **包含** `cache_tokens`（用 `/api/user/daily-stats` 验证：`total_tokens = prompt_tokens + completion_tokens`）；`cache_tokens` 即缓存命中（读）；API 无 cache 写入字段（daily-stats `cache_creation_tokens` 恒为 0）。
+- 两个 cookie 的作用：`session`（Flask/itsdangerous 签名会话，唯一认证凭据，必需）；`_c_WBKFRo`（站点统计/风控 cookie，**非认证必需**，可弃用）。
+- 本地 dimcode 库（`usage_run_stats`）是**按 run 聚合**（含 input/output/cache/model/cost）；逐调用明细（TTFT/TPS/每次调用的缓存命中）只存在于 console API，`dim usage --json` 与本地库都没有。
+- CLI 输出与 console API 的 units 单位不同：CLI 是整单位（如 1500），console API 是毫单位（×1000，如 1500000），`card_from_parts()` 按总量阈值自动归一化。
 
 ### 前端结构（`frontend/`）
 
@@ -101,7 +110,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | `src/settings.rs` | 高级模型 / 订阅设置持久化（JSON） |
 | `src/ainaiba.rs` | Ainaiba 余额查询 |
 | `src/grok_proxy.rs` | loopback Grok usage 代理（双上游路由） |
-| `src/quota/*.rs` | 各类配额/订阅抓取（kimi、opencode、fenno、grok、ollama、meituan、commandcode、xiaomi_mimo） |
+| `src/quota/*.rs` | 各类配额/订阅抓取（kimi、opencode、fenno、grok、ollama、meituan、commandcode、xiaomi_mimo、dimagent） |
 | `src/xunfei/` | 讯飞订阅查询 |
 | `src/time.rs` | 时间边界解析与时区换算 |
 
@@ -190,7 +199,7 @@ cache_hit_ratio = cache_read_tokens / (input_tokens + cache_read_tokens) × 100%
 | 来源 | 原始约定 | 解析器处理 |
 |------|---------|-----------|
 | Codex / Qoder / Qoder CN | OpenAI：`input_tokens` **包含** cache read | 减去：`effective_input = input_tokens - cache_read_tokens` |
-| Dim（dimcode） | OpenCode：`input_tokens` **包含** cache read | 同上；cache 字段可为 NULL → 0 |
+| Dim（console API） | OpenAI/OpenCode 式：`prompt_tokens` **包含** cache（`cache_tokens`） | 减去：`effective_input = prompt_tokens - cache_tokens`；`cache_write = 0`（API 无 cache 写入字段） |
 | Command Code `cmd` | OpenAI：`inputTokens` **包含** `cacheReadTokens` | 解析时减去（存原始 input 会双计缓存且把命中率封顶在 50%） |
 | Pi-via-Command-Code | 同上 | 在 `load_all_sources()` 中减去 |
 | Claude Code / Kimi CLI | Anthropic：已排除 | 无需处理 |
@@ -281,12 +290,15 @@ providers = ["openai", "ainaiba", "xai"]
   于 2026-08-17 恢复原价，仅作用于该 provider）。
 - **Command Code**：`cc:` 前缀模型为 Command Code 列表价（部分模型带 `peak_hours_utc`
   峰谷价，DeepSeek 2026-08-16 起实施）；实际成本 = 列表价 / `commandcode_divisor` → CNY。
-- **CodeBuddy**：记录的 `cost` 保存原始 credits；实际成本 = credits × `codebuddy_usd_per_credit`
-  （默认 10 美元 / 3000 credits）× 记录时的分段 USD→CNY 汇率。
+- **CodeBuddy**：记录的 `cost` 保存原始 credits；实际成本 = credits × `codebuddy_cny_per_credit`
+  （国内版连续包月活动价 70 元 / 4000 credits = 0.0175 元/credit，直接人民币计价，不经过汇率）。
 - **Kimi 订阅**：`kimi_api_models`（CNY/1M，cache write 免费）+ `kimi_subscription_multiplier`
   （默认 20，设置抽屉可调、持久化）：`成本 = (input×in + cache_read×cr + output×out) / 1M / 倍率`。
 - **OpenCode**：原始 cost / `opencode_divisor`（6.0）；`opencode_model_segments` 可按模型+
   时间覆盖 divisor（如 deepseek-v4 2026-08-18 起 divisor=3）。
+- **Dim（console API 源）**：不存储原始 cost，`display_cost()` 走"衍生源"分支——按
+  pricing.toml 每模型 token 单价估算（DeepSeek 为 CNY 直接计价，如 v4-flash
+  input=1 / output=2 / cache_read=0.02 元每 1M）；无价格模型的记录显示 N/A。
 - **Ainaba**：`USD × ainaba_platform_rate(7.0) / ainaba_segments 分段 divisor`（平台固定汇率，
   不随市场波动）。
 - **订阅类折扣**：`freemodel_divisor`（=汇率/0.1）、`fenno_divisor`、`grok_divisor`；
@@ -373,7 +385,7 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `COMMANDCODE_SESSION_TOKEN` | 未设置 | Command Code 配额卡 cookie 值（仅当无 `~/.commandcode/auth.json` 时作为回退） |
 | `ZCODE_DB_PATH` | `~/.zcode/cli/db/db.sqlite` | ZCode 库位置覆盖 |
 | `DSH_SESSIONS_PATH` | `~/.dsh/sessions` | DSH 会话目录覆盖 |
-| `DIM_DB_PATH` | `~/.dimcode/v2/dimcode.sqlite` | Dim 库位置覆盖 |
+| `DIM_DB_PATH` | 已废弃 | 旧版 Dim 本地 SQLite 库路径，console API 源不再使用 |
 | `TASKPLANE_PROJECTS_DIR` | `~/srcs` | Taskplane runtime 扫描根目录覆盖 |
 | `OPENCODE_GO_WORKSPACE_ID(_EX)` | 未设置 | OpenCode Go 工作区 ID（配额卡必需） |
 | `OPENCODE_GO_AUTH_COOKIE(_EX)` | 未设置 | OpenCode Go `auth` cookie（配额卡必需） |
@@ -386,6 +398,8 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `YAI_API_KEY` | 未设置 | Ainaiba/XAI 余额查询 Bearer token |
 | `ADVANCED_MODELS_CONFIG` | `~/.config/token-stats/advanced-models.json` | 高级模型编辑存储 |
 | `SUBSCRIPTION_SETTINGS_CONFIG` | `~/.config/token-stats/subscription.json` | 订阅设置存储 |
+| `DIMAGENT_SESSION_COOKIE` | 未设置 | DimAgent 会话 cookie（仅值，不含 `session=` 前缀）。**必需**：`dim` 数据源用它轮询 console API（每次刷新循环，默认 30s）；配额卡也用它作 CLI 回退 + 近 30 天统计增强 |
+| `DIM_USAGE_BIN` | 自动发现 | `dim usage --json` 二进制覆盖（仅配额卡主路径；默认扫描 `~/.dimcode/binaries/dimcode-linux-x64/*/bin/dimcode` 最新版 → PATH `dim`） |
 
 ---
 
@@ -429,22 +443,28 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 2. **Base path** — 前端运行于 `/token-stats/`，API 调用走 `/token-stats/api/*`（Vite
    `base` 已处理）；nginx `location /token-stats/` 反代时**去掉前缀**转发到后端 `/`
    （`proxy_pass http://upstream/;` 尾斜杠重要）。
-3. **SQLite 只读** — ccswitch / opencode / zcode / dim 库均以 `SQLITE_OPEN_READ_ONLY`
-   打开；**切勿写入**这些源库。
-4. **Grok 记录不出现在请求明细** — 聚合包含 `grok-cli`，但 `paginate_requests` 明确排除
+3. **SQLite 只读** — ccswitch / opencode / zcode 库均以 `SQLITE_OPEN_READ_ONLY`
+   打开；**切勿写入**这些源库。dim 源已改为 console API 轮询，不再读任何本地
+   SQLite（`~/.dimcode/v2/dimcode.sqlite` 只被 dim CLI 自身使用）。
+4. **Dim console API 轮询** — `sources/dim.rs` 每次刷新循环（默认 30s）先拉第 1 页
+   （`p=1&page_size=100&type=2`，`page` 参数会被服务端忽略），有新记录才继续翻页直
+   到已见过的 id；页内 id 倒序。cookie 失效（401）时优雅降级为空并保留历史。
+   启动时若完整回填成功，会对 store 做**一次性迁移**：删除旧的按 run 聚合的
+   `source='dim'` 行（指纹不在 API 记录集合中的），避免与逐请求记录双重计数。
+5. **Grok 记录不出现在请求明细** — 聚合包含 `grok-cli`，但 `paginate_requests` 明确排除
    该 source；detail 表永远不会显示 grok 单条记录。
-5. **Kimi 成本是估算** — Kimi CLI/Code 不报原生 cost；按
+6. **Kimi 成本是估算** — Kimi CLI/Code 不报原生 cost；按
    `kimi_api_models` API 原价 ÷ `kimi_subscription_multiplier` 估算。
-6. **零 token 记录** — 默认从聚合与明细中排除（429 等）；`show_zero_tokens=true` 仅影响
+7. **零 token 记录** — 默认从聚合与明细中排除（429 等）；`show_zero_tokens=true` 仅影响
    明细。`exclude_zero_tokens` 是 `FilterCriteria` 的统一开关。
-7. **排序稳定性** — 请求按 time DESC，再 source ASC、provider ASC、model ASC。
-8. **部署** — `deploy.sh` 蓝绿：构建 → 备用端口起新实例 → 健康检查 → 切 nginx upstream →
+8. **排序稳定性** — 请求按 time DESC，再 source ASC、provider ASC、model ASC。
+9. **部署** — `deploy.sh` 蓝绿：构建 → 备用端口起新实例 → 健康检查 → 切 nginx upstream →
    排空旧实例；首次部署会把旧 `token-stats.service` 迁移为 `token-stats@.service`。
    Grok 代理是独立服务，**不随仪表盘蓝绿切换**（始终独占 3434）。
-9. **vendor_merge 与历史** — 改合并组只影响新摄入记录；已持久化记录是合并后形态。
-10. **设置类接口双路径** — 高级模型/订阅设置存 JSON（可被 `*_CONFIG` 环境变量重定向），
+10. **vendor_merge 与历史** — 改合并组只影响新摄入记录；已持久化记录是合并后形态。
+11. **设置类接口双路径** — 高级模型/订阅设置存 JSON（可被 `*_CONFIG` 环境变量重定向），
     与 `pricing.toml`（只读载入、`POST /reload` 热更）是两套机制，别混用。
-11. **Codex 增量解析必须读 session_meta / turn_context** — `parse_files` 的 `subset`
+12. **Codex 增量解析必须读 session_meta / turn_context** — `parse_files` 的 `subset`
     只表示“这次要重读哪些文件”，不是“跳过模型预扫”。跳过预扫会把每条用量写成
     `model=unknown`（provider 回落到 `openai` → vendor merge 成 `ainaba`），指纹不同
     于正确记录，会在 store 里堆出双份。启动时 `collapse_unknown_codex_twins` 按

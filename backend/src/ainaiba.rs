@@ -13,8 +13,19 @@
 //! only reflects the current active cards' total granted amount.
 
 use serde::Serialize;
+use std::sync::LazyLock;
 
 const AINAIBA_API_BASE: &str = "https://api.yairouter.com";
+
+/// Shared HTTP client: reuses a single connection pool across every
+/// `/api/ainaiba-credit` and quota fetch instead of building a new one
+/// (and tearing the pool down) on each request.
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default()
+});
 
 /// Response wrapper with availability flag and optional error.
 #[derive(Debug, Serialize)]
@@ -85,12 +96,9 @@ pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
         }
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .unwrap_or_default();
+    let client = &*HTTP_CLIENT;
 
-    let info_fut = fetch_dashboard(&client, &api_key, "/dashboard/info");
+    let info_fut = fetch_dashboard(client, &api_key, "/dashboard/info");
     let live_fut = fetch_dashboard(&client, &api_key, "/dashboard/live");
 
     let (info_json, live_json) = tokio::join!(info_fut, live_fut);
