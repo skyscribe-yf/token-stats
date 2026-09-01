@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.quota-widget" path="/org/gnome/shell/extensions/quota-widget/">
+    <key name="quota-url" type="s">
+      <default>"http://127.0.0.1:3000"</default>
+      <summary>Token Stats 后端地址</summary>
+      <description>轮询 /api/quota、/api/xunfei、/api/ainaiba-credit 的基址</description>
+    </key>
+    <key name="refresh-interval" type="i">
+      <default>60</default>
+      <summary>自动刷新间隔（秒）</summary>
+    </key>
+    <key name="hidden-cards" type="as">
+      <default>[]</default>
+      <summary>隐藏的订阅卡 id 列表（持久化偏好）</summary>
+    </key>
+  </schema>
+</schemalist>

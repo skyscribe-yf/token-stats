@@ -1,0 +1,7 @@
+{
+  "uuid": "quota-widget@token-stats",
+  "name": "Token Stats 订阅配额",
+  "description": "在面板显示各订阅的可用额度：Tab 切换各订阅卡，支持隐藏过时订阅（偏好持久化）。数据来自本地 token-stats 后端 /api/quota、/api/xunfei、/api/ainaiba-credit。",
+  "shell-version": ["45", "46", "47", "48"],
+  "session-modes": ["user"]
+}

@@ -1,0 +1,117 @@
+/* quota-widget@token-stats 样式 */
+
+/* 面板指示器 */
+.qw-indicator-box {
+    spacing: 4px;
+    padding: 0 4px;
+}
+.qw-indicator-label {
+    font-weight: bold;
+    font-size: 0.95em;
+}
+
+/* 弹窗根容器 */
+.qw-root {
+    padding: 12px;
+    spacing: 8px;
+}
+.qw-head {
+    spacing: 6px;
+}
+.qw-head-title {
+    font-weight: bold;
+    font-size: 1.05em;
+}
+.qw-upd {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.85em;
+}
+.qw-icon-btn {
+    padding: 4px 6px;
+    border-radius: 6px;
+}
+
+/* Tab 行 */
+.qw-tabs-scroll {
+    max-height: 42px;
+}
+.qw-tabs {
+    spacing: 4px;
+}
+.qw-tab {
+    padding: 4px 10px;
+    border-radius: 9px;
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.65);
+    background-color: rgba(255, 255, 255, 0.06);
+}
+.qw-tab:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+.qw-tab-active {
+    background-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+    font-weight: bold;
+}
+
+/* 内容卡片 */
+.qw-content {
+    spacing: 2px;
+}
+.qw-card {
+    spacing: 4px;
+    padding: 4px 2px;
+}
+.qw-card-head {
+    spacing: 6px;
+}
+.qw-card-title {
+    font-weight: bold;
+    font-size: 1.1em;
+}
+.qw-hide-btn {
+    padding: 2px 4px;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 0.45);
+}
+.qw-hide-btn:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+.qw-section {
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.85);
+    padding-top: 6px;
+}
+.qw-row {
+    spacing: 6px;
+    padding-top: 4px;
+}
+.qw-label {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.95em;
+}
+.qw-value {
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+}
+.qw-sub {
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 0.8em;
+}
+.qw-note {
+    padding-top: 2px;
+}
+.qw-error {
+    color: #fda4af;
+}
+.qw-foot {
+    color: rgba(255, 255, 255, 0.35);
+    font-size: 0.78em;
+    padding-top: 6px;
+}
+.qw-restore-btn {
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-size: 0.9em;
+}
