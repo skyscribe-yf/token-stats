@@ -14,6 +14,7 @@ const CARD_DEFS = [
     {id: 'xiaomi-mimo', name: 'MiMo'},
     {id: 'commandcode', name: 'Command Code'},
     {id: 'commandcode-ex', name: 'Cmd Code EX'},
+    {id: 'codebuddy', name: 'CodeBuddy'},
     {id: 'ollama', name: 'Ollama'},
     {id: 'meituan', name: 'LongCat'},
     {id: 'fenno', name: 'Fenno'},

@@ -26,6 +26,7 @@ const CARD_DEFS = [
     {id: 'xiaomi-mimo',    type: 'xiaomi',      name: 'MiMo'},
     {id: 'commandcode',    type: 'commandcode', name: 'Command Code'},
     {id: 'commandcode-ex', type: 'commandcode', name: 'Cmd Code EX'},
+    {id: 'codebuddy',      type: 'codebuddy',   name: 'CodeBuddy'},
     {id: 'ollama',         type: 'ollama',      name: 'Ollama'},
     {id: 'meituan',        type: 'meituan',     name: 'LongCat'},
     {id: 'fenno',          type: 'fenno',       name: 'Fenno'},
@@ -255,6 +256,20 @@ const RENDERERS = {
         return rows;
     },
 
+    codebuddy(d) {
+        const rows = [];
+        (d.packages || []).filter(p => p.remain > 0).forEach(p => {
+            rows.push({
+                kind: 'bar',
+                label: p.package_name,
+                pct: limPct(p.used, p.total) ?? 0,
+                text: `${fmtC(p.remain)} / ${fmtC(p.total)}`,
+                sub: p.cycle_end ? `到期 ${p.cycle_end.slice(0, 10)}` : null,
+            });
+        });
+        return rows;
+    },
+
     ollama(d) {
         const rows = [];
         rows.push({kind: 'note', text: `${d.plan_name}${d.price ? ' · ' + d.price : ''}`});
@@ -387,6 +402,7 @@ const SUMMARY_PCT = {
         d.five_hour ? limPct(d.five_hour.used, d.five_hour.cap) : null,
         d.weekly ? limPct(d.weekly.used, d.weekly.cap) : null,
     ]),
+    codebuddy: d => maxOf((d.packages || []).map(p => limPct(p.used, p.total))),
     ollama: d => maxOf((d.usage_entries || []).map(e => e.percentage)),
     meituan: d => maxOf((d.packs || []).map(p => p.usage_percent)),
     fenno: d => maxOf((d.subscriptions || []).flatMap(s => [
@@ -688,7 +704,8 @@ export default class QuotaWidgetExtension extends Extension {
             return a || {available: false, data: null, error: '未加载'};
         }
         const def = CARD_DEFS.find(c => c.id === id);
-        return (def && q[def.key]) || {available: false, data: null, error: '未加载'};
+        // /api/quota 字段名为 snake_case（如 opencode_go_ex）
+        return (def && q[def.id.replace(/-/g, '_')]) || {available: false, data: null, error: '未加载'};
     }
 
     _updateIndicator() {
