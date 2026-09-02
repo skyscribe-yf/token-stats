@@ -301,6 +301,31 @@ export interface OpenCodeQuotaStatus {
   error: string | null;
 }
 
+// ─── CodeBuddy (codebuddy.cn) Quota ──────────────────────────────────────────
+
+export interface CodeBuddyPackage {
+  package_code: string;
+  package_name: string;
+  is_subscription: boolean;
+  unit: string;
+  total: number;
+  used: number;
+  remain: number;
+  cycle_start: string | null;
+  cycle_end: string | null;
+}
+
+export interface CodeBuddyQuotaData {
+  is_paid_user: boolean;
+  packages: CodeBuddyPackage[];
+}
+
+export interface CodeBuddyQuotaStatus {
+  available: boolean;
+  data: CodeBuddyQuotaData | null;
+  error: string | null;
+}
+
 // ─── Xiaomi MiMo TP Quota ────────────────────────────────────────────────────
 
 export interface XiaomiMiMoUsageEntry {
@@ -336,6 +361,7 @@ export interface QuotaResponse {
   xiaomi_mimo: XiaomiMiMoQuotaStatus | null;
   commandcode: CommandCodeQuotaStatus | null;
   commandcode_ex: CommandCodeQuotaStatus | null;
+  codebuddy: CodeBuddyQuotaStatus | null;
   ollama: OllamaQuotaStatus | null;
   meituan: MeituanQuotaStatus | null;
   fenno: FennoQuotaStatus | null;

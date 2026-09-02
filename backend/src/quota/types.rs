@@ -175,6 +175,7 @@ pub struct QuotaResponse {
     pub xiaomi_mimo: Option<XiaomiMiMoQuotaStatus>,
     pub commandcode: Option<CommandCodeQuotaStatus>,
     pub commandcode_ex: Option<CommandCodeQuotaStatus>,
+    pub codebuddy: Option<CodeBuddyQuotaStatus>,
     pub ollama: Option<OllamaQuotaStatus>,
     pub meituan: Option<MeituanQuotaStatus>,
     pub fenno: Option<FennoQuotaStatus>,
@@ -325,6 +326,40 @@ pub struct CommandCodeQuotaData {
 pub struct CommandCodeQuotaStatus {
     pub available: bool,
     pub data: Option<CommandCodeQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── CodeBuddy (codebuddy.cn) types ─────────────────────────────────────────
+
+/// A single CodeBuddy capacity package (subscription plan or bonus pack).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBuddyPackage {
+    pub package_code: String,
+    pub package_name: String,
+    /// `true` for the package matching `SubscriptionPackageCode` (the paid plan).
+    pub is_subscription: bool,
+    /// Capacity unit (currently always "credits").
+    pub unit: String,
+    pub total: f64,
+    pub used: f64,
+    pub remain: f64,
+    /// Local "YYYY-MM-DD HH:MM:SS" as returned by the API.
+    pub cycle_start: Option<String>,
+    pub cycle_end: Option<String>,
+}
+
+/// CodeBuddy subscription/quota data for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBuddyQuotaData {
+    pub is_paid_user: bool,
+    pub packages: Vec<CodeBuddyPackage>,
+}
+
+/// CodeBuddy quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBuddyQuotaStatus {
+    pub available: bool,
+    pub data: Option<CodeBuddyQuotaData>,
     pub error: Option<String>,
 }
 

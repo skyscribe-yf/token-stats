@@ -17,6 +17,7 @@ import type {
   KimiQuotaStatus,
   OpenCodeQuotaStatus,
   CommandCodeQuotaStatus,
+  CodeBuddyQuotaStatus,
   OllamaQuotaStatus,
   MeituanQuotaStatus,
   FennoQuotaStatus,
@@ -1002,6 +1003,100 @@ function SkeletonBars() {
   );
 }
 
+function CodeBuddyCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: CodeBuddyQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-codebuddy";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+  const packages = data?.packages ?? [];
+
+  // Nearest cycle end among packages that still have credits
+  const activePackages = packages.filter((p) => p.remain > 0);
+  const nearestCycleEnd = activePackages
+    .map((p) => p.cycle_end)
+    .filter((d): d is string => !!d)
+    .sort()[0];
+
+  const totalRemain = activePackages.reduce((s, p) => s + p.remain, 0);
+  const totalAmount = packages.reduce((s, p) => s + p.total, 0);
+  const totalUsed = packages.reduce((s, p) => s + p.used, 0);
+  const overallPct = totalAmount > 0 ? (totalUsed / totalAmount) * 100 : 0;
+
+  // Hide card entirely when the fetch failed (e.g. no cookie configured)
+  if (!loading && !status?.available) return null;
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="CodeBuddy 套餐"
+        href="https://www.codebuddy.cn/profile/plans-usage"
+        suffix="codebuddy.cn"
+        cycleCountdown={buildCycleCountdown(nearestCycleEnd)}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data && packages.length > 0 ? (
+        <div className="space-y-2">
+          {/* Overall summary when multiple packages */}
+          {packages.length > 1 && (
+            <div className="space-y-1 pb-2 border-b border-slate-100">
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>合计 {formatNumber(Math.round(totalRemain))} 剩余</span>
+                <span>{overallPct.toFixed(0)}% 已消耗</span>
+              </div>
+              <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${barColor(totalUsed, totalAmount)}`}
+                  style={{ width: `${Math.min(overallPct, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Per-package details */}
+          {activePackages.map((pkg, i) => (
+            <div
+              key={pkg.package_code}
+              className={i > 0 ? "pt-2 border-t border-slate-100" : ""}
+            >
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-1.5">
+                <span className="font-bold text-slate-800 truncate max-w-[60%]" title={pkg.package_name}>
+                  {pkg.package_name}
+                </span>
+                {pkg.is_subscription && (
+                  <span className="px-1 py-0 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                    订阅
+                  </span>
+                )}
+              </div>
+              <ProgressBar label="用量" used={pkg.used} limit={pkg.total} />
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1.5 text-[10px] text-slate-500">
+                <span>
+                  剩余 {formatNumber(Math.round(pkg.remain))} / {formatNumber(Math.round(pkg.total))} {pkg.unit}
+                </span>
+                {pkg.cycle_end && <span>到期 {pkg.cycle_end.slice(0, 10)}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function MeituanCard({
   status,
   loading,
@@ -1449,6 +1544,13 @@ export const QuotasSection = memo(function QuotasSection({
         {!isQuotaCardHidden(hiddenCards, "quota-ollama") && (
           <OllamaCard
             status={quota?.ollama ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-codebuddy") && (
+          <CodeBuddyCard
+            status={quota?.codebuddy ?? null}
             loading={quotaLoading}
             highlightId={highlightCardId}
           />

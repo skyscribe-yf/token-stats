@@ -256,6 +256,14 @@ else
     echo "⚠️  COMMANDCODE_SESSION_TOKEN not set"
 fi
 
+if [ -n "${CODEBUDDY_SESSION_COOKIE:-}" ] && [ -n "${CODEBUDDY_SESSION_COOKIE_2:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "CODEBUDDY_SESSION_COOKIE" "$CODEBUDDY_SESSION_COOKIE"
+    inject_env_dropin "$NEW_INSTANCE" "CODEBUDDY_SESSION_COOKIE_2" "$CODEBUDDY_SESSION_COOKIE_2"
+    echo "✅ Injected CodeBuddy cookies"
+else
+    echo "⚠️  CodeBuddy cookies not set (run scripts/extract-codebuddy-cookies.sh)"
+fi
+
 if [ -n "${OLLAMA_AUTH_COOKIE:-}" ]; then
     inject_env_dropin "$NEW_INSTANCE" "OLLAMA_AUTH_COOKIE" "$OLLAMA_AUTH_COOKIE"
     echo "✅ Injected OLLAMA_AUTH_COOKIE"

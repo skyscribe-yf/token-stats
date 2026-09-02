@@ -4,6 +4,7 @@
 //! - **Kimi Code**: Usage via `GET /usages` on the Kimi Code platform (OAuth access token)
 //! - **OpenCode-go**: Usage via direct HTTP request to workspace dashboard (HTML parsing)
 
+pub mod codebuddy;
 pub mod commandcode;
 pub mod dimagent;
 pub mod fenno;
@@ -16,8 +17,8 @@ pub mod types;
 pub mod xiaomi_mimo;
 
 pub use types::{
-    CommandCodeQuotaStatus, DimAgentQuotaStatus, FennoQuotaStatus, GrokQuotaStatus,
-    KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
+    CodeBuddyQuotaStatus, CommandCodeQuotaStatus, DimAgentQuotaStatus, FennoQuotaStatus,
+    GrokQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
     QuotaResponse, XiaomiMiMoQuotaStatus,
 };
 
@@ -142,6 +143,11 @@ impl QuotaFetcher {
     /// Fetch CommandCode subscription/quota info (second auth*.json account).
     pub async fn fetch_commandcode_quota_ex(&self) -> CommandCodeQuotaStatus {
         commandcode::fetch_commandcode_quota_ex(&self.client).await
+    }
+
+    /// Fetch CodeBuddy (codebuddy.cn) subscription/package quota.
+    pub async fn fetch_codebuddy_quota(&self) -> CodeBuddyQuotaStatus {
+        codebuddy::fetch_codebuddy_quota(&self.client).await
     }
 
     /// Fetch Ollama cloud subscription/quota info.
