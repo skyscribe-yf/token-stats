@@ -27,3 +27,7 @@ setup-docker-mirror.sh
 longcat_js/
 *.new
 2525.*.js
+.commandcode/
+.zcode/
+test-avatar.png
+test-cover.png
