@@ -1017,16 +1017,31 @@ function CodeBuddyCard({
   const data = status?.data;
   const packages = data?.packages ?? [];
 
-  // Nearest cycle end among packages that still have credits
+  // Packages that still have credits
   const activePackages = packages.filter((p) => p.remain > 0);
-  const nearestCycleEnd = activePackages
+
+  // The summary aggregates ONE billing cycle only (grouped by cycle_start).
+  // Packages from older cycles (e.g. a leftover one-off pack from months
+  // ago) must not dilute the used % of the current subscription —
+  // otherwise 1200/4000 credits shows up as a misleading "17% 已消耗".
+  const dated = activePackages.filter((p) => !!p.cycle_start);
+  const latestCycle = dated.length > 0
+    ? dated.map((p) => p.cycle_start!).sort().at(-1)!
+    : null;
+  const summaryPackages = latestCycle
+    ? packages.filter((p) => p.cycle_start === latestCycle)
+    : packages;
+
+  // Nearest cycle end within the summary cycle
+  const nearestCycleEnd = summaryPackages
+    .filter((p) => p.remain > 0)
     .map((p) => p.cycle_end)
     .filter((d): d is string => !!d)
     .sort()[0];
 
-  const totalRemain = activePackages.reduce((s, p) => s + p.remain, 0);
-  const totalAmount = packages.reduce((s, p) => s + p.total, 0);
-  const totalUsed = packages.reduce((s, p) => s + p.used, 0);
+  const totalRemain = summaryPackages.reduce((s, p) => s + p.remain, 0);
+  const totalAmount = summaryPackages.reduce((s, p) => s + p.total, 0);
+  const totalUsed = summaryPackages.reduce((s, p) => s + p.used, 0);
   const overallPct = totalAmount > 0 ? (totalUsed / totalAmount) * 100 : 0;
 
   // Hide card entirely when the fetch failed (e.g. no cookie configured)
@@ -1046,11 +1061,11 @@ function CodeBuddyCard({
         <SkeletonBars />
       ) : status?.available && data && packages.length > 0 ? (
         <div className="space-y-2">
-          {/* Overall summary when multiple packages */}
-          {packages.length > 1 && (
+          {/* Overall summary for the current billing cycle */}
+          {summaryPackages.length > 1 && (
             <div className="space-y-1 pb-2 border-b border-slate-100">
               <div className="flex justify-between text-[10px] text-slate-500">
-                <span>合计 {formatNumber(Math.round(totalRemain))} 剩余</span>
+                <span>本周期合计 {formatNumber(Math.round(totalRemain))} 剩余</span>
                 <span>{overallPct.toFixed(0)}% 已消耗</span>
               </div>
               <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">

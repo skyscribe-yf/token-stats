@@ -96,8 +96,10 @@ echo "🔧 Setting up systemd service..."
 
 SERVICE_FILE="$NGINX_DIR/token-stats@.service"
 PROXY_SERVICE_FILE="$NGINX_DIR/token-stats-grok-proxy.service"
+CC_PROXY_SERVICE_FILE="$NGINX_DIR/token-stats-cc-proxy.service"
 TMP_SERVICE="/tmp/token-stats@.service"
 TMP_PROXY_SERVICE="/tmp/token-stats-grok-proxy.service"
+TMP_CC_PROXY_SERVICE="/tmp/token-stats-cc-proxy.service"
 
 sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
     -e "s|User=skyscribe|User=$(whoami)|g" \
@@ -105,13 +107,18 @@ sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
 sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
     -e "s|User=skyscribe|User=$(whoami)|g" \
     "$PROXY_SERVICE_FILE" > "$TMP_PROXY_SERVICE"
+sed -e "s|/home/skyscribe/srcs/token-stats|$PROJECT_DIR|g" \
+    -e "s|User=skyscribe|User=$(whoami)|g" \
+    "$CC_PROXY_SERVICE_FILE" > "$TMP_CC_PROXY_SERVICE"
 
 if [ -d /etc/systemd/system ]; then
     sudo cp "$TMP_SERVICE" /etc/systemd/system/token-stats@.service
     sudo cp "$TMP_PROXY_SERVICE" /etc/systemd/system/token-stats-grok-proxy.service
+    sudo cp "$TMP_CC_PROXY_SERVICE" /etc/systemd/system/token-stats-cc-proxy.service
     sudo systemctl daemon-reload
     sudo systemctl enable --now token-stats-grok-proxy.service
-    echo "✅ Systemd dashboard template and Grok proxy service installed"
+    sudo systemctl enable --now token-stats-cc-proxy.service
+    echo "✅ Systemd dashboard template, Grok proxy and CC proxy services installed"
     echo ""
     echo "   Start the service: sudo systemctl start token-stats@3000"
     echo "   Enable on boot:    sudo systemctl enable token-stats@3000"

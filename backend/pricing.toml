@@ -284,6 +284,26 @@ output = 9.00
 cache_read = 0.20
 cache_write = 2.50
 
+# GPT-6 Astra：OpenAI 官方标准价（2026-09 发布）
+# 来源：https://developers.openai.com/api/docs/pricing
+# input $10 / output $50 / cached input $1 / cache writes = input × 1.25 = $12.50
+# 长上下文档（total input > 272K）：input/cache 2 倍、output 1.5 倍（整请求计）
+#   → input $20 / output $75 / cache_read $2 / cache_write $25
+[[model]]
+name = "gpt-6-astra"
+input = 10.00
+output = 50.00
+cache_read = 1.00
+cache_write = 12.50
+
+[[model]]
+name = "gpt-6-astra"
+tier_threshold = 272000
+input = 20.00
+output = 75.00
+cache_read = 2.00
+cache_write = 25.00
+
 [[model]]
 name = "gpt-5.4"
 input = 2.50
@@ -395,6 +415,56 @@ name = "z-ai/glm-5.3-free"
 input_cny = 0.0
 output_cny = 0.0
 cache_read_cny = 0.0
+cache_write_cny = 0.0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DimAgent 平台积分价（CNY per 1_000_000 tokens，仅 source="dim" 生效）
+# 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode（Lite 套餐）
+# 换算：1 积分 = ¥70 / 11000 = ¥0.006363636；费率(积分/M) × 0.006363636 = CNY/M
+# vision-exp 高峰时段（CST 09:00–12:00 / 14:00–18:00）按 2× 扣费（客服确认），
+# 即 UTC 01:00–04:00 / 06:00–10:00；v4-flash 无高峰双倍，按接口价。
+# 实测验证：正常时段逐小时误差 ≤0.01%；高峰规则使 2026-08-22~09-02 六天日账
+# 全部闭合（误差 ≤0.05%）。
+# ═══════════════════════════════════════════════════════════════════════════
+[[dim_model]]
+name = "deepseek-v4-flash-vision-exp"
+input_cny = 0.653798
+output_cny = 3.922790
+cache_read_cny = 0.043587
+cache_write_cny = 0.0
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_input_cny = 1.307597
+peak_output_cny = 7.845579
+peak_cache_read_cny = 0.087173
+peak_cache_write_cny = 0.0
+
+[[dim_model]]
+name = "deepseek-v4-flash"
+input_cny = 0.871818
+output_cny = 1.743636
+cache_read_cny = 0.017436
+cache_write_cny = 0.0
+
+[[dim_model]]
+name = "glm-5.3"
+# 平台对 glm-5.3 有全时段 7 折（entitlement rate=0.7），夜间 20:00–08:00
+# （CST，= UTC 12:00–24:00）再打 5 折。基础价已含 7 折，peak 价 = 7折×5折。
+input_cny = 3.741818
+output_cny = 13.096364
+cache_read_cny = 0.810727
+cache_write_cny = 0.0
+peak_hours_utc = [[12, 24]]
+peak_input_cny = 1.870909
+peak_output_cny = 6.548182
+peak_cache_read_cny = 0.405364
+peak_cache_write_cny = 0.0
+
+[[dim_model]]
+name = "glm-5.3-flash"
+# 无 rate/rate_windows（entitlement），按接口原价。
+input_cny = 0.477273
+output_cny = 1.590909
+cache_read_cny = 0.095455
 cache_write_cny = 0.0
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -702,6 +772,14 @@ cache_write = 0.50
 
 [[model]]
 name = "cc:muse-spark-1.2-contributor"
+input = 0.10
+output = 0.20
+cache_read = 0.002
+cache_write = 0.0
+
+[[model]]
+# Command Code Go 套餐列表价（与 1.2 Contributor 同价，官方 Go 计划页确认）
+name = "cc:muse-spark-1.3-contributor"
 input = 0.10
 output = 0.20
 cache_read = 0.002

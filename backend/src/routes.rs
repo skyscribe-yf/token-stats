@@ -240,12 +240,17 @@ pub async fn get_filters(State(state): State<Arc<AppState>>) -> impl IntoRespons
 pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let fetcher = &state.quota_fetcher;
 
-    // Snapshot grok-cli records for token aggregation
+    // Snapshot grok-cli records for token aggregation. Dim's Grok Build
+    // channel (source="dim", provider="xai-official") is billed against the
+    // same SuperGrok subscription, so it counts toward the same pool.
     let grok_records: Vec<crate::models::TokenRecord> = {
         let records = state.records.read().await;
         records
             .iter()
-            .filter(|r| r.source == "grok-cli")
+            .filter(|r| {
+                r.source == "grok-cli"
+                    || (r.source == "dim" && r.provider == "xai-official")
+            })
             .cloned()
             .collect()
     };

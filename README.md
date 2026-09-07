@@ -91,6 +91,8 @@ cd backend && ./target/release/token-stats-backend
 | Qoder / Qoder CN | `~/.qoder/projects/*/*.jsonl` / `~/.qoder-cn/logs/sessions/` |
 | Grok CLI | `~/.token-stats/grok-usage.jsonl`（代理写入） |
 | Command Code | `~/.commandcode/projects/<slug>/<session-id>.jsonl` |
+| cc-proxy（Dim→CC） | `~/.token-stats/cc-proxy-usage.jsonl`（代理写入） |
+| dim-agent（Dim→CodeBuddy） | `~/.token-stats/workbuddy-usage.jsonl`（workbuddy 插件写入） |
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | DSH | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` |
 | Dim | `~/.dimcode/v2/dimcode.sqlite` |

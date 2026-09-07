@@ -7,6 +7,7 @@
 mod aggregator;
 mod ainaiba;
 mod app;
+mod cc_proxy;
 mod config;
 mod grok_proxy;
 mod models;
@@ -37,6 +38,10 @@ struct Args {
     /// Run only the loopback Grok usage recorder.
     #[arg(long)]
     grok_proxy_only: bool,
+
+    /// Run only the loopback Command Code proxy for DimAgent.
+    #[arg(long)]
+    cc_proxy_only: bool,
 }
 
 #[cfg(test)]
@@ -51,6 +56,14 @@ mod tests {
             .expect("proxy-only flag should parse");
 
         assert!(args.grok_proxy_only);
+    }
+
+    #[test]
+    fn parses_cc_proxy_only_mode() {
+        let args = Args::try_parse_from(["token-stats-backend", "--cc-proxy-only"])
+            .expect("cc-proxy-only flag should parse");
+
+        assert!(args.cc_proxy_only);
     }
 }
 
@@ -100,6 +113,12 @@ async fn main() {
         grok_proxy::serve()
             .await
             .expect("Grok usage proxy stopped unexpectedly");
+        return;
+    }
+    if args.cc_proxy_only {
+        cc_proxy::serve()
+            .await
+            .expect("Command Code proxy stopped unexpectedly");
         return;
     }
 

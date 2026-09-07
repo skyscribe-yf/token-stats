@@ -260,7 +260,8 @@ pub struct ModelPriceConfig {
     pub peak_cache_write: Option<f64>,
     /// Optional CNY-denominated rates (CNY per 1M tokens). When present, the
     /// model cost is computed directly in CNY without any USD→CNY conversion.
-    /// Used for providers that publish CNY list prices (e.g. DeepSeek 官方).
+    /// Used for providers that publish CNY list prices (e.g. DeepSeek 官方,
+    /// DimAgent 平台积分价).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cny: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,6 +270,17 @@ pub struct ModelPriceConfig {
     pub cache_read_cny: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_cny: Option<f64>,
+    /// Optional CNY peak-hour rates, paired with `peak_hours_utc`. When the
+    /// record falls in a peak window and these are present, they override the
+    /// base CNY rates (e.g. DimAgent vision-exp 高峰时段 2×).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_input_cny: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_output_cny: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_cache_read_cny: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_cache_write_cny: Option<f64>,
     /// Tier threshold in total input tokens (input + cache_read + cache_write).
     /// None = base tier (threshold 0). Some(128000) = applies when total_input >= 128K.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -315,6 +327,13 @@ pub struct PricingConfig {
     /// the regular model schedule.
     #[serde(default)]
     pub yairouter_model: Vec<ModelPriceConfig>,
+    /// DimAgent platform-scoped model prices (CNY, from the DimAgent console
+    /// plans API converted at the subscription's credit price). Only records
+    /// with source == "dim" use this table; other sources keep the regular
+    /// model schedule. Example: deepseek-v4-flash-vision-exp with peak-hour
+    /// (CST 09:00–12:00 / 14:00–18:00) double pricing.
+    #[serde(default)]
+    pub dim_model: Vec<ModelPriceConfig>,
 }
 
 impl Default for PricingConfig {
@@ -350,6 +369,7 @@ impl Default for PricingConfig {
             },
             model: Vec::new(),
             yairouter_model: Vec::new(),
+            dim_model: Vec::new(),
         }
     }
 }
@@ -362,6 +382,10 @@ impl PricingConfig {
 
     fn build_yairouter_model_map(&self) -> HashMap<String, ModelPrice> {
         Self::build_model_map_for(&self.yairouter_model)
+    }
+
+    fn build_dim_model_map(&self) -> HashMap<String, ModelPrice> {
+        Self::build_model_map_for(&self.dim_model)
     }
 
     fn build_model_map_for(models: &[ModelPriceConfig]) -> HashMap<String, ModelPrice> {
@@ -393,6 +417,10 @@ struct PriceTier {
     output_cny: Option<f64>,
     cache_read_cny: Option<f64>,
     cache_write_cny: Option<f64>,
+    peak_input_cny: Option<f64>,
+    peak_output_cny: Option<f64>,
+    peak_cache_read_cny: Option<f64>,
+    peak_cache_write_cny: Option<f64>,
 }
 
 /// A time segment of a model's pricing. Holds the token-count tiers that apply
@@ -494,6 +522,10 @@ impl ModelPrice {
                         output_cny: c.output_cny,
                         cache_read_cny: c.cache_read_cny,
                         cache_write_cny: c.cache_write_cny,
+                        peak_input_cny: c.peak_input_cny,
+                        peak_output_cny: c.peak_output_cny,
+                        peak_cache_read_cny: c.peak_cache_read_cny,
+                        peak_cache_write_cny: c.peak_cache_write_cny,
                     })
                     .collect();
                 tiers.sort_by_key(|t| t.threshold);
@@ -612,13 +644,29 @@ impl ModelPrice {
         record_time: &str,
     ) -> f64 {
         let rt = DateTime::parse_from_rfc3339(record_time).ok();
-        let seg = self.select_segment(rt);
+        let seg = self.select_segment(rt.clone());
         let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
         let tier = seg.select_tier(total_input);
-        input_tokens as f64 * tier.input_cny.unwrap_or(0.0) / 1_000_000.0
-            + output_tokens as f64 * tier.output_cny.unwrap_or(0.0) / 1_000_000.0
-            + cache_read_tokens as f64 * tier.cache_read_cny.unwrap_or(0.0) / 1_000_000.0
-            + cache_write_tokens as f64 * tier.cache_write_cny.unwrap_or(0.0) / 1_000_000.0
+        let peak = seg.is_peak_hour(rt.as_ref());
+        let (input, output, cache_read, cache_write) = if peak {
+            (
+                tier.peak_input_cny.or(tier.input_cny),
+                tier.peak_output_cny.or(tier.output_cny),
+                tier.peak_cache_read_cny.or(tier.cache_read_cny),
+                tier.peak_cache_write_cny.or(tier.cache_write_cny),
+            )
+        } else {
+            (
+                tier.input_cny,
+                tier.output_cny,
+                tier.cache_read_cny,
+                tier.cache_write_cny,
+            )
+        };
+        input_tokens as f64 * input.unwrap_or(0.0) / 1_000_000.0
+            + output_tokens as f64 * output.unwrap_or(0.0) / 1_000_000.0
+            + cache_read_tokens as f64 * cache_read.unwrap_or(0.0) / 1_000_000.0
+            + cache_write_tokens as f64 * cache_write.unwrap_or(0.0) / 1_000_000.0
     }
 }
 
@@ -773,6 +821,7 @@ pub(crate) struct PricingState {
     config: PricingConfig,
     model_map: HashMap<String, ModelPrice>,
     yairouter_model_map: HashMap<String, ModelPrice>,
+    dim_model_map: HashMap<String, ModelPrice>,
     kimi_api_model_map: HashMap<String, KimiApiModelPrice>,
     rate_schedule: RateSchedule,
 }
@@ -781,6 +830,7 @@ impl PricingState {
     fn new(config: PricingConfig) -> Self {
         let model_map = config.build_model_map();
         let yairouter_model_map = config.build_yairouter_model_map();
+        let dim_model_map = config.build_dim_model_map();
         let kimi_api_model_map = config
             .special
             .kimi_api_models
@@ -793,6 +843,7 @@ impl PricingState {
             config,
             model_map,
             yairouter_model_map,
+            dim_model_map,
             kimi_api_model_map,
             rate_schedule,
         }
@@ -801,6 +852,7 @@ impl PricingState {
     fn reload(&mut self, config: PricingConfig) {
         self.model_map = config.build_model_map();
         self.yairouter_model_map = config.build_yairouter_model_map();
+        self.dim_model_map = config.build_dim_model_map();
         self.kimi_api_model_map = config
             .special
             .kimi_api_models
@@ -1354,7 +1406,9 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
 
     // CodeBuddy stores the raw credit charge in TokenRecord.cost. Convert
     // credits to CNY at the flat domestic rate (¥70 / 4000 credits).
-    if record.source == "codebuddy" {
+    // `dim-agent` records (DimAgent via the workbuddy proxy) carry the same
+    // credit cost from the CodeBuddy web API, so they share this formula.
+    if record.source == "codebuddy" || record.source == "dim-agent" {
         return record.cost * cfg.special.codebuddy_cny_per_credit;
     }
 
@@ -1550,6 +1604,28 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
             }
         }
 
+        // 4b3. Dim Grok Build channel: routed to xAI's official API and billed
+        //     against the same SuperGrok subscription as grok-cli xai-official
+        //     records. The stored catalog cost is the API list price, not the
+        //     actual subscription cost — recompute from token counts and apply
+        //     the grok divisor. Covers both the new mapping (provider =
+        //     "xai-official") and pre-migration rows (provider = "grok-build").
+        if record.source == "dim"
+            && (record.provider == "xai-official" || effective_provider == "grok-build")
+        {
+            if let Some(mp) = resolve_model_price(&state, record) {
+                let usd = mp.compute_usd(
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
+                    &record.time,
+                );
+                return usd * schedule.rate_for(&record.time)
+                    / schedule.grok_divisor_for(&record.time);
+            }
+        }
+
         // 4c. Other Pi providers: cost is in USD, convert to CNY.
         //     Ainaiba 使用平台固定结算汇率 7.0（充值 396 元 → 8000 元额度），
         //     其余提供商按记录时间所在的市场汇率分段折算。
@@ -1616,6 +1692,8 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //    provider == "commandcode")
     //    Compute from per-model token rates. pricing.toml model prices are in
     //    USD by default; CNY-priced models (e.g. DeepSeek 官方) skip conversion.
+    //    DimAgent (source == "dim") uses the platform's own credit-based table
+    //    (`dim_model`) converted to CNY, with peak-hour double pricing.
     if record.source == "codex"
         || record.source == "claude-code"
         || record.source == "kimi-code"
@@ -1624,7 +1702,12 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         || record.source == "dsh"
         || record.source == "dim"
     {
-        if let Some(mp) = resolve_model_price(&state, record) {
+        let dim_price = if record.source == "dim" {
+            state.dim_model_map.get(&record.model)
+        } else {
+            None
+        };
+        if let Some(mp) = dim_price.or_else(|| resolve_model_price(&state, record)) {
             let base_rate = if is_yairouter_billed(record) {
                 cfg.special.ainaba_platform_rate
             } else {
@@ -1894,6 +1977,34 @@ mod tests {
     }
 
     #[test]
+    fn project_pricing_toml_has_gpt_6_astra_base_and_long_context_tiers() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        // OpenAI official standard rates (developers.openai.com/api/docs/pricing):
+        // base: input $10 / output $50 / cache_read $1 / cache_write (1.25× input) $12.50
+        // >272K total input: input & cache ×2, output ×1.5
+        let expected = [
+            ("gpt-6-astra", None, 10.0, 50.0, 1.0, 12.5),
+            ("gpt-6-astra", Some(272_000), 20.0, 75.0, 2.0, 25.0),
+        ];
+
+        for (name, tier_threshold, input, output, cache_read, cache_write) in expected {
+            assert!(
+                cfg.model.iter().any(|model| {
+                    model.name == name
+                        && model.tier_threshold == tier_threshold
+                        && (model.input - input).abs() < f64::EPSILON
+                        && (model.output - output).abs() < f64::EPSILON
+                        && (model.cache_read - cache_read).abs() < f64::EPSILON
+                        && (model.cache_write - cache_write).abs() < f64::EPSILON
+                }),
+                "missing or incorrect {name} tier {tier_threshold:?}"
+            );
+        }
+    }
+
+    #[test]
     fn project_pricing_toml_has_current_deepseek_cny_rates() {
         let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
             .expect("backend/pricing.toml should parse as PricingConfig");
@@ -2086,6 +2197,54 @@ mod tests {
     }
 
     #[test]
+    fn dim_grok_build_uses_grok_subscription_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // Dim's Grok Build channel is billed against the SuperGrok
+        // subscription: official USD list price × rate ÷ grok_divisor.
+        // The stored catalog cost (API list price) must NOT be used.
+        let mut record = make_record("dim", "grok-build", "grok-4.6", 0, 1.712644);
+        record.input_tokens = 296_933;
+        record.output_tokens = 12_671;
+        record.cache_read_tokens = 2_085_504;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 2_395_108;
+        record.time = "2026-09-06T14:15:21.333Z".to_string();
+
+        let cost = display_cost(&record);
+        // 2.4M total input → high tier ($4 / $12 / $1.00).
+        let usd = 296_933.0 * 4.00 / 1_000_000.0
+            + 12_671.0 * 12.00 / 1_000_000.0
+            + 2_085_504.0 * 1.00 / 1_000_000.0;
+        // The grok divisor may be overridden by subscription_settings.json
+        // (settings drawer); use the live configured value.
+        let divisor = crate::pricing::get_config().special.grok_divisor;
+        let expected = usd * 6.7894 / divisor;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "dim grok-build: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        // The same record after the provider mapping (grok-build → xai-official)
+        // must produce the identical cost.
+        let mut mapped = record.clone();
+        mapped.provider = "xai-official".to_string();
+        let cost_mapped = display_cost(&mapped);
+        assert!(
+            (cost_mapped - expected).abs() < 1e-9,
+            "dim xai-official: expected {}, got {}",
+            expected,
+            cost_mapped
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
     fn zcode_zero_cost_uses_model_price_with_opencode_divisor() {
         let _guard = pricing_test_guard();
         let prev_env = std::env::var("PRICING_CONFIG").ok();
@@ -2122,8 +2281,8 @@ mod tests {
         let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
 
         // Console-API dim records carry no stored cost; the derived-source
-        // branch prices them from pricing.toml (DeepSeek priced in CNY
-        // directly — no USD→CNY conversion).
+        // branch prices them from pricing.toml dim_model table (DimAgent
+        // 平台积分价换算 CNY — vision-exp 非高峰费率).
         let mut record =
             make_record("dim", "dim", "deepseek-v4-flash-vision-exp", 1_000_000, 0.0);
         record.input_tokens = 15276;
@@ -2132,14 +2291,39 @@ mod tests {
         record.cache_write_tokens = 0;
         record.time = "2026-08-01T00:00:00Z".to_string();
         let cost = display_cost(&record);
-        let expected = 15276.0 / 1_000_000.0 * 1.0 // input_cny
-            + 1048.0 / 1_000_000.0 * 2.0 // output_cny
-            + 17664.0 / 1_000_000.0 * 0.02; // cache_read_cny
+        let expected = 15276.0 / 1_000_000.0 * 0.653798 // input_cny
+            + 1048.0 / 1_000_000.0 * 3.922790 // output_cny
+            + 17664.0 / 1_000_000.0 * 0.043587; // cache_read_cny
         assert!(
             (cost - expected).abs() < 1e-9,
             "dim cost: expected {}, got {}",
             expected,
             cost
+        );
+
+        // Peak hours (CST 09:00–12:00 / 14:00–18:00 = UTC 01:00–04:00 /
+        // 06:00–10:00) bill vision-exp at double the base rates.
+        let mut peak_record = record.clone();
+        peak_record.time = "2026-09-02T02:00:00Z".to_string(); // UTC 02:00 = CST 10:00 高峰
+        let peak_cost = display_cost(&peak_record);
+        let expected_peak = 15276.0 / 1_000_000.0 * 1.307597 // peak_input_cny
+            + 1048.0 / 1_000_000.0 * 7.845579 // peak_output_cny
+            + 17664.0 / 1_000_000.0 * 0.087173; // peak_cache_read_cny
+        assert!(
+            (peak_cost - expected_peak).abs() < 1e-9,
+            "dim peak cost: expected {}, got {}",
+            expected_peak,
+            peak_cost
+        );
+        // Off-peak same model at UTC 12:00 (CST 20:00) keeps base rates.
+        let mut offpeak_record = record.clone();
+        offpeak_record.time = "2026-09-02T12:00:00Z".to_string();
+        let offpeak_cost = display_cost(&offpeak_record);
+        assert!(
+            (offpeak_cost - expected).abs() < 1e-9,
+            "dim off-peak cost: expected {}, got {}",
+            expected,
+            offpeak_cost
         );
 
         restore_pricing_env(prev_env);
@@ -4464,6 +4648,10 @@ holidays = [
             output_cny: None,
             cache_read_cny: None,
             cache_write_cny: None,
+            peak_input_cny: None,
+            peak_output_cny: None,
+            peak_cache_read_cny: None,
+            peak_cache_write_cny: None,
         };
         let off_peak_tier = PriceTier {
             threshold: 0,
@@ -4479,6 +4667,10 @@ holidays = [
             output_cny: None,
             cache_read_cny: None,
             cache_write_cny: None,
+            peak_input_cny: None,
+            peak_output_cny: None,
+            peak_cache_read_cny: None,
+            peak_cache_write_cny: None,
         };
         let price = ModelPrice {
             segments: vec![

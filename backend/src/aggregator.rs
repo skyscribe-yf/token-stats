@@ -268,7 +268,10 @@ pub fn paginate_requests(
     let window = if total > PARTIAL_SORT_THRESHOLD {
         let keep = total - end; // newest `end` records live in tail [keep, total)
         if keep > 0 {
-            records.select_nth_unstable_by(keep, |a, b| cmp_records_newest_first(a, b));
+            // select_nth puts the *smallest* (per comparator = newest) `keep`
+            // records in [0..keep); invert the comparator so the oldest `keep`
+            // land in front and the newest `end` land in [keep..total).
+            records.select_nth_unstable_by(keep, |a, b| cmp_records_newest_first(b, a));
             records[keep..].sort_by(|a, b| cmp_records_newest_first(a, b));
         } else {
             records.sort_by(|a, b| cmp_records_newest_first(a, b));
@@ -1511,6 +1514,45 @@ mod tests {
 
         assert_eq!(page.total, 2);
         assert!(page.data.iter().any(|request| request.source == "grok-cli"));
+    }
+
+    #[test]
+    fn paginate_large_set_returns_newest_first_on_page_one() {
+        // Regression: the partial-sort path (>5000 records) used to invert
+        // select_nth_unstable_by and show the OLDEST records on page 1.
+        let mut records: Vec<TokenRecord> = (0..6000)
+            .map(|i| {
+                let t = format!("2026-07-11T12:{:02}:00Z", 10 + i / 250); // 12:10..12:34, 250 records/minute
+                record("pi", if i % 2 == 0 { "openai" } else { "deepseek" }, "gpt-5.5", &t, 10)
+            })
+            .collect();
+        // Scramble, as the real store ordering is append-only, not time-sorted.
+        records.rotate_left(3001);
+
+        let pricing_guard = crate::pricing::state_read();
+        let page = paginate_requests(records.iter().collect(), 1, 20, None, &pricing_guard);
+
+        assert_eq!(page.total, 6000);
+        assert_eq!(page.data.len(), 20);
+        // Page 1 must hold the 20 newest records (12:34 on 2026-07-11).
+        for request in &page.data {
+            assert!(
+                request.time.starts_with("2026-07-11T12:3"),
+                "page 1 should contain the newest records, got {}",
+                request.time
+            );
+        }
+
+        // Last page must hold the oldest records.
+        let last = paginate_requests(records.iter().collect(), 300, 20, None, &pricing_guard);
+        assert_eq!(last.data.len(), 20);
+        for request in &last.data {
+            assert!(
+                request.time.starts_with("2026-07-11T12:1"),
+                "last page should contain the oldest records, got {}",
+                request.time
+            );
+        }
     }
 
     fn local_dt(

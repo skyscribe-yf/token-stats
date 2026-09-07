@@ -168,16 +168,10 @@ impl TokenStore {
 }
 
 fn apply_store_patches(conn: &Connection) {
-    // One-off fix: all dim-agent usage was miscategorized by model/prefix.
-    // Every record with source='dim' belongs to vendor `dim`.
-    let _ = conn.execute(
-        "UPDATE OR IGNORE token_records SET provider = 'dim' WHERE source = 'dim' AND provider != 'dim'",
-        [],
-    );
-    let _ = conn.execute(
-        "DELETE FROM token_records WHERE source = 'dim' AND provider != 'dim'",
-        [],
-    );
+    // NOTE: the one-off "all dim usage belongs to vendor dim" migration
+    // (UPDATE/DELETE source='dim' AND provider != 'dim') was removed: it ran
+    // on every open and destroyed legitimate dim supplement rows (third-party
+    // channels like ollama-cloud / xai-official) that carry their own provider.
 
     collapse_commandcode_inclusive_twins(conn);
     collapse_unknown_codex_twins(conn);
@@ -452,6 +446,37 @@ impl TokenStore {
                 0
             }
         }
+    }
+
+    /// One-time migration helper: remove persisted `source='dim'` rows whose
+    /// provider is the legacy `grok-build` name. The dim source now maps the
+    /// Grok Build channel to `xai-official` (same SuperGrok subscription as
+    /// grok-cli), so old rows would otherwise double-count the same usage
+    /// under a stale provider. Idempotent (no-op once the rows are gone).
+    pub fn purge_dim_grok_build(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records WHERE source = 'dim' AND provider = 'grok-build'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge legacy dim grok-build rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated dim collection: removed {deleted} legacy grok-build row(s) \
+                 replaced by xai-official records"
+            );
+        }
+        deleted
     }
 
     /// Insert records that are not already present (fingerprint-unique).
@@ -888,6 +913,54 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].input_tokens, 15600);
         assert_eq!(loaded[0].total_tokens, 15600 + 71 + 7424);
+    }
+
+    #[test]
+    fn purge_dim_grok_build_removes_only_legacy_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let insert = |time: &str, provider: &str, source: &str, input: i64, cache: i64| {
+            conn.execute(
+                INSERT_SQL,
+                params![
+                    time,
+                    &time[..10],
+                    "N/A",
+                    provider,
+                    None::<String>,
+                    "grok-4.6",
+                    source,
+                    input,
+                    100i64,
+                    cache,
+                    0i64,
+                    input + 100 + cache,
+                    0.0f64,
+                    None::<f64>,
+                    None::<f64>,
+                ],
+            )
+            .unwrap();
+        };
+        insert("2026-09-06T14:15:21.333Z", "grok-build", "dim", 296_933, 2_085_504);
+        insert("2026-09-06T14:15:21.333Z", "xai-official", "dim", 296_933, 2_085_504);
+        insert("2026-09-06T14:15:21.333Z", "xai-official", "grok-cli", 100, 0);
+        drop(conn);
+
+        let store = TokenStore::open(&path);
+        assert_eq!(store.count(), 3);
+        let deleted = store.purge_dim_grok_build();
+        assert_eq!(deleted, 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 2);
+        assert!(
+            loaded.iter().all(|r| r.provider != "grok-build"),
+            "legacy grok-build row should be purged"
+        );
+        // Idempotent: second call removes nothing.
+        assert_eq!(store.purge_dim_grok_build(), 0);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+[Unit]
+Description=Token Stats Command Code Proxy (DimAgent)
+After=network.target
+
+[Service]
+Type=simple
+User=skyscribe
+WorkingDirectory=/home/skyscribe/srcs/token-stats/backend
+Environment="RUST_LOG=info"
+Environment="CC_PROXY_PORT=8787"
+ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend --cc-proxy-only
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

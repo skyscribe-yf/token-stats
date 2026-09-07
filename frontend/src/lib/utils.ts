@@ -167,11 +167,13 @@ export const SOURCE_COLORS: Record<string, string> = {
   "qoder-cn": "#0d9488", // teal-600
   meituan: "#facc15", // yellow-400
   "grok-cli": "#e11d48", // rose-600
+  "cc-proxy": "#f472b6", // pink-400 (DimAgent via Command Code)
   zcode: "#818cf8", // indigo-400
   dsh: "#22d3ee", // cyan-400
   commandcode: "#f472b6", // pink-400
   dim: "#f97316", // orange-500 - Dim (dimcode)
   codebuddy: "#0ea5e9", // sky-500
+  "dim-agent": "#14b8a6", // teal-500 (DimAgent via CodeBuddy workbuddy proxy)
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -205,6 +207,7 @@ export const VENDOR_LABELS: Record<string, string> = {
   ainaba: "Yairouter",
   ainaiba: "Yairouter",
   xai: "Yairouter",
+  "xai-official": "xAI",
   "yai-router": "Yairouter",
   yairouter: "Yairouter",
   fenno: "Fenno",
@@ -236,11 +239,13 @@ export const SOURCE_LABELS: Record<string, string> = {
   "qoder-cn": "Qoder CN",
   meituan: "美团 LongCat",
   "grok-cli": "Grok CLI",
+  "cc-proxy": "Dim→CC",
   zcode: "ZCode",
   dsh: "DSH",
   commandcode: "Command Code",
   dim: "Dim",
   codebuddy: "CodeBuddy",
+  "dim-agent": "Dim→CB",
 };
 
 export function getSourceColor(source: string): string {

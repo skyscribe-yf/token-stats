@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip", "blocking"] }
 futures-util = "0.3"
+tokio-stream = "0.1"
 fs2 = "0.4"
 scraper = "0.22"
 toml = "0.8"
@@ -23,7 +24,7 @@ zstd = "0.13"
 
 [dev-dependencies]
 wiremock = "0.6"
-temp-env = "0.3"
+temp-env = { version = "0.3", features = ["async_closure"] }
 tempfile = "3"
 flate2 = "1"
 

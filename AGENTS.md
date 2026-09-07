@@ -45,15 +45,43 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 10 | `commandcode` | `~/.commandcode/projects/<slug>/<session-id>.jsonl` | JSONL；`type=message` 行含 `usage`；跳过侧车 `*.checkpoints.jsonl`（`COMMANDCODE_PROJECTS_PATH` 可覆盖） |
 | 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖） |
 | 12 | `dsh` | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` | zstd 压缩 JSONL，DeepSeek Harness；usage chunk 与 `finish` replayState 配对取 provider/model（`DSH_SESSIONS_PATH` 可覆盖） |
-| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`；不再读本地 SQLite（`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
+| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中 `providerId != 'dimcode-api-oauth'` 的第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），排除 dim 自身 OAuth 通道避免与 API 双计（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
 | 14 | `ccswitch` | `~/.cc-switch/cc-switch.db` | 仅当设置了 `USE_CC_SWITCH` 环境变量才加载（`CCSWITCH_DB_PATH` 可覆盖） |
 | 15 | `codebuddy` | `~/.codebuddy/projects/**/*.jsonl` | JSONL；事件的 `providerData.rawUsage` 含 credits 与 token 用量（`CODEBUDDY_PROJECTS_PATH` 可覆盖） |
+| 16 | `cc-proxy` | `~/.token-stats/cc-proxy-usage.jsonl` | JSONL，由内置 loopback Command Code 代理写入（`CC_PROXY_USAGE_LOG_PATH` 可覆盖）；`provider=commandcode`（成本走 `cc:` 价格 ÷ `commandcode_divisor`），`model` 已剥 vendor 前缀 |
+| 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | JSONL，由 workbuddy CLIProxyAPI 插件（`~/workbuddy-proxy`，systemd 服务 `token-stats-workbuddy.service`）写入——DimAgent 经 Tencent CodeBuddy Web API 的请求；`provider=codebuddy`（成本走 `codebuddy_cny_per_credit` 积分换算，与原生 codebuddy 源同一计费公式），`WORKBUDDY_USAGE_LOG_PATH` 可覆盖 |
 
 **Grok 代理说明**：`token-stats-grok-proxy.service` 用 `--grok-proxy-only` 启动后端二进制，
 监听 `127.0.0.1:${GROK_PROXY_PORT:-3434}`，为 Grok CLI 提供 `/v1/responses` 转发
 （YAI Router 与官方 xAI 双上游，别名 `grok-4.5-yai` / `grok-4.5-xai` 均重写为 `grok-4.5`），
 从响应中提取 usage 追加到 `~/.token-stats/grok-usage.jsonl`。代理透传上游状态/响应体，
 不记录 prompt、完成文本、请求头与凭据。
+
+**Command Code 代理说明**：`token-stats-cc-proxy.service` 用 `--cc-proxy-only` 启动后端二进制，
+监听 `127.0.0.1:${CC_PROXY_PORT:-8787}`，为 DimAgent 提供 OpenAI 兼容的
+`POST /v1/chat/completions`（流式+非流式）与 `GET /v1/models`（`/models` 同路由）。
+请求转换为 Command Code 私有 `/alpha/generate` 协议（同 pi-commandcode-provider 形状：
+`x-command-code-version` / `x-cli-environment` / `x-project-slug` 头 + UUID `threadId`），
+从 `finish` 事件的 `totalUsage` 提取用量追加到 `~/.token-stats/cc-proxy-usage.jsonl`。
+认证读 `~/.commandcode/auth.json` 的 `apiKey`（或 `COMMANDCODE_API_KEY`）；模型列表从
+`provider/v1/models` 拉（`COMMANDCODE_MODELS_URL` 可覆盖）。DimAgent 接入：
+`dim provider add cc-proxy --api-key x --base-url http://127.0.0.1:8787 --adapter openai-compatible`。
+注意：CC 服务端**不会**为代理请求写本地 session jsonl，用量只能靠代理自记；`/alpha/generate`
+要求 `stream:true` + 完整 CLI 头 + UUID threadId，否则返回 400/403。
+
+**WorkBuddy 代理说明**：`token-stats-workbuddy.service`（user 级 systemd）运行
+`~/workbuddy-proxy/cli-proxy-api`（CLIProxyAPI v7.2.x，监听 `127.0.0.1:8317`）+ `workbuddy.so`
+插件（[libukai/workbuddy-cliproxy](https://github.com/libukai/workbuddy-cliproxy)，本机 Go 1.26
+编译，仓库在 `~/workbuddy-proxy/workbuddy-cliproxy`），把 Tencent CodeBuddy Web API
+（`copilot.tencent.com/v2/chat/completions`）封装为 OpenAI 兼容接口供 DimAgent 使用
+（`dim provider add workbuddy --api-key <key> --base-url http://127.0.0.1:8317/v1`）。
+扫码登录凭据持久化于 `~/.cli-proxy-api/workbuddy-*.json`（0600，自动刷新）。
+插件在每次请求完成时把归一化后的用量（含 `credit` 积分）追加到
+`~/.token-stats/workbuddy-usage.jsonl`（`WORKBUDDY_USAGE_LOG_PATH` 可覆盖）——即
+`dim-agent` 数据源；缓存语义按 Anthropic 约定归一（`inputTokens` 不含 cache）。管理 API
+密钥在 `~/workbuddy-proxy/config.yaml`（仅绑 127.0.0.1）。注意：hy3 系列免费
+（credit=0），hy4-preview / glm-5.x / kimi-k* 等消耗积分，按
+`codebuddy_cny_per_credit` 换算 CNY。
 
 ### 配额数据源（`GET /api/quota`）
 
@@ -98,7 +126,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 
 | 文件 | 职责 |
 |------|------|
-| `src/main.rs` | CLI 入口（`--grok-proxy-only`、`-l/--log-level`） |
+| `src/main.rs` | CLI 入口（`--grok-proxy-only`、`--cc-proxy-only`、`-l/--log-level`） |
 | `src/app.rs` | `AppState`、`build_router()`、`serve()`（SIGINT/SIGTERM 优雅退出 + 落盘） |
 | `src/models.rs` | `TokenRecord`、`StatsResponse`、`AggregatedStats` 等全部数据结构 |
 | `src/sources/mod.rs` | `DataSource` trait、`load_all_sources()`/`load_changed_sources()`、跨源规范化（去重、模型名归一、vendor merge、Kimi 模型升级） |
@@ -111,6 +139,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | `src/settings.rs` | 高级模型 / 订阅设置持久化（JSON） |
 | `src/ainaiba.rs` | Ainaiba 余额查询 |
 | `src/grok_proxy.rs` | loopback Grok usage 代理（双上游路由） |
+| `src/cc_proxy.rs` | loopback Command Code 代理（OpenAI ↔ CC 协议转换，供 DimAgent 使用） |
 | `src/quota/*.rs` | 各类配额/订阅抓取（kimi、opencode、fenno、grok、ollama、meituan、commandcode、xiaomi_mimo、dimagent） |
 | `src/xunfei/` | 讯飞订阅查询 |
 | `src/time.rs` | 时间边界解析与时区换算 |
@@ -298,8 +327,13 @@ providers = ["openai", "ainaiba", "xai"]
 - **OpenCode**：原始 cost / `opencode_divisor`（6.0）；`opencode_model_segments` 可按模型+
   时间覆盖 divisor（如 deepseek-v4 2026-08-18 起 divisor=3）。
 - **Dim（console API 源）**：不存储原始 cost，`display_cost()` 走"衍生源"分支——按
-  pricing.toml 每模型 token 单价估算（DeepSeek 为 CNY 直接计价，如 v4-flash
-  input=1 / output=2 / cache_read=0.02 元每 1M）；无价格模型的记录显示 N/A。
+  pricing.toml **`[[dim_model]]` 平台积分价**（Lite 套餐 ¥70/11000 积分换算 CNY，如
+  vision-exp input=0.653798 / output=3.922790 / cache_read=0.043587 元每 1M），
+  vision-exp 高峰时段（CST 09:00–12:00 / 14:00–18:00 = UTC 01–04 / 06–10）按
+  `peak_*_cny` 双倍（客服确认，2026-08-22~09-02 六天日账闭合验证）；v4-flash 无高峰
+  双倍按接口价（0.871818 / 1.743636 / 0.017436）；glm-5.3 全时段 7 折（基础价已含），
+  夜间 20:00–08:00 CST（= UTC 12–24）再 5 折（peak 价）；glm-5.3-flash 无折扣按接口价
+  （0.477273 / 1.590909 / 0.095455）；无价格模型的记录显示 N/A。
 - **Ainaba**：`USD × ainaba_platform_rate(7.0) / ainaba_segments 分段 divisor`（平台固定汇率，
   不随市场波动）。
 - **订阅类折扣**：`freemodel_divisor`（=汇率/0.1）、`fenno_divisor`、`grok_divisor`；
@@ -378,6 +412,11 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `QODER_CN_SESSIONS_PATH` | `~/.qoder-cn/logs/sessions` | Qoder CN 会话目录覆盖 |
 | `GROK_USAGE_LOG_PATH` | `~/.token-stats/grok-usage.jsonl` | Grok 用量日志覆盖 |
 | `GROK_PROXY_PORT` | `3434` | loopback Grok 代理端口 |
+| `CC_PROXY_PORT` | `8787` | loopback Command Code 代理端口（DimAgent 接入） |
+| `CC_PROXY_USAGE_LOG_PATH` | `~/.token-stats/cc-proxy-usage.jsonl` | Command Code 代理用量日志覆盖 |
+| `WORKBUDDY_USAGE_LOG_PATH` | `~/.token-stats/workbuddy-usage.jsonl` | WorkBuddy（CodeBuddy Web API）代理用量日志覆盖 |
+| `COMMANDCODE_API_BASE` | `https://api.commandcode.ai` | Command Code 代理 API 基址 |
+| `COMMANDCODE_MODELS_URL` | `https://api.commandcode.ai/provider/v1/models` | Command Code 代理模型列表 URL |
 | `GROK_YAI_UPSTREAM_BASE_URL` / `GROK_UPSTREAM_BASE_URL` | `https://api.yairouter.com` | Grok YAI 上游（兼容旧名 `GROK_UPSTREAM_BASE_URL`） |
 | `GROK_XAI_UPSTREAM_BASE_URL` | `https://api.x.ai` | Grok xAI 上游 |
 | `GROK_XAI_NETWORK_PROXY` | 未设置 | xAI-only 网络代理（如 `http://127.0.0.1:7800`），**不得**用通用 `HTTP_PROXY`（会同时影响双上游） |
@@ -388,6 +427,7 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `ZCODE_DB_PATH` | `~/.zcode/cli/db/db.sqlite` | ZCode 库位置覆盖 |
 | `DSH_SESSIONS_PATH` | `~/.dsh/sessions` | DSH 会话目录覆盖 |
 | `DIM_DB_PATH` | 已废弃 | 旧版 Dim 本地 SQLite 库路径，console API 源不再使用 |
+| `DIM_LOCAL_DB_PATH` | `~/.dimcode/v2/dimcode.sqlite` | dim 源本地补充库路径（第三方通道 per-run 记录，如 ollama cloud） |
 | `TASKPLANE_PROJECTS_DIR` | `~/srcs` | Taskplane runtime 扫描根目录覆盖 |
 | `OPENCODE_GO_WORKSPACE_ID(_EX)` | 未设置 | OpenCode Go 工作区 ID（配额卡必需） |
 | `OPENCODE_GO_AUTH_COOKIE(_EX)` | 未设置 | OpenCode Go `auth` cookie（配额卡必需） |
@@ -446,14 +486,20 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
    `base` 已处理）；nginx `location /token-stats/` 反代时**去掉前缀**转发到后端 `/`
    （`proxy_pass http://upstream/;` 尾斜杠重要）。
 3. **SQLite 只读** — ccswitch / opencode / zcode 库均以 `SQLITE_OPEN_READ_ONLY`
-   打开；**切勿写入**这些源库。dim 源已改为 console API 轮询，不再读任何本地
-   SQLite（`~/.dimcode/v2/dimcode.sqlite` 只被 dim CLI 自身使用）。
+   打开；**切勿写入**这些源库。dim 源对 `~/.dimcode/v2/dimcode.sqlite` 的补充读取
+   同样只读（该库本身只被 dim CLI 自身写入）。
 4. **Dim console API 轮询** — `sources/dim.rs` 每次刷新循环（默认 30s）先拉第 1 页
    （`p=1&page_size=100&type=2`，`page` 参数会被服务端忽略），有新记录才继续翻页直
    到已见过的 id；页内 id 倒序。cookie 失效（401）时优雅降级为空并保留历史。
    启动时若完整回填成功，会对 store 做**一次性迁移**：删除旧的按 run 聚合的
    `source='dim'` 行（指纹不在 API 记录集合中的），避免与逐请求记录双重计数。
-5. **Grok 记录不出现在请求明细** — 聚合包含 `grok-cli`，但 `paginate_requests` 明确排除
+   每次刷新同时读本地 `usage_run_stats` 的第三方通道行（排除 `dimcode-api-oauth`），
+   与 API 记录指纹不同不会双计；`original_provider` 保留原始 providerId 供
+   `display_cost()` 区分计费公式（如 ollama-cloud 订阅价）。`grok-build` 通道映射为
+   `xai-official`（与 grok-cli 的 xAI 官方用量合并计费）：成本按官方 USD 列表价 ×
+   汇率 ÷ `grok_divisor`（SuperGrok 订阅），忽略存储的 catalog 价；启动时对 store
+   做一次性迁移删除旧的 `provider='grok-build'` 行（幂等）。
+5. **Grok 记录不出现在请求明细** — 聚合包含 `grok-cli`（以及 dim 的 `xai-official` 通道），但 `paginate_requests` 明确排除
    该 source；detail 表永远不会显示 grok 单条记录。
 6. **Kimi 成本是估算** — Kimi CLI/Code 不报原生 cost；按
    `kimi_api_models` API 原价 ÷ `kimi_subscription_multiplier` 估算。

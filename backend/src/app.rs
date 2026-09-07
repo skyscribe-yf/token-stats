@@ -141,6 +141,13 @@ impl AppState {
             store.purge_dim_legacy(&dim_keep);
         }
 
+        // ── Dim Grok Build migration ─────────────────────────────────────
+        // The dim source now maps the Grok Build channel to `xai-official`
+        // (billed against the same SuperGrok subscription as grok-cli).
+        // Rows persisted under the legacy `grok-build` provider name would
+        // otherwise double-count the same usage under a stale provider.
+        let dim_grok_migrated = store.purge_dim_grok_build() > 0;
+
         let new_from_sources: Vec<TokenRecord> = source_records
             .into_iter()
             .filter(|r| seen.insert(r.fingerprint()))
@@ -167,6 +174,11 @@ impl AppState {
                 !(dim_migrated
                     && r.source == "dim"
                     && !dim_keep.contains(&r.fingerprint()))
+            })
+            .filter(|r| {
+                // Drop the legacy grok-build dim rows the migration purge
+                // just removed from the store so memory and DB stay in sync.
+                !(dim_grok_migrated && r.source == "dim" && r.provider == "grok-build")
             })
             .chain(new_from_sources)
             .collect();

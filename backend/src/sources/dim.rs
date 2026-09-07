@@ -33,11 +33,25 @@
 //! the last already-ingested id. Fingerprinting in the refresh path dedups
 //! anything already persisted (e.g. after a page fetch fails mid-way and the
 //! same pages are re-fetched on the next poll).
+//!
+//! **Local SQLite supplement**: the console API only reports usage billed
+//! through Dim's own OAuth channel (`token_name: oauth:DimAgent Public`).
+//! Calls routed to third-party providers (e.g. a custom Ollama Cloud
+//! endpoint) never appear there — they only exist in the local
+//! `~/.dimcode/v2/dimcode.sqlite` `usage_run_stats` table (per-run
+//! aggregates). We read that table read-only, **excluding** the
+//! `dimcode-api-oauth` provider (already covered by the API, would
+//! double-count), and map each third-party provider id to the dashboard's
+//! canonical provider name (e.g. `custom-ollama-cloud-042036d3` →
+//! `ollama-cloud`, which vendor_merge.toml merges into the `ollama` group
+//! and pricing.rs bills with the empirical subscription rate).
 
 use super::DataSource;
 use crate::models::TokenRecord;
 use chrono::TimeZone;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Default)]
@@ -50,6 +64,43 @@ const PAGE_SIZE: u64 = 100;
 const HTTP_TIMEOUT_SECS: u64 = 15;
 /// Safety cap on the number of pages fetched in one backfill (~40k records).
 const MAX_PAGES: u64 = 400;
+/// Local dimcode SQLite DB (per-run aggregates incl. third-party providers).
+const LOCAL_DB_DEFAULT: &str = ".dimcode/v2/dimcode.sqlite";
+/// Provider id of Dim's own OAuth channel — already covered by the console
+/// API; rows with this provider are excluded from the local supplement to
+/// avoid double-counting.
+const DIM_OAUTH_PROVIDER: &str = "dimcode-api-oauth";
+
+/// Map a local `usage_run_stats.providerId` to the dashboard's canonical
+/// provider name. Unknown ids fall back to the raw id (lowercased) so new
+/// third-party channels still show up instead of being silently dropped.
+fn map_local_provider(provider_id: &str) -> String {
+    match provider_id {
+        "custom-ollama-cloud-042036d3" => "ollama-cloud".to_string(),
+        // Dim's Grok Build channel routes to xAI's official API — the same
+        // SuperGrok subscription the grok-cli proxy bills against. Map it to
+        // the canonical provider so usage aggregates and the Grok quota card
+        // merge with xAI-official records.
+        "grok-build" => "xai-official".to_string(),
+        other => other.to_lowercase(),
+    }
+}
+
+/// Fallback for unknown provider ids: prefer a slugified display name
+/// (e.g. "ollama cloud" → "ollama-cloud") over the raw id.
+fn fallback_provider_name(provider_id: &str, provider_names: &HashMap<String, String>) -> String {
+    if let Some(display) = provider_names.get(provider_id) {
+        let slug: String = display
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .collect();
+        let slug = slug.trim_matches('-').to_string();
+        if !slug.is_empty() {
+            return slug;
+        }
+    }
+    provider_id.to_lowercase()
+}
 
 // ─── JSON payload shapes ─────────────────────────────────────────────────────
 
@@ -125,7 +176,9 @@ impl DataSource for DimSource {
                 return Vec::new();
             }
         };
-        Self::commit(items, complete)
+        let mut records = Self::commit(items, complete);
+        records.extend(Self::load_local_supplement());
+        records
     }
 
     /// Incremental: fetch only pages that contain ids newer than the last
@@ -139,7 +192,9 @@ impl DataSource for DimSource {
                 return Vec::new();
             }
         };
-        Self::commit(items, complete)
+        let mut records = Self::commit(items, complete);
+        records.extend(Self::load_local_supplement());
+        records
     }
 
     fn is_available(&self) -> bool {
@@ -153,6 +208,102 @@ impl DimSource {
     /// to decide it is safe to drop the legacy per-run rows.
     pub fn last_sync_completed() -> bool {
         POLL_STATE.lock().unwrap().last_sync_complete
+    }
+
+    /// Read third-party provider usage from the local dimcode SQLite
+    /// (`usage_run_stats`), excluding Dim's own OAuth channel (covered by
+    /// the console API). Returns an empty vec when the DB is missing or
+    /// unreadable (graceful degradation).
+    fn load_local_supplement() -> Vec<TokenRecord> {
+        let path = Self::local_db_path();
+        if !path.exists() {
+            return Vec::new();
+        }
+        let conn = match rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to open dim local DB {:?}: {e}", path);
+                return Vec::new();
+            }
+        };
+        let provider_names = local_provider_names(&conn);
+        let sql = "SELECT providerId, modelId, startedAt, endedAt, createdAt,
+                          inputTokens, outputTokens,
+                          cacheReadTokens, cacheWriteTokens, cost
+                   FROM usage_run_stats
+                   WHERE status = 'completed'
+                     AND providerId != ?1
+                     AND (inputTokens > 0 OR outputTokens > 0
+                          OR cacheReadTokens > 0 OR cacheWriteTokens > 0)";
+        let mut stmt = match conn.prepare(sql) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to prepare dim local DB query: {e}");
+                return Vec::new();
+            }
+        };
+        let rows = stmt.query_map([DIM_OAUTH_PROVIDER], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, String>(9)?,
+            ))
+        });
+        let mut records = Vec::new();
+        match rows {
+            Ok(iter) => {
+                for row in iter.flatten() {
+                    let (
+                        provider_id,
+                        model_id,
+                        started_at,
+                        ended_at,
+                        created_at,
+                        input_tokens,
+                        output_tokens,
+                        cache_read_tokens,
+                        cache_write_tokens,
+                        cost_json,
+                    ) = row;
+                    if let Some(rec) = local_row_to_record(
+                        &provider_id,
+                        &model_id,
+                        started_at.as_deref(),
+                        ended_at.as_deref(),
+                        &created_at,
+                        input_tokens,
+                        output_tokens,
+                        cache_read_tokens,
+                        cache_write_tokens,
+                        &cost_json,
+                        &provider_names,
+                    ) {
+                        records.push(rec);
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("Failed to iterate dim local DB rows: {e}"),
+        }
+        if !records.is_empty() {
+            tracing::info!("Loaded {} dim local-supplement records", records.len());
+        }
+        records
+    }
+
+    fn local_db_path() -> PathBuf {
+        std::env::var("DIM_LOCAL_DB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| super::home_dir().join(LOCAL_DB_DEFAULT))
     }
 
     /// Fetch pages from the console API, newest first, until either:
@@ -305,6 +456,90 @@ fn fetch_page(
         .map_err(|e| format!("parse {url}: {e}"))
 }
 
+/// Build providerId → displayName from the local `providers` table, so
+/// unknown provider ids can be labeled with their human-readable name.
+fn local_provider_names(conn: &rusqlite::Connection) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT providerId, displayName FROM providers") {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                map.insert(row.0, row.1);
+            }
+        }
+    }
+    map
+}
+
+/// Map one local `usage_run_stats` row (third-party provider) to a
+/// [`TokenRecord`]. OpenAI cache convention: `inputTokens` includes
+/// `cacheReadTokens` → subtract to get the non-cached input.
+fn local_row_to_record(
+    provider_id: &str,
+    model_id: &str,
+    started_at: Option<&str>,
+    ended_at: Option<&str>,
+    created_at: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: Option<i64>,
+    cache_write_tokens: Option<i64>,
+    cost_json: &str,
+    provider_names: &HashMap<String, String>,
+) -> Option<TokenRecord> {
+    let cache_read = cache_read_tokens.unwrap_or(0).max(0);
+    let cache_write = cache_write_tokens.unwrap_or(0).max(0);
+    let effective_input = (input_tokens - cache_read).max(0);
+    let total = effective_input + output_tokens + cache_read + cache_write;
+    if total == 0 {
+        return None;
+    }
+
+    // Prefer completion time, fall back to start, then creation.
+    let ts = ended_at.or(started_at).unwrap_or(created_at);
+    let (date, time) = super::parse_iso_timestamp(ts);
+
+    let provider = map_local_provider(provider_id);
+    // Unknown provider ids (mapped to their lowercased raw id) get a
+    // readable slug from the display name instead.
+    let provider = if provider == provider_id.to_lowercase() {
+        fallback_provider_name(provider_id, provider_names)
+    } else {
+        provider
+    };
+    // Keep the raw provider id as original_provider so display_cost() can
+    // distinguish this channel (e.g. ollama-cloud subscription billing)
+    // from records merged into the same vendor by vendor_merge.toml.
+    let original_provider = Some(provider_id.to_string());
+
+    // Exact catalog-computed USD cost (Dim's provider catalog). Stored so
+    // display_cost() can fall back to it; ollama-cloud rows are billed with
+    // the empirical subscription rate regardless (see pricing.rs).
+    let cost = serde_json::from_str::<serde_json::Value>(cost_json)
+        .ok()
+        .and_then(|v| v.get("totalCostUsd").and_then(|c| c.as_f64()))
+        .unwrap_or(0.0);
+
+    Some(TokenRecord {
+        date,
+        time,
+        api_key_prefix: "N/A".to_string(),
+        provider,
+        original_provider,
+        model: model_id.to_string(),
+        source: "dim".to_string(),
+        input_tokens: effective_input,
+        output_tokens,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
+        total_tokens: total,
+        cost,
+        ttft_ms: None,
+        tps: None,
+    })
+}
+
 /// Map one console-API log item to a [`TokenRecord`].
 ///
 /// OpenAI cache convention: `prompt_tokens` includes `cache_tokens` →
@@ -408,5 +643,135 @@ mod tests {
         let r = item_to_record(&sample_item()).unwrap();
         assert!(r.time.starts_with("2026-09-01T21:41:43"));
         assert!(r.time.ends_with("+00:00"));
+    }
+
+    // ─── Local SQLite supplement ─────────────────────────────────────────
+
+    fn sample_provider_names() -> HashMap<String, String> {
+        HashMap::from([
+            ("custom-ollama-cloud-042036d3".to_string(), "ollama cloud".to_string()),
+            ("dimcode-api-oauth".to_string(), "DimAgent OAuth".to_string()),
+        ])
+    }
+
+    fn sample_local_row() -> (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        i64,
+        i64,
+        Option<i64>,
+        Option<i64>,
+        String,
+    ) {
+        (
+            "custom-ollama-cloud-042036d3".to_string(),
+            "deepseek-v4-flash:0731".to_string(),
+            Some("2026-09-06T05:35:21.551Z".to_string()),
+            Some("2026-09-06T05:37:26.777Z".to_string()),
+            "2026-09-06T05:37:26.789Z".to_string(),
+            1_193_902,
+            12_362,
+            Some(0),
+            Some(0),
+            r#"{"totalCostUsd":0.17304489199999998}"#.to_string(),
+        )
+    }
+
+    #[test]
+    fn maps_local_ollama_cloud_row() {
+        let (pid, mid, s, e, c, i, o, cr, cw, cost) = sample_local_row();
+        let r = local_row_to_record(
+            &pid, &mid, s.as_deref(), e.as_deref(), &c, i, o, cr, cw, &cost,
+            &sample_provider_names(),
+        )
+        .unwrap();
+        assert_eq!(r.provider, "ollama-cloud");
+        assert_eq!(r.original_provider.as_deref(), Some("custom-ollama-cloud-042036d3"));
+        assert_eq!(r.source, "dim");
+        assert_eq!(r.model, "deepseek-v4-flash:0731");
+        // inputTokens includes cacheReadTokens → subtract (0 here).
+        assert_eq!(r.input_tokens, 1_193_902);
+        assert_eq!(r.output_tokens, 12_362);
+        assert_eq!(r.total_tokens, 1_193_902 + 12_362);
+        assert_eq!(r.cost, 0.17304489199999998);
+        // Completion time preferred over start/creation.
+        assert!(r.time.starts_with("2026-09-06T05:37:26"));
+        assert_eq!(r.date, "2026-09-06");
+        assert_eq!(r.ttft_ms, None);
+        assert_eq!(r.tps, None);
+    }
+
+    #[test]
+    fn maps_local_grok_build_row_to_xai_official() {
+        let (pid, mid, s, e, c, i, o, cr, cw, cost) = (
+            "grok-build".to_string(),
+            "grok-4.6".to_string(),
+            Some("2026-09-06T14:04:46.707Z".to_string()),
+            Some("2026-09-06T14:15:21.333Z".to_string()),
+            "2026-09-06T14:15:21.340Z".to_string(),
+            2_382_437,
+            12_671,
+            Some(2_085_504),
+            None,
+            r#"{"totalCostUsd":1.712644}"#.to_string(),
+        );
+        let r = local_row_to_record(
+            &pid, &mid, s.as_deref(), e.as_deref(), &c, i, o, cr, cw, &cost,
+            &sample_provider_names(),
+        )
+        .unwrap();
+        // Grok Build is billed through xAI's official API → same SuperGrok
+        // subscription as grok-cli xai-official records.
+        assert_eq!(r.provider, "xai-official");
+        assert_eq!(r.original_provider.as_deref(), Some("grok-build"));
+        assert_eq!(r.model, "grok-4.6");
+        // inputTokens includes cacheReadTokens → subtract.
+        assert_eq!(r.input_tokens, 2_382_437 - 2_085_504);
+        assert_eq!(r.cache_read_tokens, 2_085_504);
+        assert_eq!(r.cost, 1.712644);
+    }
+
+    #[test]
+    fn local_row_subtracts_cache_from_input() {
+        let (pid, mid, s, e, c, _i, _o, _cr, _cw, cost) = sample_local_row();
+        let r = local_row_to_record(
+            &pid, &mid, s.as_deref(), e.as_deref(), &c, 500_000, 1_000, Some(400_000), Some(0),
+            &cost, &sample_provider_names(),
+        )
+        .unwrap();
+        assert_eq!(r.input_tokens, 100_000);
+        assert_eq!(r.cache_read_tokens, 400_000);
+        assert_eq!(r.total_tokens, 100_000 + 1_000 + 400_000);
+    }
+
+    #[test]
+    fn local_row_drops_zero_total() {
+        let (pid, mid, s, e, c, _i, _o, _cr, _cw, cost) = sample_local_row();
+        assert!(local_row_to_record(
+            &pid, &mid, s.as_deref(), e.as_deref(), &c, 0, 0, Some(0), Some(0), &cost,
+            &sample_provider_names(),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn unknown_local_provider_uses_display_name_slug() {
+        let names = HashMap::from([("custom-foo-bar".to_string(), "Foo Bar Cloud".to_string())]);
+        let r = local_row_to_record(
+            "custom-foo-bar", "some-model", Some("2026-09-06T05:00:00Z"), None,
+            "2026-09-06T05:00:00Z", 10, 10, Some(0), Some(0), "{}", &names,
+        )
+        .unwrap();
+        assert_eq!(r.provider, "foo-bar-cloud");
+        assert_eq!(r.original_provider.as_deref(), Some("custom-foo-bar"));
+    }
+
+    #[test]
+    fn local_db_path_defaults_to_home() {
+        let p = DimSource::local_db_path();
+        assert!(p.ends_with(".dimcode/v2/dimcode.sqlite"));
     }
 }

@@ -5,11 +5,13 @@
 //! orchestrates loading all configured sources and applies vendor merging.
 
 mod ccswitch;
+mod cc_proxy;
 mod claude_code;
 mod codebuddy;
 mod codex;
 mod commandcode;
 mod dim;
+mod dim_agent;
 mod dsh;
 mod grok_cli;
 mod kimi_cli;
@@ -28,11 +30,14 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 pub use ccswitch::CcSwitchSource;
+pub(crate) use cc_proxy::cc_proxy_usage_log_path;
+pub use cc_proxy::CcProxySource;
 pub use claude_code::ClaudeCodeSource;
 pub use codebuddy::CodeBuddySource;
 pub use codex::CodexSource;
 pub use commandcode::CommandCodeSource;
 pub use dim::DimSource;
+pub use dim_agent::WorkbuddySource;
 pub use dsh::DshSource;
 pub(crate) use grok_cli::grok_usage_log_path;
 pub use grok_cli::GrokCliSource;
@@ -356,6 +361,8 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
             Box::new(QoderSource),
             Box::new(QoderCnSource),
             Box::new(GrokCliSource),
+            Box::new(CcProxySource),
+            Box::new(WorkbuddySource),
             Box::new(CommandCodeSource),
             Box::new(ZcodeSource),
             Box::new(DshSource),

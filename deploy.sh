@@ -5,7 +5,7 @@ PROJECT_DIR="$HOME/srcs/token-stats"
 BINARY_NAME="token-stats-backend"
 PORT_A=3000
 PORT_B=3001
-HEALTH_TIMEOUT=30
+HEALTH_TIMEOUT=90
 NGINX_CONF_SRC="$PROJECT_DIR/nginx/token-stats.conf"
 NGINX_CONF_DST="/etc/nginx/sites-available/token-stats"
 
