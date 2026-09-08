@@ -45,7 +45,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 10 | `commandcode` | `~/.commandcode/projects/<slug>/<session-id>.jsonl` | JSONL；`type=message` 行含 `usage`；跳过侧车 `*.checkpoints.jsonl`（`COMMANDCODE_PROJECTS_PATH` 可覆盖） |
 | 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖） |
 | 12 | `dsh` | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` | zstd 压缩 JSONL，DeepSeek Harness；usage chunk 与 `finish` replayState 配对取 provider/model（`DSH_SESSIONS_PATH` 可覆盖） |
-| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中 `providerId != 'dimcode-api-oauth'` 的第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），排除 dim 自身 OAuth 通道避免与 API 双计（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
+| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中 `providerId != 'dimcode-api-oauth'` 且 `providerId != 'workbuddy'` 的第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），排除 dim 自身 OAuth 通道避免与 API 双计、排除 workbuddy 通道避免与 `dim-agent` 源双计（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
 | 14 | `ccswitch` | `~/.cc-switch/cc-switch.db` | 仅当设置了 `USE_CC_SWITCH` 环境变量才加载（`CCSWITCH_DB_PATH` 可覆盖） |
 | 15 | `codebuddy` | `~/.codebuddy/projects/**/*.jsonl` | JSONL；事件的 `providerData.rawUsage` 含 credits 与 token 用量（`CODEBUDDY_PROJECTS_PATH` 可覆盖） |
 | 16 | `cc-proxy` | `~/.token-stats/cc-proxy-usage.jsonl` | JSONL，由内置 loopback Command Code 代理写入（`CC_PROXY_USAGE_LOG_PATH` 可覆盖）；`provider=commandcode`（成本走 `cc:` 价格 ÷ `commandcode_divisor`），`model` 已剥 vendor 前缀 |
@@ -78,7 +78,9 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 扫码登录凭据持久化于 `~/.cli-proxy-api/workbuddy-*.json`（0600，自动刷新）。
 插件在每次请求完成时把归一化后的用量（含 `credit` 积分）追加到
 `~/.token-stats/workbuddy-usage.jsonl`（`WORKBUDDY_USAGE_LOG_PATH` 可覆盖）——即
-`dim-agent` 数据源；缓存语义按 Anthropic 约定归一（`inputTokens` 不含 cache）。管理 API
+`dim-agent` 数据源；缓存语义按 Anthropic 约定归一（`inputTokens` 不含 cache），
+缓存命中从 `prompt_tokens_details.cached_tokens`（腾讯 Web API 的 OpenAI 式字段）
+提取。管理 API
 密钥在 `~/workbuddy-proxy/config.yaml`（仅绑 127.0.0.1）。注意：hy3 系列免费
 （credit=0），hy4-preview / glm-5.x / kimi-k* 等消耗积分，按
 `codebuddy_cny_per_credit` 换算 CNY。
@@ -518,3 +520,22 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
     于正确记录，会在 store 里堆出双份。启动时 `collapse_unknown_codex_twins` 按
     同时间+token 删除 unknown 行（不要求 provider 相同，因为增量路径曾把
     provider 错写成 openai→ainaba）；无孪生的 unknown 靠全量重解析再摄入正确模型后清除。
+13. **DimAgent 的 `grok-build` provider 不会自刷新 x.ai OAuth** — 该 provider
+    （`driverKind=xai-grok-build`，上游 `https://api.x.ai/v1`；其用量进 dim 源的
+    `xai-official` 通道）的凭据存在 `~/.dimcode/v2/auth.json` 的 `xaiGrokBuild`
+    条目，access token 寿命 6h。**dim 在过期时不会刷新它**：`dim auth refresh`
+    只动 `nextApiOauth`（DimAgent 自身账号），`dim auth status` 也只看那个账号，
+    所以状态始终显示 "Authenticated"。症状是所有 grok-build 请求 403
+    `unauthenticated:bad-credentials` → dim 报
+    `登录状态已失效或凭据无效（PROVIDER_AUTHENTICATION_ERROR）`。
+    排错要点：看 `auth.json` 里 `xaiGrokBuild.expires`（或 access token 的 JWT
+    `exp`）是否早已过期；过期就用 `xaiGrokBuild.refresh` 向
+    `https://auth.x.ai/oauth2/token` 换新的（refresh token 会轮换，新值必须写回）。
+    已自动化：`~/.local/bin/dim-grok-auth-refresh.py`（剩余寿命 <30min 才刷新；
+    flock 防并发、原子写回、保留 0600 权限）+ user 级
+    `dim-grok-auth-refresh.service` / `.timer`（每 15min，`Persistent=true`）。
+    **坑**：user 级 unit **不继承 shell 的代理变量**，而 `auth.x.ai` 直连必然超时，
+    所以 service 里显式设了 `https_proxy=http://127.0.0.1:7800`（haproxy 转发到
+    sing-box/xray）与 `TimeoutStartSec=60`——否则 unit 会静默挂死不退出。
+    若日志出现 "refresh token is rejected too"，说明 refresh token 也失效，只能
+    `dim provider disconnect grok-build` 后重新登录。

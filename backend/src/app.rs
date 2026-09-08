@@ -148,6 +148,14 @@ impl AppState {
         // otherwise double-count the same usage under a stale provider.
         let dim_grok_migrated = store.purge_dim_grok_build() > 0;
 
+        // ── Dim WorkBuddy migration ──────────────────────────────────────
+        // The workbuddy channel is now covered by the `dim-agent` source
+        // (workbuddy-usage.jsonl, written by the workbuddy plugin). Rows
+        // persisted under the legacy `workbuddy` provider name (from the
+        // local dimcode SQLite supplement) would otherwise double-count the
+        // same requests.
+        let dim_workbuddy_migrated = store.purge_dim_workbuddy() > 0;
+
         let new_from_sources: Vec<TokenRecord> = source_records
             .into_iter()
             .filter(|r| seen.insert(r.fingerprint()))
@@ -179,6 +187,11 @@ impl AppState {
                 // Drop the legacy grok-build dim rows the migration purge
                 // just removed from the store so memory and DB stay in sync.
                 !(dim_grok_migrated && r.source == "dim" && r.provider == "grok-build")
+            })
+            .filter(|r| {
+                // Drop the legacy workbuddy dim rows the migration purge
+                // just removed from the store so memory and DB stay in sync.
+                !(dim_workbuddy_migrated && r.source == "dim" && r.provider == "workbuddy")
             })
             .chain(new_from_sources)
             .collect();

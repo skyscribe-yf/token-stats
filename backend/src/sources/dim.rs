@@ -70,6 +70,11 @@ const LOCAL_DB_DEFAULT: &str = ".dimcode/v2/dimcode.sqlite";
 /// API; rows with this provider are excluded from the local supplement to
 /// avoid double-counting.
 const DIM_OAUTH_PROVIDER: &str = "dimcode-api-oauth";
+/// Provider id of the workbuddy proxy channel — already covered by the
+/// `dim-agent` source (workbuddy-usage.jsonl, written by the workbuddy
+/// plugin); rows with this provider are excluded from the local supplement
+/// to avoid double-counting the same requests.
+const WORKBUDDY_PROVIDER: &str = "workbuddy";
 
 /// Map a local `usage_run_stats.providerId` to the dashboard's canonical
 /// provider name. Unknown ids fall back to the raw id (lowercased) so new
@@ -212,7 +217,8 @@ impl DimSource {
 
     /// Read third-party provider usage from the local dimcode SQLite
     /// (`usage_run_stats`), excluding Dim's own OAuth channel (covered by
-    /// the console API). Returns an empty vec when the DB is missing or
+    /// the console API) and the workbuddy channel (covered by the
+    /// `dim-agent` source). Returns an empty vec when the DB is missing or
     /// unreadable (graceful degradation).
     fn load_local_supplement() -> Vec<TokenRecord> {
         let path = Self::local_db_path();
@@ -236,6 +242,7 @@ impl DimSource {
                    FROM usage_run_stats
                    WHERE status = 'completed'
                      AND providerId != ?1
+                     AND providerId != ?2
                      AND (inputTokens > 0 OR outputTokens > 0
                           OR cacheReadTokens > 0 OR cacheWriteTokens > 0)";
         let mut stmt = match conn.prepare(sql) {
@@ -245,7 +252,7 @@ impl DimSource {
                 return Vec::new();
             }
         };
-        let rows = stmt.query_map([DIM_OAUTH_PROVIDER], |row| {
+        let rows = stmt.query_map([DIM_OAUTH_PROVIDER, WORKBUDDY_PROVIDER], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

@@ -479,6 +479,37 @@ impl TokenStore {
         deleted
     }
 
+    /// One-time migration helper: remove persisted `source='dim'` rows whose
+    /// provider is the legacy `workbuddy` name. The workbuddy channel is now
+    /// covered by the `dim-agent` source (workbuddy-usage.jsonl, written by
+    /// the workbuddy plugin), so old rows would otherwise double-count the
+    /// same usage. Idempotent (no-op once the rows are gone).
+    pub fn purge_dim_workbuddy(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records WHERE source = 'dim' AND provider = 'workbuddy'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge legacy dim workbuddy rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated dim collection: removed {deleted} legacy workbuddy row(s) \
+                 replaced by dim-agent records"
+            );
+        }
+        deleted
+    }
+
     /// Insert records that are not already present (fingerprint-unique).
     ///
     /// Returns the number of rows newly inserted. Duplicates are ignored.
