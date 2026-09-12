@@ -5,7 +5,11 @@ PROJECT_DIR="$HOME/srcs/token-stats"
 BINARY_NAME="token-stats-backend"
 PORT_A=3000
 PORT_B=3001
-HEALTH_TIMEOUT=90
+# Cold start reloads every source and, on a fresh process, walks the whole
+# DimAgent console history page by page (MAX_PAGES=400, ~0.25s each) before
+# the HTTP listener is bound. Budget generously; /api/filters can also be slow
+# while the first full aggregation runs.
+HEALTH_TIMEOUT=240
 NGINX_CONF_SRC="$PROJECT_DIR/nginx/token-stats.conf"
 NGINX_CONF_DST="/etc/nginx/sites-available/token-stats"
 
@@ -15,7 +19,7 @@ health_check() {
     local port=$1
     local i
     for i in $(seq 1 "$HEALTH_TIMEOUT"); do
-        if curl -sf "http://127.0.0.1:$port/api/filters" >/dev/null 2>&1; then
+        if curl -sf -m 10 "http://127.0.0.1:$port/api/filters" >/dev/null 2>&1; then
             return 0
         fi
         sleep 1

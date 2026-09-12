@@ -3,6 +3,7 @@ import type {
   XunfeiMultiStatus,
   AinaibaCreditResponse,
 } from "../api";
+import { zcodeWindowUsage } from "../lib/quotaCards";
 
 interface QuotaChip {
   id: string;
@@ -282,6 +283,24 @@ function buildQuotaChips(
         scope: "周余量",
         display: `${remainingPct.toFixed(0)}%`,
         pct: usedPct,
+      });
+    }
+  }
+
+  // ZCode — primary quota window (first window with a usable size)
+  if (quota?.zcode?.available && quota.zcode.data) {
+    const z = quota.zcode.data;
+    const entry = z.limits
+      .map((l) => zcodeWindowUsage(l))
+      .find((u) => u != null);
+    if (entry) {
+      chips.push({
+        id: "zcode-remaining",
+        cardId: "quota-zcode",
+        vendor: "ZCode",
+        scope: "余",
+        display: `${(100 - entry.usedPct).toFixed(0)}%`,
+        pct: entry.usedPct,
       });
     }
   }

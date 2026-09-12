@@ -4,8 +4,8 @@
 //! implements the `DataSource` trait. The `load_all_sources()` function
 //! orchestrates loading all configured sources and applies vendor merging.
 
-mod ccswitch;
 mod cc_proxy;
+mod ccswitch;
 mod claude_code;
 mod codebuddy;
 mod codex;
@@ -16,6 +16,7 @@ mod dsh;
 mod grok_cli;
 mod kimi_cli;
 mod kimi_code;
+mod ollama_proxy;
 mod opencode;
 mod pi;
 mod qoder;
@@ -29,9 +30,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-pub use ccswitch::CcSwitchSource;
-pub(crate) use cc_proxy::cc_proxy_usage_log_path;
 pub use cc_proxy::CcProxySource;
+pub(crate) use cc_proxy::cc_proxy_usage_log_path;
+pub use ccswitch::CcSwitchSource;
 pub use claude_code::ClaudeCodeSource;
 pub use codebuddy::CodeBuddySource;
 pub use codex::CodexSource;
@@ -39,10 +40,15 @@ pub use commandcode::CommandCodeSource;
 pub use dim::DimSource;
 pub use dim_agent::WorkbuddySource;
 pub use dsh::DshSource;
-pub(crate) use grok_cli::grok_usage_log_path;
 pub use grok_cli::GrokCliSource;
+pub(crate) use grok_cli::grok_usage_log_path;
 pub use kimi_cli::KimiCliSource;
 pub use kimi_code::KimiCodeSource;
+pub use ollama_proxy::OllamaProxySource;
+pub(crate) use ollama_proxy::{
+    OLLAMA_CLOUD_RUN_PROVIDER, ollama_run_cutoff, ollama_run_record_superseded,
+    ollama_run_time_superseded,
+};
 pub use opencode::OpenCodeSource;
 pub use pi::PiSource;
 pub use qoder::QoderSource;
@@ -139,7 +145,11 @@ fn walkdir_recursive(
             // those still need an explicit `stat` to see whether the target is
             // a directory (session dirs are sometimes symlinked).
             let ft = entry.file_type()?;
-            let is_dir = if ft.is_symlink() { p.is_dir() } else { ft.is_dir() };
+            let is_dir = if ft.is_symlink() {
+                p.is_dir()
+            } else {
+                ft.is_dir()
+            };
             if is_dir {
                 walkdir_recursive(&p, result)?;
             } else {
@@ -273,8 +283,7 @@ struct FileStamp {
 ///
 /// Stored on the heap via `OnceLock<Box<...>>` because `Mutex::new` is not
 /// const-constructible in older Rust; the box is created once on first use.
-static FILE_STAMPS: OnceLock<Box<Mutex<HashMap<std::path::PathBuf, FileStamp>>>> =
-    OnceLock::new();
+static FILE_STAMPS: OnceLock<Box<Mutex<HashMap<std::path::PathBuf, FileStamp>>>> = OnceLock::new();
 
 fn file_stamps() -> &'static Mutex<HashMap<std::path::PathBuf, FileStamp>> {
     FILE_STAMPS.get_or_init(|| Box::new(Mutex::new(HashMap::new())))
@@ -362,6 +371,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
             Box::new(QoderCnSource),
             Box::new(GrokCliSource),
             Box::new(CcProxySource),
+            Box::new(OllamaProxySource),
             Box::new(WorkbuddySource),
             Box::new(CommandCodeSource),
             Box::new(ZcodeSource),
@@ -549,7 +559,11 @@ mod tests {
         // A new commit lands in the WAL only; main file untouched.
         std::fs::write(&wal, b"commit1-commit2").unwrap();
         let changed = changed_files(&files);
-        assert_eq!(changed, vec![wal.clone()], "WAL change must trigger re-parse");
+        assert_eq!(
+            changed,
+            vec![wal.clone()],
+            "WAL change must trigger re-parse"
+        );
     }
 
     #[test]
@@ -746,7 +760,10 @@ mod tests {
             let eff = (native_clone.input_tokens - native_clone.cache_read_tokens).max(0);
             native_clone.input_tokens = eff;
         }
-        assert_eq!(native_clone.input_tokens, 29710, "native cmd should stay unmodified");
+        assert_eq!(
+            native_clone.input_tokens, 29710,
+            "native cmd should stay unmodified"
+        );
         // Non-commandcode records unchanged either way
         let normal = TokenRecord {
             date: "2026-05-25".to_string(),

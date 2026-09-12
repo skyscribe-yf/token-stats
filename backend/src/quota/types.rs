@@ -182,6 +182,7 @@ pub struct QuotaResponse {
     pub fenno_ex: Option<FennoQuotaStatus>,
     pub grok: Option<GrokQuotaStatus>,
     pub dimagent: Option<DimAgentQuotaStatus>,
+    pub zcode: Option<ZcodeQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -556,5 +557,112 @@ pub struct DimAgentQuotaData {
 pub struct DimAgentQuotaStatus {
     pub available: bool,
     pub data: Option<DimAgentQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── ZCode (BigModel GLM coding plan) types ──────────────────────────────────
+
+/// One quota window/credit pool from `GET /api/monitor/usage/quota/limit`.
+/// Live-API semantics (verified 2026-09-12 against a Lite plan): `usage` is
+/// the window TOTAL, `currentValue` the consumed amount, `remaining` the
+/// remainder (usage ≈ currentValue + remaining), and `percentage` the used
+/// percent (currentValue/usage) — the upstream field names are misleading,
+/// so consumers should use `current_value` as "used".
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ZcodeLimitEntry {
+    /// Limit kind, e.g. `CREDIT_LIMIT` / `TIME_LIMIT`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Window length code returned by the API (3 = hour, 6 = week).
+    #[serde(default)]
+    pub unit: Option<f64>,
+    /// Window length in `unit`s (e.g. 5-hour window → unit=3, number=5).
+    #[serde(default)]
+    pub number: Option<f64>,
+    /// Window total size (NOT the used amount).
+    #[serde(default)]
+    pub usage: Option<f64>,
+    /// Consumed amount in the current window.
+    #[serde(default)]
+    pub current_value: Option<f64>,
+    /// Remaining amount in the current window.
+    #[serde(default)]
+    pub remaining: Option<f64>,
+    /// Used percentage (current_value / usage).
+    #[serde(default)]
+    pub percentage: Option<f64>,
+    /// RFC 3339 reset time converted from the API's epoch-ms value.
+    #[serde(default)]
+    pub next_reset_time: Option<String>,
+    #[serde(default)]
+    pub usage_details: Vec<ZcodeUsageDetail>,
+}
+
+/// Per-model usage inside one limit entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZcodeUsageDetail {
+    pub model_code: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub usage: f64,
+}
+
+/// Active subscription summary from `GET /api/biz/subscription/list`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ZcodeSubscription {
+    pub product_name: Option<String>,
+    #[serde(default)]
+    pub billing_cycle: Option<String>,
+    /// "YYYY-MM-DD" next renewal date.
+    #[serde(default)]
+    pub next_renew_time: Option<String>,
+    /// RFC 3339 end of the current term (parsed from the `valid` range).
+    #[serde(default)]
+    pub expire_time: Option<String>,
+    #[serde(default)]
+    pub auto_renew: bool,
+}
+
+/// ZCode quota data: remote plan/limits plus local per-request usage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZcodeQuotaData {
+    /// Plan level from the quota endpoint (e.g. "lite" → GLM Coding Lite).
+    #[serde(default)]
+    pub plan_level: Option<String>,
+    #[serde(default)]
+    pub limits: Vec<ZcodeLimitEntry>,
+    #[serde(default)]
+    pub subscription: Option<ZcodeSubscription>,
+    // ── Local usage (source='zcode' records) ──
+    pub today_calls: i64,
+    pub today_input_tokens: i64,
+    pub today_output_tokens: i64,
+    pub today_cache_read_tokens: i64,
+    pub today_cache_write_tokens: i64,
+    pub today_total_tokens: i64,
+    /// Estimated spend today in CNY (display_cost semantics).
+    pub today_cost_cny: f64,
+    pub total_calls: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_tokens: i64,
+    pub total_cache_write_tokens: i64,
+    pub total_tokens: i64,
+    pub total_cost_cny: f64,
+    /// Set when the remote quota fetch failed but local usage is still shown.
+    #[serde(default)]
+    pub quota_error: Option<String>,
+}
+
+/// ZCode quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZcodeQuotaStatus {
+    pub available: bool,
+    pub data: Option<ZcodeQuotaData>,
     pub error: Option<String>,
 }

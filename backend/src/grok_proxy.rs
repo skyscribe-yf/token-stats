@@ -1,13 +1,13 @@
 use crate::models::TokenRecord;
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, HeaderName, Request, Response, StatusCode},
+    Router,
+    body::{Body, to_bytes},
+    http::{HeaderName, Request, Response, StatusCode, header},
     response::IntoResponse,
     routing::post,
-    Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use std::{io::Write, net::SocketAddr, path::PathBuf};
 
@@ -27,6 +27,10 @@ struct ResolvedRoute {
     provider: &'static str,
     canonical_model: &'static str,
     network_proxy: Option<String>,
+    /// Bare-model routes (DimAgent grok-build via this proxy) replace the
+    /// caller's placeholder Authorization with DimAgent's real xAI OAuth
+    /// token, read fresh from `~/.dimcode/v2/auth.json` per request.
+    inject_dim_token: bool,
 }
 
 impl ProxyConfig {
@@ -59,31 +63,85 @@ impl ProxyConfig {
     }
 
     fn resolve_route(&self, model: &str) -> Option<ResolvedRoute> {
-        let (upstream_base_url, provider, canonical_model, network_proxy) = match model {
-            "grok-4.5-yai" => (&self.yai_upstream_base_url, "yai-router", "grok-4.5", None),
-            "grok-4.6-yai" => (&self.yai_upstream_base_url, "yai-router", "grok-4.6", None),
-            "grok-4.5-xai" => (
-                &self.xai_upstream_base_url,
-                "xai-official",
-                "grok-4.5",
-                self.xai_network_proxy.clone(),
-            ),
-            "grok-4.6-xai" => (
-                &self.xai_upstream_base_url,
-                "xai-official",
-                "grok-4.6",
-                self.xai_network_proxy.clone(),
-            ),
-            _ => return None,
-        };
+        let (upstream_base_url, provider, canonical_model, network_proxy, inject_dim_token) =
+            match model {
+                "grok-4.5-yai" => (
+                    &self.yai_upstream_base_url,
+                    "yai-router",
+                    "grok-4.5",
+                    None,
+                    false,
+                ),
+                "grok-4.6-yai" => (
+                    &self.yai_upstream_base_url,
+                    "yai-router",
+                    "grok-4.6",
+                    None,
+                    false,
+                ),
+                "grok-4.5-xai" => (
+                    &self.xai_upstream_base_url,
+                    "xai-official",
+                    "grok-4.5",
+                    self.xai_network_proxy.clone(),
+                    false,
+                ),
+                "grok-4.6-xai" => (
+                    &self.xai_upstream_base_url,
+                    "xai-official",
+                    "grok-4.6",
+                    self.xai_network_proxy.clone(),
+                    false,
+                ),
+                // Bare model names route to the official xAI upstream. This is
+                // what DimAgent's grok-build channel sends via this proxy
+                // (custom provider with the `openai-responses` adapter, base
+                // URL pointed here). DimAgent's xai-grok-build driver refuses
+                // to send OAuth credentials to non-*.x.ai hosts, so the proxy
+                // injects the token from DimAgent's auth.json instead.
+                "grok-4.5" => (
+                    &self.xai_upstream_base_url,
+                    "xai-official",
+                    "grok-4.5",
+                    self.xai_network_proxy.clone(),
+                    true,
+                ),
+                "grok-4.6" => (
+                    &self.xai_upstream_base_url,
+                    "xai-official",
+                    "grok-4.6",
+                    self.xai_network_proxy.clone(),
+                    true,
+                ),
+                _ => return None,
+            };
 
         Some(ResolvedRoute {
             upstream_base_url: upstream_base_url.clone(),
             provider,
             canonical_model,
             network_proxy,
+            inject_dim_token,
         })
     }
+}
+
+/// Read DimAgent's xAI Grok Build OAuth access token from
+/// `~/.dimcode/v2/auth.json` (the same file `dim-grok-auth-refresh.py`
+/// keeps fresh). `DIM_HOME` overrides the v2 directory. Returns None when
+/// the file or entry is missing.
+fn dim_grok_build_token() -> Option<String> {
+    let path = std::env::var("DIM_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| crate::sources::home_dir().join(".dimcode/v2"))
+        .join("auth.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("xaiGrokBuild")?
+        .get("access")?
+        .as_str()
+        .map(str::to_string)
 }
 
 #[derive(Deserialize)]
@@ -235,6 +293,26 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
     let url = format!("{}{}", route.upstream_base_url, path_and_query);
     let mut headers = parts.headers;
     headers.remove(header::HOST);
+    // DimAgent's grok-build channel sends a placeholder API key (its
+    // xai-grok-build driver refuses to send OAuth credentials to non-*.x.ai
+    // hosts). Replace it with the real token from DimAgent's auth.json.
+    if route.inject_dim_token {
+        match dim_grok_build_token() {
+            Some(token) => {
+                headers.insert(
+                    header::AUTHORIZATION,
+                    header::HeaderValue::from_str(&format!("Bearer {token}"))
+                        .unwrap_or_else(|_| header::HeaderValue::from_static("Bearer ")),
+                );
+            }
+            None => {
+                tracing::warn!(
+                    "grok-proxy: dim grok-build token missing from auth.json; \
+                     forwarding caller's Authorization unchanged"
+                );
+            }
+        }
+    }
     // The alias is replaced with the canonical upstream model above, which
     // changes the serialized body's size. Let reqwest calculate Content-Length
     // from the rewritten body rather than forwarding Grok CLI's stale value.
@@ -372,7 +450,6 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
             && name != header::CONTENT_ENCODING
         {
             response = response.header(name, value);
-            response = response.header(name, value);
         }
     }
     response
@@ -411,17 +488,29 @@ pub async fn serve() -> std::io::Result<()> {
 mod tests {
     use crate::models::TokenRecord;
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
     use chrono::Utc;
     use tempfile::tempdir;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
-    use super::{parse_usage_record, proxy_response, ProxyConfig};
+    use super::{ProxyConfig, parse_usage_record, proxy_response};
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate DIM_HOME (env is process-global).
+    static DIM_HOME_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Lock the DIM_HOME test mutex, recovering from a poisoned lock left by
+    /// a panicking test (the env mutation is still safe to redo).
+    fn lock_dim_home() -> std::sync::MutexGuard<'static, ()> {
+        DIM_HOME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn parses_terminal_response_usage_with_cached_input() {
@@ -590,6 +679,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn routes_bare_grok_4_6_to_xai_and_records_usage() {
+        // DimAgent's grok-build channel sends the bare model name
+        // ("grok-4.6") to {baseUrl}/responses. With the provider's base URL
+        // pointed at this proxy, the request must reach the official xAI
+        // upstream unchanged and still be usage-logged.
+        let _lk = lock_dim_home();
+        // Point DIM_HOME at an empty dir so no real auth.json is picked up;
+        // the caller's placeholder Authorization is forwarded unchanged.
+        let empty_home = tempdir().unwrap();
+        // SAFETY: serialized on DIM_HOME_TEST_LOCK.
+        unsafe { std::env::set_var("DIM_HOME", empty_home.path().to_str().unwrap()) };
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.6","usage":{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":30}}}"#,
+            ))
+            .mount(&xai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer dim-grok-build-token")
+                .body(Body::from(r#"{"model":"grok-4.6","input":"hi"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(yai.received_requests().await.unwrap().is_empty());
+        let requests = xai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        // Bare model name is forwarded as-is (no alias rewrite needed).
+        assert_eq!(request_body["model"], "grok-4.6");
+        assert_eq!(
+            requests[0]
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer dim-grok-build-token"
+        );
+        // Consume the stream so the terminal usage record is flushed.
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "xai-official");
+        assert_eq!(record.model, "grok-4.6");
+        assert_eq!(record.input_tokens, 70);
+        assert_eq!(record.cache_read_tokens, 30);
+        assert_eq!(record.output_tokens, 20);
+        assert_eq!(record.total_tokens, 120);
+    }
+
+    #[tokio::test]
+    async fn bare_model_route_injects_dim_grok_build_token() {
+        // DimAgent's xai-grok-build driver refuses to send OAuth credentials
+        // to non-*.x.ai hosts, so the proxy must replace the placeholder
+        // Authorization with the token from DimAgent's auth.json.
+        let _lk = lock_dim_home();
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.6","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&xai)
+            .await;
+        let dir = tempdir().unwrap();
+        let dim_home = dir.path().join("dimhome");
+        std::fs::create_dir_all(&dim_home).unwrap();
+        std::fs::write(
+            dim_home.join("auth.json"),
+            r#"{"xaiGrokBuild":{"access":"real-dim-token"}}"#,
+        )
+        .unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        // SAFETY: tests are serialized per-binary; no other test reads DIM_HOME.
+        unsafe { std::env::set_var("DIM_HOME", dim_home.to_str().unwrap()) };
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer placeholder")
+                .body(Body::from(r#"{"model":"grok-4.6","input":"hi"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = xai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer real-dim-token"
+        );
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&log_path).unwrap().lines().count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn routes_grok_4_6_yai_alias_to_yai_and_rewrites_the_model() {
         let yai = MockServer::start().await;
         let xai = MockServer::start().await;
@@ -722,8 +941,8 @@ mod tests {
     // hands the parser compressed bytes and nothing gets recorded.
     #[tokio::test]
     async fn records_usage_from_gzip_compressed_sse_upstream() {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::io::Write;
 
         let upstream = MockServer::start().await;
@@ -756,9 +975,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         // Client receives decompressed SSE plaintext (Content-Encoding stripped).
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(std::str::from_utf8(&body)
-            .unwrap()
-            .contains("response.completed"));
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("response.completed")
+        );
         // Proxy parsed the decompressed terminal event and recorded one line.
         assert_eq!(
             std::fs::read_to_string(log_path).unwrap().lines().count(),

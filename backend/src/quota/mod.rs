@@ -15,11 +15,12 @@ pub mod ollama;
 pub mod opencode;
 pub mod types;
 pub mod xiaomi_mimo;
+pub mod zcode;
 
 pub use types::{
     CodeBuddyQuotaStatus, CommandCodeQuotaStatus, DimAgentQuotaStatus, FennoQuotaStatus,
     GrokQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
-    QuotaResponse, XiaomiMiMoQuotaStatus,
+    QuotaResponse, XiaomiMiMoQuotaStatus, ZcodeQuotaStatus,
 };
 
 use serde::de;
@@ -185,6 +186,15 @@ impl QuotaFetcher {
     /// `DIMAGENT_SESSION_COOKIE` is set.
     pub async fn fetch_dimagent_quota(&self) -> DimAgentQuotaStatus {
         dimagent::fetch_dimagent_quota(&self.client).await
+    }
+
+    /// Fetch ZCode (BigModel GLM coding plan) quota plus local usage.
+    /// `zcode_records` are the caller's `source="zcode"` snapshot.
+    pub async fn fetch_zcode_quota(
+        &self,
+        zcode_records: &[crate::models::TokenRecord],
+    ) -> ZcodeQuotaStatus {
+        zcode::fetch_zcode_quota(&self.client, zcode_records).await
     }
 }
 

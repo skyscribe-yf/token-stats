@@ -255,6 +255,17 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             .collect()
     };
 
+    // Snapshot zcode records for the card's local usage half (tokens/calls
+    // aggregated by quota::zcode; the remote quota half calls BigModel).
+    let zcode_records: Vec<crate::models::TokenRecord> = {
+        let records = state.records.read().await;
+        records
+            .iter()
+            .filter(|r| r.source == "zcode")
+            .cloned()
+            .collect()
+    };
+
     let (
         kimi_result,
         kimi_ex_result,
@@ -270,6 +281,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fenno_ex_result,
         grok_result,
         dimagent_result,
+        zcode_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -285,6 +297,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fetcher.fetch_fenno_quota_ex(),
         fetcher.fetch_grok_quota(&grok_records),
         fetcher.fetch_dimagent_quota(),
+        fetcher.fetch_zcode_quota(&zcode_records),
     );
 
     let response = QuotaResponse {
@@ -302,6 +315,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fenno_ex: Some(fenno_ex_result),
         grok: Some(grok_result),
         dimagent: Some(dimagent_result),
+        zcode: Some(zcode_result),
     };
 
     Json(response)

@@ -23,10 +23,16 @@ import type {
   FennoQuotaStatus,
   GrokQuotaStatus,
   DimAgentQuotaStatus,
+  ZcodeQuotaStatus,
+  ZcodeLimitEntry,
   SubscriptionSettings,
 } from "../../api";
 import { remainingQuota } from "../../lib/fennoQuota";
-import { isQuotaCardHidden } from "../../lib/quotaCards";
+import {
+  hideUnavailableQuotaCard,
+  isQuotaCardHidden,
+  zcodeWindowUsage,
+} from "../../lib/quotaCards";
 
 interface QuotasSectionProps {
   quota: QuotaResponse | null;
@@ -1044,8 +1050,18 @@ function CodeBuddyCard({
   const totalUsed = summaryPackages.reduce((s, p) => s + p.used, 0);
   const overallPct = totalAmount > 0 ? (totalUsed / totalAmount) * 100 : 0;
 
-  // Hide card entirely when the fetch failed (e.g. no cookie configured)
-  if (!loading && !status?.available) return null;
+  // Only hide when credentials were never configured. A 401 / expired
+  // cookie still shows the card with the error so the subscription is
+  // not mistaken for gone.
+  if (
+    !loading &&
+    !status?.available &&
+    hideUnavailableQuotaCard(
+      !!status?.error &&
+        (status.error.includes("not set") || status.error.includes("未配置"))
+    )
+  )
+    return null;
 
   return (
     <CardShell id={cardId} available={!!status?.available} highlight={flash}>
@@ -1468,6 +1484,140 @@ function DimAgentCard({
   );
 }
 
+/** Window label derived from the API's unit/number codes (unit 3 + number 5
+ *  is the classic 5-hour coding-plan window; unit 6 ~ weekly). */
+function zcodeWindowLabel(entry: ZcodeLimitEntry, index: number): string {
+  if (entry.unit === 3 && entry.number) return `${formatNumber(entry.number)}h 窗口`;
+  if (entry.unit === 6) return "周窗口";
+  return `配额窗口 ${index + 1}`;
+}
+
+function ZcodeCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: ZcodeQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-zcode";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+  const sub = data?.subscription ?? null;
+  const cycleCountdown = buildCycleCountdown(sub?.expireTime ?? null);
+  const planName =
+    sub?.productName ??
+    (data?.planLevel
+      ? `GLM Coding ${data.planLevel.charAt(0).toUpperCase()}${data.planLevel.slice(1)}`
+      : null);
+
+  return (
+    <CardShell id={cardId} available={!!status?.available} highlight={flash}>
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="ZCode"
+        href="https://bigmodel.cn/claude-code"
+        suffix="bigmodel.cn"
+        cycleCountdown={cycleCountdown}
+        cycleCountdownSuffix={
+          sub?.expireTime ? <>到期 {sub.expireTime.slice(0, 10)}</> : null
+        }
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data ? (
+        <>
+          <div className="flex items-center gap-2 text-[11px] mb-1">
+            {planName && <span className="font-medium text-slate-600">{planName}</span>}
+            {sub?.billingCycle && (
+              <span className="px-1 py-0 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">
+                {sub.billingCycle}
+                {sub.autoRenew ? " · 自动续订" : ""}
+              </span>
+            )}
+            {!planName && !sub && (
+              <span className="text-slate-400 italic">无有效套餐</span>
+            )}
+          </div>
+          {data.quotaError && (
+            <p className="text-[10px] text-amber-600 mb-1" title={data.quotaError}>
+              配额获取失败：{data.quotaError.length > 80 ? `${data.quotaError.slice(0, 80)}…` : data.quotaError}
+            </p>
+          )}
+          {data.limits.map((entry, i) => {
+            const usage = zcodeWindowUsage(entry);
+            const resetText = formatResetTime(entry.nextResetTime) ?? undefined;
+            return (
+              <div key={i} className={i > 0 ? "mt-1.5" : ""}>
+                {usage ? (
+                  <ProgressBar
+                    label={zcodeWindowLabel(entry, i)}
+                    used={usage.used}
+                    limit={usage.limit}
+                    suffix={resetText}
+                  />
+                ) : (
+                  <div className="flex justify-between text-[10px] text-slate-500">
+                    <span>{zcodeWindowLabel(entry, i)}</span>
+                    <span className="tabular-nums">
+                      已用 {formatNumber(entry.currentValue ?? 0)}
+                      {entry.nextResetTime && ` · ${resetText ?? ""}`}
+                    </span>
+                  </div>
+                )}
+                {entry.usageDetails.length > 0 && (
+                  <div className="mt-0.5 space-y-0.5">
+                    {entry.usageDetails.map((d, j) => (
+                      <div
+                        key={j}
+                        className="flex justify-between text-[10px] text-slate-400"
+                      >
+                        <span className="truncate">
+                          {d.displayName || d.modelCode}
+                        </span>
+                        <span className="tabular-nums">{formatNumber(d.usage)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div className="mt-2 pt-1.5 border-t border-slate-100 space-y-0.5 text-[10px] text-slate-500">
+            <div className="flex justify-between">
+              <span>今日调用</span>
+              <span className="tabular-nums">
+                {formatCalls(data.todayCalls)} · {formatNumber(data.todayTotalTokens)} tokens
+                {data.todayCacheReadTokens > 0 &&
+                  `（缓存 ${formatNumber(data.todayCacheReadTokens)}）`}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>今日成本（按列表价估算）</span>
+              <span className="tabular-nums">¥{data.todayCostCny.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>累计调用</span>
+              <span className="tabular-nums">
+                {formatCalls(data.totalCalls)} · {formatNumber(data.totalTokens)} tokens ·
+                ¥{data.totalCostCny.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error && status.error.length > 120
+            ? "获取失败（详见后端日志）"
+            : status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 export const QuotasSection = memo(function QuotasSection({
   quota,
   xunfei,
@@ -1587,6 +1737,13 @@ export const QuotasSection = memo(function QuotasSection({
         {!isQuotaCardHidden(hiddenCards, "quota-dimagent") && (
           <DimAgentCard
             status={quota?.dimagent ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-zcode") && (
+          <ZcodeCard
+            status={quota?.zcode ?? null}
             loading={quotaLoading}
             highlightId={highlightCardId}
           />

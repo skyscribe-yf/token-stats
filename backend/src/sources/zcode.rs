@@ -16,7 +16,12 @@ use std::path::PathBuf;
 /// `{"OpenCodeGo": {}}` / `{"Tokenrouter": {}}`), which names the provider
 /// that billed the request. Records are tagged with that provider so
 /// display_cost() applies the right formula (opencode-go → plan divisor,
-/// tokenrouter → free/listed pricing).
+/// tokenrouter → free/listed pricing). Adapter-named keys (`anthropic`,
+/// `openai`) are ignored — the bigmodel coding plan speaks the Anthropic
+/// protocol and would otherwise mislabel GLM traffic as `anthropic`;
+/// provider_ids without billing metadata fall back to a channel-based
+/// default (`builtin:bigmodel*` → `bigmodel`, else the historical
+/// `opencode-go`).
 #[derive(Default)]
 pub struct ZcodeSource;
 
@@ -63,6 +68,23 @@ fn normalize_billing_provider(name: &str) -> String {
     }
 }
 
+/// Metadata keys that name the request adapter (wire protocol), not the
+/// vendor that billed the request. The bigmodel coding plan speaks the
+/// Anthropic protocol, so its rows can carry `{"anthropic": {...}}` —
+/// labeling those records `anthropic` would misattribute GLM traffic.
+const ADAPTER_METADATA_KEYS: &[&str] = &["anthropic", "openai", "openai-compatible"];
+
+/// Fallback provider when a provider_id carries no billing metadata:
+/// the built-in BigModel coding-plan channel is Zhipu GLM traffic; older
+/// sessions without metadata rode the OpenCode Go subscription.
+fn default_provider_for(provider_id: &str) -> String {
+    if provider_id.starts_with("builtin:bigmodel") {
+        "bigmodel".to_string()
+    } else {
+        "opencode-go".to_string()
+    }
+}
+
 /// Build provider_id → billing provider from rows whose
 /// `provider_metadata_json` names the billing provider (e.g.
 /// `{"OpenCodeGo":{}}`, `{"Tokenrouter":{}}`). Most rows only carry
@@ -82,7 +104,9 @@ fn billing_provider_map(conn: &rusqlite::Connection) -> HashMap<String, String> 
                     serde_json::from_str::<serde_json::Value>(&meta)
                 {
                     for key in fields.keys() {
-                        if key != "rawFinishReason" {
+                        if !ADAPTER_METADATA_KEYS.contains(&key.as_str())
+                            && key != "rawFinishReason"
+                        {
                             map.entry(pid.clone())
                                 .or_insert_with(|| normalize_billing_provider(key));
                         }
@@ -200,11 +224,12 @@ impl ZcodeSource {
                         time,
                         api_key_prefix: "N/A".to_string(),
                         // Billing provider from provider_metadata_json;
-                        // unknown provider_ids keep the historical default.
+                        // provider_ids without billing metadata fall back
+                        // to a channel-based default.
                         provider: billing
                             .get(&provider_id)
                             .cloned()
-                            .unwrap_or_else(|| "opencode-go".to_string()),
+                            .unwrap_or_else(|| default_provider_for(&provider_id)),
                         original_provider: None,
                         model: model_id,
                         source: "zcode".to_string(),
@@ -422,6 +447,60 @@ mod tests {
         assert_eq!(by_id["z-ai/glm-5.3-free"], "tokenrouter");
         // Provider with no billing metadata keeps the historical default.
         assert_eq!(by_id["some-model"], "opencode-go");
+    }
+
+    #[test]
+    fn bigmodel_provider_ignores_anthropic_adapter_metadata() {
+        // The bigmodel coding plan speaks the Anthropic protocol, so rows can
+        // carry `{"anthropic": {...}}` — an adapter name, not a billing
+        // vendor. Those rows must resolve to `bigmodel`, never `anthropic`.
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage (
+                id text primary key, logical_request_id text not null,
+                session_id text not null, query_source text not null,
+                provider_id text not null, model_id text not null,
+                status text not null, started_at integer not null,
+                completed_at integer,
+                time_to_first_token_ms integer,
+                input_tokens integer not null default 0,
+                output_tokens integer not null default 0,
+                cache_creation_input_tokens integer not null default 0,
+                cache_read_input_tokens integer not null default 0,
+                provider_metadata_json text
+            );",
+        )
+        .unwrap();
+        for (id, meta) in [
+            (
+                "a",
+                "{\"anthropic\":{\"usage\":{\"input_tokens\":273,\"output_tokens\":202}}}",
+            ),
+            ("b", "{\"rawFinishReason\":\"end_turn\"}"),
+            ("c", ""),
+        ] {
+            conn.execute(
+                "INSERT INTO model_usage (id, logical_request_id, session_id,
+                    query_source, provider_id, model_id, status, started_at,
+                    completed_at, time_to_first_token_ms, input_tokens,
+                    output_tokens, cache_creation_input_tokens,
+                    cache_read_input_tokens, provider_metadata_json)
+                 VALUES (?1, 'r', 's', 'main_turn', 'builtin:bigmodel-coding-plan',
+                         'GLM-5.3-Flash', 'completed',
+                         1786539125181, 1786539126181, 50, 100, 20, 0, 0, ?2)",
+                rusqlite::params![id, meta],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let records = ZcodeSource::parse(&db_path);
+        assert_eq!(records.len(), 3);
+        for r in &records {
+            assert_eq!(r.provider, "bigmodel", "anthropic adapter key leaked: {r:?}");
+        }
     }
 
     #[test]

@@ -156,6 +156,43 @@ pub struct SpecialPricing {
     /// If `None`, no off-peak discount is applied (always full price).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xunfei_off_peak: Option<XunfeiOffPeakConfig>,
+    /// ZCode BigModel GLM Coding Plan: CNY price per 积分 (credit).
+    /// 0 = disabled (zcode records fall through to model-price pricing).
+    /// 实付分摊口径（2026-09-12）：3 个月实付 ¥188.04 = 13 周 × 10000 积分 =
+    /// 130,000 积分 → 每积分 188.04 / 130000 ≈ ¥0.00144646。
+    /// 成本 = 官方积分公式算出的积分 × 高峰因子 × 每积分单价。
+    #[serde(default)]
+    pub zcode_cny_per_credit: f64,
+    /// ZCode 积分消耗系数（积分/万 token，lowercase key）：
+    /// `[input, cache_read, output]`。即官方积分公式的抵扣系数，
+    /// 2026-09-12 对 live quota API 验证（回算 3768.7 vs 实测 3774 积分，-0.14%）。
+    /// GLM-5.3-Flash = [2.3, 0.56, 8.0]; GLM-5.3 = [6.9, 1.7, 24.0]。
+    #[serde(default)]
+    pub zcode_credit_rates: HashMap<String, [f64; 3]>,
+    /// Peak (1×) hour ranges in UTC+8 for the ZCode plan. Official rule:
+    /// 高峰 = 周一至周五 14:00–18:00 (UTC+8)；其余时段消耗按 50% 抵扣。
+    #[serde(default = "default_zcode_peak_hours")]
+    pub zcode_peak_hours_cst: Vec<[u32; 2]>,
+    /// Off-peak credit discount factor (0.5 = half credits outside peak).
+    #[serde(default = "default_zcode_off_peak_factor")]
+    pub zcode_off_peak_factor: f64,
+    /// 夜间畅用活动 free window (UTC+8 hours, [start,end)): during the promo
+    /// (2026-09-03 ~ 09-20) GLM-5.3-Flash on ZCode consumes 0 credits
+    /// between 23:00 and 09:00 daily. Empty = no free window.
+    #[serde(default = "default_zcode_night_free_hours")]
+    pub zcode_night_free_hours_cst: Vec<[u32; 2]>,
+    /// Free window date bounds (inclusive, "YYYY-MM-DD", UTC+8). Both must be
+    /// set for the free window to apply.
+    #[serde(default)]
+    pub zcode_night_free_from: Option<String>,
+    #[serde(default)]
+    pub zcode_night_free_until: Option<String>,
+    /// 免费窗口的实际生效时刻（RFC3339 含时区，如 "2026-09-13T06:15:00+08:00"）。
+    /// 旧版 ZCode 客户端不享受夜间免扣，服务端在该时刻前照常扣积分；此时刻之前
+    /// 落在免费窗口内的记录按正常高峰/波谷因子计费。None = 窗口在 from..until
+    /// 全程有效。
+    #[serde(default)]
+    pub zcode_night_free_effective_from: Option<String>,
 }
 
 fn default_codebuddy_cny_per_credit() -> f64 {
@@ -188,7 +225,20 @@ fn default_ollama_cloud_model_multipliers() -> HashMap<String, f64> {
         ("deepseek-v4-flash".to_string(), 0.2),
         ("deepseek-v4-flash:0731".to_string(), 0.2),
         ("deepseek-v4-flash:0731-cloud".to_string(), 0.2),
+        ("deepseek-v4.1-flash".to_string(), 0.2),
     ])
+}
+
+fn default_zcode_peak_hours() -> Vec<[u32; 2]> {
+    vec![[14, 18]]
+}
+
+fn default_zcode_off_peak_factor() -> f64 {
+    0.5
+}
+
+fn default_zcode_night_free_hours() -> Vec<[u32; 2]> {
+    vec![[23, 24], [0, 9]]
 }
 
 /// Xunfei off-peak (波谷) pricing configuration.
@@ -285,6 +335,14 @@ pub struct ModelPriceConfig {
     /// None = base tier (threshold 0). Some(128000) = applies when total_input >= 128K.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier_threshold: Option<i64>,
+    /// When true, the peak windows in `peak_hours_utc` apply on weekdays
+    /// (UTC) only; weekends always use the base (off-peak) rates. Command
+    /// Code's DeepSeek peak pricing is documented as "Peak runs Monday to
+    /// Friday only, so it is never charged at the weekend"
+    /// (https://commandcode.ai/models/deepseek-v4-1-flash), which the plain
+    /// hour-range match would otherwise get wrong.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub peak_weekdays_only: bool,
     /// Optional RFC3339 timestamp marking when this price entry becomes effective.
     /// Entries without `effective_from` are the baseline (apply to all records).
     /// Entries with `effective_from` apply only to records whose time >= effective_from.
@@ -366,6 +424,14 @@ impl Default for PricingConfig {
                 ollama_cloud_model_multipliers: default_ollama_cloud_model_multipliers(),
                 grok_divisor: default_grok_divisor(),
                 xunfei_off_peak: None,
+                zcode_cny_per_credit: 0.0,
+                zcode_credit_rates: HashMap::new(),
+                zcode_peak_hours_cst: default_zcode_peak_hours(),
+                zcode_off_peak_factor: default_zcode_off_peak_factor(),
+                zcode_night_free_hours_cst: default_zcode_night_free_hours(),
+                zcode_night_free_from: None,
+                zcode_night_free_until: None,
+                zcode_night_free_effective_from: None,
             },
             model: Vec::new(),
             yairouter_model: Vec::new(),
@@ -433,6 +499,11 @@ struct TimeSegment {
     /// Inclusive UTC hour ranges (`[start, end)`) using the optional peak
     /// rates on its tiers. An empty list means the base rates always apply.
     peak_hours_utc: Vec<[u32; 2]>,
+    /// Restrict the peak windows above to weekdays (UTC). Providers that
+    /// publish "peak runs Monday to Friday only" (Command Code DeepSeek)
+    /// charge the off-peak rate all weekend; without this flag the hour-range
+    /// match would bill weekend records at peak rates.
+    peak_weekdays_only: bool,
     /// Token-count tiers sorted by threshold ascending (first = base, threshold 0).
     tiers: Vec<PriceTier>,
 }
@@ -457,7 +528,13 @@ impl TimeSegment {
         let Some(record_time) = record_time else {
             return false;
         };
-        let hour = record_time.with_timezone(&Utc).hour();
+        let utc = record_time.with_timezone(&Utc);
+        if self.peak_weekdays_only
+            && matches!(utc.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+        {
+            return false;
+        }
+        let hour = utc.hour();
         self.peak_hours_utc.iter().any(|[start, end]| {
             if start <= end {
                 *start <= hour && hour < *end
@@ -537,9 +614,11 @@ impl ModelPrice {
                     .find(|c| !c.peak_hours_utc.is_empty())
                     .map(|c| c.peak_hours_utc.clone())
                     .unwrap_or_default();
+                let peak_weekdays_only = cfgs.iter().any(|c| c.peak_weekdays_only);
                 TimeSegment {
                     effective_from,
                     peak_hours_utc,
+                    peak_weekdays_only,
                     tiers,
                 }
             })
@@ -1380,6 +1459,86 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
         .unwrap_or(1.0)
 }
 
+/// Compute the actual CNY cost of a ZCode (BigModel GLM Coding Plan) record.
+///
+/// Official credit formula (docs.bigmodel.cn/cn/coding-plan/overview):
+///   credits = (input×2.3 + cache_read×0.56 + output×8) / 10000  (GLM-5.3-Flash)
+///   credits = (input×6.9 + cache_read×1.7 + output×24) / 10000  (GLM-5.3)
+/// Peak hours (Mon–Fri 14:00–18:00 UTC+8) consume 1×; all other times 0.5×.
+/// During the Flash×ZCode night promo (2026-09-03..09-20, 23:00–09:00 CST,
+/// ZCode client) credits are 0 — but only from
+/// `zcode_night_free_effective_from` onwards: the old ZCode client build did
+/// not enjoy the promo server-side, so records in the window before that
+/// instant (2026-09-13 06:15 CST) bill at the normal peak/off-peak factor.
+/// Actual cost = credits × factor ×
+/// zcode_cny_per_credit（实付分摊：3 个月 ¥188.04 / 13 周×10000 积分 =
+/// ¥0.00144646/积分）。
+///
+/// The record's `input_tokens` already excludes cache reads/writes (the zcode
+/// parser subtracts them, Anthropic convention) — matches the "输入 Token" term
+/// in the official formula.
+fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> Option<f64> {
+    if special.zcode_cny_per_credit <= 0.0 {
+        return None;
+    }
+    let rates = special.zcode_credit_rates.get(&record.model.to_lowercase())?;
+    let rt = DateTime::parse_from_rfc3339(&record.time).ok()?;
+    let cst = rt.with_timezone(&FixedOffset::east_opt(8 * 3600)?);
+    let hour = cst.hour();
+
+    // 夜间畅用活动：活动日期内每日 23:00–09:00 CST，ZCode 端积分消耗为 0。
+    // 但活动对旧版客户端不生效（zcode_night_free_effective_from 之前服务端
+    // 照常扣积分），窗口内的更早记录跳过免费分支，按正常高峰/波谷因子计费。
+    if let (Some(from), Some(until)) = (
+        special.zcode_night_free_from.as_deref(),
+        special.zcode_night_free_until.as_deref(),
+    ) {
+        let promo_live = special
+            .zcode_night_free_effective_from
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|effective| cst >= effective)
+            .unwrap_or(true);
+        let date = cst.format("%Y-%m-%d").to_string();
+        if promo_live && date.as_str() >= from && date.as_str() <= until {
+            let in_free = special.zcode_night_free_hours_cst.iter().any(|[s, e]| {
+                if s <= e {
+                    *s <= hour && hour < *e
+                } else {
+                    hour >= *s || hour < *e
+                }
+            });
+            if in_free {
+                return Some(0.0);
+            }
+        }
+    }
+
+    // 高峰（周一至周五 14:00–18:00 CST）按 1×，其余时段按 0.5× 抵扣。
+    let weekday = cst.weekday();
+    let is_weekday = matches!(
+        weekday,
+        chrono::Weekday::Mon
+            | chrono::Weekday::Tue
+            | chrono::Weekday::Wed
+            | chrono::Weekday::Thu
+            | chrono::Weekday::Fri
+    );
+    let peak = is_weekday
+        && special
+            .zcode_peak_hours_cst
+            .iter()
+            .any(|[s, e]| *s <= hour && hour < *e);
+    let factor = if peak { 1.0 } else { special.zcode_off_peak_factor };
+
+    // 官方积分公式：积分 = (输入×系数 + 缓存×系数 + 输出×系数) / 10000
+    let credits = (record.input_tokens as f64 * rates[0]
+        + record.cache_read_tokens as f64 * rates[1]
+        + record.output_tokens as f64 * rates[2])
+        / 10_000.0;
+    Some(credits * factor * special.zcode_cny_per_credit)
+}
+
 /// Compute the display cost (CNY) for a single record based on the current
 /// pricing configuration.
 ///
@@ -1702,6 +1861,16 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         || record.source == "dsh"
         || record.source == "dim"
     {
+        // ZCode BigModel GLM Coding Plan records (provider=bigmodel) are billed
+        // by subscription credits (积分), not model list prices. When the plan
+        // credit price is configured, prefer the credit-based cost; other
+        // zcode records (opencode-go / tokenrouter channels) fall through.
+        if record.source == "zcode" {
+            if let Some(cost) = compute_zcode_credit_cost(&cfg.special, record) {
+                return cost;
+            }
+        }
+
         let dim_price = if record.source == "dim" {
             state.dim_model_map.get(&record.model)
         } else {
@@ -1877,6 +2046,13 @@ mod tests {
                 .copied(),
             Some(0.2)
         );
+        assert_eq!(
+            cfg.special
+                .ollama_cloud_model_multipliers
+                .get("deepseek-v4.1-flash")
+                .copied(),
+            Some(0.2)
+        );
         assert_eq!(cfg.special.opencode_divisor, 6.0);
         assert_eq!(cfg.special.opencode_model_segments.len(), 1);
         assert_eq!(
@@ -1940,11 +2116,27 @@ mod tests {
             1_000_000,
             0.0,
         );
+        let deepseek_v41 = make_record("pi", "ollama", "deepseek-v4.1-flash", 1_000_000, 0.0);
+        let deepseek_v41_proxy = make_record(
+            "ollama-proxy",
+            "ollama-cloud",
+            "deepseek-v4.1-flash",
+            1_000_000,
+            0.0,
+        );
 
         assert!((display_cost(&glm) - baseline_cost).abs() < 1e-12);
         assert!((display_cost(&deepseek_flash) - baseline_cost * 0.2).abs() < 1e-12);
         assert!((display_cost(&deepseek_0731) - baseline_cost * 0.2).abs() < 1e-12);
         assert!((display_cost(&deepseek_cloud) - baseline_cost * 0.2).abs() < 1e-12);
+        assert!(
+            (display_cost(&deepseek_v41) - baseline_cost * 0.2).abs() < 1e-12,
+            "deepseek-v4.1-flash should bill at the same 0.2× rate as deepseek-v4-flash"
+        );
+        assert!(
+            (display_cost(&deepseek_v41_proxy) - display_cost(&deepseek_flash)).abs() < 1e-12,
+            "ollama-proxy deepseek-v4.1-flash should match v4-flash"
+        );
     }
 
     #[test]
@@ -2063,6 +2255,68 @@ mod tests {
         assert_eq!(current.peak_input, Some(0.44));
         assert_eq!(current.peak_output, Some(1.32));
         assert_eq!(current.peak_cache_read, Some(0.014));
+    }
+
+    /// DeepSeek V4.1 Flash (Command Code, added 2026-09-09) must carry the Go
+    /// plan rates — without this entry `cc-proxy` rows fall through to the
+    /// "no price" branch and render as N/A, dropping out of cost totals. Its
+    /// peak windows are weekday-only per the official model page.
+    #[test]
+    fn project_pricing_toml_has_commandcode_deepseek_v41_flash() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        let entry = cfg
+            .model
+            .iter()
+            .find(|model| model.name == "cc:deepseek-v4.1-flash")
+            .expect("missing cc:deepseek-v4.1-flash price entry");
+
+        assert_eq!(entry.input, 0.15);
+        assert_eq!(entry.output, 0.60);
+        assert_eq!(entry.cache_read, 0.003);
+        assert_eq!(entry.peak_hours_utc, vec![[1, 4], [6, 10]]);
+        assert!(entry.peak_weekdays_only);
+        assert_eq!(entry.peak_input, Some(0.30));
+        assert_eq!(entry.peak_output, Some(1.20));
+        assert_eq!(entry.peak_cache_read, Some(0.006));
+    }
+
+    /// End-to-end: a `cc-proxy` row for `deepseek-v4.1-flash` must produce a
+    /// positive CNY cost (not the -1 "unknown" sentinel the dashboard renders
+    /// as N/A). Uses the real project pricing.toml.
+    #[test]
+    fn cc_proxy_deepseek_v41_flash_has_a_resolved_cost() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        let mut record = make_record("cc-proxy", "commandcode", "deepseek-v4.1-flash", 0, 0.0);
+        record.input_tokens = 1_000;
+        record.output_tokens = 1_000;
+        record.cache_read_tokens = 50_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 52_000;
+        record.time = "2026-09-12T00:30:00Z".to_string();
+
+        let cost = display_cost(&record);
+        assert!(cost > 0.0, "expected a resolved cost, got {cost}");
+
+        restore_pricing_env(prev_env);
+    }
+
+    /// `deepseek-v4.1-flash` must NOT be swallowed by the v4-flash prefix rule
+    /// (it used to fall through to the `cc:` fallback and lose its price).
+    #[test]
+    fn commandcode_v41_flash_resolves_to_its_own_key() {
+        assert_eq!(
+            normalize_commandcode_model("deepseek-v4.1-flash"),
+            "cc:deepseek-v4.1-flash"
+        );
+        assert_ne!(
+            normalize_commandcode_model("deepseek-v4.1-flash"),
+            "cc:deepseek-v4-flash"
+        );
     }
 
     #[test]
@@ -2269,6 +2523,107 @@ mod tests {
             "zcode cost: expected {}, got {}",
             expected,
             cost
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn zcode_bigmodel_credit_cost_follows_plan_formula() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // BigModel GLM Coding Plan records (provider=bigmodel) are billed by
+        // plan credits: 积分 = (输入×2.3 + 缓存×0.56 + 输出×8)/10000 × 高峰因子，
+        // 每积分 ¥0.00144646（实付分摊：¥188.04 / 13周×10000 积分）。
+        // 2026-09-12 对 live quota API 验证：3768.7 vs 3774 积分（-0.14%）。
+        let mut record = make_record("zcode", "bigmodel", "GLM-5.3-Flash", 1_000_000, 0.0);
+        record.input_tokens = 2_251_621; // non-cache input (verified convention)
+        record.output_tokens = 635_525;
+        record.cache_read_tokens = 113_710_464;
+        record.cache_write_tokens = 0;
+        // Saturday 2026-09-12 20:00 CST = 12:00 UTC → off-peak (0.5×)
+        record.time = "2026-09-12T12:00:00Z".to_string();
+        let cost = display_cost(&record);
+        let credits = (2_251_621.0 * 2.3 + 113_710_464.0 * 0.56 + 635_525.0 * 8.0) / 10_000.0;
+        let expected = credits * 0.5 * 0.0014464615384615384;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "zcode bigmodel off-peak: expected {}, got {}",
+            expected,
+            cost
+        );
+
+        // Weekday peak: Monday 2026-09-14 15:00 CST = 07:00 UTC → 1×
+        let mut peak = record.clone();
+        peak.time = "2026-09-14T07:00:00Z".to_string();
+        let peak_cost = display_cost(&peak);
+        let expected_peak = credits * 1.0 * 0.0014464615384615384;
+        assert!(
+            (peak_cost - expected_peak).abs() < 1e-9,
+            "zcode bigmodel peak: expected {}, got {}",
+            expected_peak,
+            peak_cost
+        );
+
+        // 夜间畅用活动对旧版客户端不生效：cutoff（2026-09-13 06:15 CST）之前
+        // 落在窗口内的记录按正常波谷 0.5× 计费，而不是 0。
+        // 2026-09-12 23:30 CST = 15:30 UTC → 0.5×（非高峰）
+        let mut pre_promo = record.clone();
+        pre_promo.time = "2026-09-12T15:30:00Z".to_string();
+        let pre_promo_cost = display_cost(&pre_promo);
+        let expected_pre = credits * 0.5 * 0.0014464615384615384;
+        assert!(
+            (pre_promo_cost - expected_pre).abs() < 1e-9,
+            "zcode bigmodel night before promo effective: expected {}, got {}",
+            expected_pre,
+            pre_promo_cost
+        );
+
+        // 活动生效后（≥ 2026-09-13 06:15 CST）窗口内消耗为 0：
+        // 2026-09-13 07:30 CST = 2026-09-12T23:30Z
+        let mut night = record.clone();
+        night.time = "2026-09-12T23:30:00Z".to_string();
+        let night_cost = display_cost(&night);
+        assert!(
+            (night_cost - 0.0).abs() < 1e-9,
+            "zcode bigmodel night free: expected 0, got {}",
+            night_cost
+        );
+
+        // 边界：恰好 2026-09-13 06:15:00 CST 起享受免扣
+        let mut boundary = record.clone();
+        boundary.time = "2026-09-12T22:15:00Z".to_string();
+        assert!(
+            (display_cost(&boundary) - 0.0).abs() < 1e-9,
+            "zcode bigmodel promo boundary 06:15 CST should be free"
+        );
+
+        // 活动结束后（2026-09-25）夜间不再免费：23:30 CST 属于非高峰 → 0.5×
+        let mut after = record.clone();
+        after.time = "2026-09-25T15:30:00Z".to_string();
+        let after_cost = display_cost(&after);
+        let expected_after = credits * 0.5 * 0.0014464615384615384;
+        assert!(
+            (after_cost - expected_after).abs() < 1e-9,
+            "zcode bigmodel after promo: expected {}, got {}",
+            expected_after,
+            after_cost
+        );
+
+        // Unconfigured models (e.g. the free tokenrouter model) still fall
+        // through to model-price pricing (0 here), not the credit formula.
+        let mut free = make_record("zcode", "tokenrouter", "z-ai/glm-5.3-free", 0, 0.0);
+        free.input_tokens = 15276;
+        free.output_tokens = 1048;
+        free.cache_read_tokens = 17664;
+        free.time = "2026-09-12T12:00:00Z".to_string();
+        let free_cost = display_cost(&free);
+        assert!(
+            (free_cost - 0.0).abs() < 1e-9,
+            "zcode free model: expected 0, got {}",
+            free_cost
         );
 
         restore_pricing_env(prev_env);
@@ -3541,6 +3896,7 @@ cache_write = 0.0
 name = "cc:deepseek-v4-flash"
 effective_from = "2026-08-16T16:00:00Z"
 peak_hours_utc = [[1, 4], [6, 10]]
+peak_weekdays_only = true
 input = 0.22
 output = 0.66
 cache_read = 0.007
@@ -3578,6 +3934,70 @@ peak_cache_write = 0.0
         // Peak ranges are half-open: 04:00 UTC is already off-peak.
         record.time = "2026-08-17T04:00:00Z".to_string();
         assert!((display_cost(&record) - expected(0.22, 0.007, 0.66)).abs() < 1e-12);
+
+        // Peak is weekday-only: Sat 2026-08-22 01:00 UTC is inside the peak
+        // hour ranges but must bill at the off-peak rate.
+        record.time = "2026-08-22T01:00:00Z".to_string();
+        assert!((display_cost(&record) - expected(0.22, 0.007, 0.66)).abs() < 1e-12);
+
+        // Same hour on the following Monday is peak.
+        record.time = "2026-08-17T01:00:00Z".to_string();
+        assert!((display_cost(&record) - expected(0.44, 0.014, 1.32)).abs() < 1e-12);
+
+        restore_pricing_env(prev_env);
+    }
+
+    /// `peak_weekdays_only` must reject weekend peak windows while leaving the
+    /// base (off-peak) rates in force — this is what Command Code's DeepSeek
+    /// schedule documents ("Peak runs Monday to Friday only").
+    #[test]
+    fn peak_weekdays_only_skips_weekend_peak_windows() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(
+            br#"
+usd_to_cny = 6.7894
+rate_date = "2026-07-31"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 40.0
+freemodel_divisor = 67.894
+commandcode_divisor = 1.0
+
+[[model]]
+name = "cc:weekend-probe"
+input = 0.15
+output = 0.60
+cache_read = 0.003
+cache_write = 0.0
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_weekdays_only = true
+peak_input = 0.30
+peak_output = 1.20
+peak_cache_read = 0.006
+peak_cache_write = 0.0
+"#,
+        );
+
+        let mut record = make_record("pi", "commandcode", "weekend-probe", 1_000_000, 0.0);
+        record.input_tokens = 1_000_000;
+        record.output_tokens = 0;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 1_000_000;
+
+        // Sat 2026-08-15 02:00 UTC — inside the window, weekday-only → off-peak.
+        record.time = "2026-08-15T02:00:00Z".to_string();
+        let weekend = display_cost(&record) / 6.7894;
+        assert!((weekend - 0.15).abs() < 1e-12, "weekend got {weekend}");
+
+        // Mon 2026-08-17 02:00 UTC — same hour, weekday → peak.
+        record.time = "2026-08-17T02:00:00Z".to_string();
+        let weekday = display_cost(&record) / 6.7894;
+        assert!((weekday - 0.30).abs() < 1e-12, "weekday got {weekday}");
 
         restore_pricing_env(prev_env);
     }
@@ -4677,6 +5097,7 @@ holidays = [
                 TimeSegment {
                     effective_from: None,
                     peak_hours_utc: Vec::new(),
+                    peak_weekdays_only: false,
                     tiers: vec![base_tier],
                 },
                 TimeSegment {
@@ -4684,6 +5105,7 @@ holidays = [
                         DateTime::parse_from_rfc3339("2026-08-16T16:00:00Z").unwrap(),
                     ),
                     peak_hours_utc: vec![[1, 4], [6, 10]],
+                    peak_weekdays_only: false,
                     tiers: vec![off_peak_tier],
                 },
             ],

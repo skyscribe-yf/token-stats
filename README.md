@@ -93,13 +93,17 @@ cd backend && ./target/release/token-stats-backend
 | Command Code | `~/.commandcode/projects/<slug>/<session-id>.jsonl` |
 | cc-proxy（Dim→CC） | `~/.token-stats/cc-proxy-usage.jsonl`（代理写入） |
 | dim-agent（Dim→CodeBuddy） | `~/.token-stats/workbuddy-usage.jsonl`（workbuddy 插件写入） |
+| ollama-proxy（UI 显示 Dim→Ollama） | `~/.token-stats/ollama-usage.jsonl`（CPA `ollama-usage` 插件写入，逐请求含 TTFT/TPS；模型前缀 `ollama/*`） |
+| wb/*（Dim→CodeBuddy via CPA） | 与 ollama 共用 CPA 8317；模型前缀 `wb/*`，用量经 workbuddy 插件写入 `~/.token-stats/workbuddy-usage.jsonl` |
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | DSH | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` |
 | Dim | `~/.dimcode/v2/dimcode.sqlite` |
 | ccswitch（可选） | `~/.cc-switch/cc-switch.db`（设置 `USE_CC_SWITCH` 后加载） |
 
 配额/订阅数据（Kimi、OpenCode Go、Fenno、Grok、Xiaomi MiMo、Command Code、Ollama、
-Meituan）通过各自官方接口抓取，需要相应环境变量凭据，未配置时对应卡片显示不可用。
+Meituan、CodeBuddy）通过各自官方接口抓取，需要相应环境变量凭据，未配置时对应卡片显示不可用。
+CodeBuddy cookie 约 30 天过期：过期后卡片显示 401 错误（不再整卡消失），执行
+`./scripts/refresh-codebuddy-cookies.sh` 重新提取并热更新。
 
 ## 主要 API
 
@@ -138,6 +142,9 @@ token-stats/
 │   └── src/               # App.tsx + components/ + lib/ + sections/
 ├── nginx/                 # nginx 配置、systemd 模板、Grok 代理服务
 ├── scripts/               # 部署/刷新/汇率更新/数据修复脚本
+│                          #   （含 sync-ollama-models.sh：同步 Ollama 模型目录到 CPA；
+│                          #     dim-repair-session-models.mjs：修复改前缀后的会话选择；
+│                          #     refresh-codebuddy-cookies.sh：cookie 过期后刷新 CodeBuddy 卡）
 ├── docs/                  # 部署与设计文档
 ├── setup.sh               # 自动安装
 ├── deploy.sh              # 蓝绿零停机部署
@@ -150,6 +157,8 @@ token-stats/
 - `pricing.toml` 集中管理：模型单价（USD/1M，DeepSeek 为 CNY 直报价）、
   USD→CNY **分段汇率**（每 2 周更新）、各订阅折扣（OpenCode /6、Command Code /10、
   FreeModel 面值 0.1、Kimi API 原价 ÷ 倍率、Fenno / Grok / Ainaba 平台等）。
+- Ollama Cloud 用经验 per-token 价 + 模型倍率（`deepseek-v4-flash` / `deepseek-v4.1-flash`
+  等 DeepSeek 系均为 0.2×，`glm-5.3-flash` 0.523×，未登记模型 1.0×）。
 - 修改定价：编辑 `backend/pricing.toml` → `./scripts/reload-pricing.sh`（或
   `POST /api/pricing/reload`），无需重启。
 - 汇率更新：`./scripts/update-exchange-rate.sh`（建议 cron 每两周一次，14 天幂等节流）。

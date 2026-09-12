@@ -43,19 +43,31 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 8 | `qoder-cn` | `~/.qoder-cn/logs/sessions/*/segments/*.jsonl` | JSONL（`QODER_CN_SESSIONS_PATH` 可覆盖） |
 | 9 | `grok-cli` | `~/.token-stats/grok-usage.jsonl` | JSONL，由内置 loopback Grok 代理写入（`GROK_USAGE_LOG_PATH` 可覆盖） |
 | 10 | `commandcode` | `~/.commandcode/projects/<slug>/<session-id>.jsonl` | JSONL；`type=message` 行含 `usage`；跳过侧车 `*.checkpoints.jsonl`（`COMMANDCODE_PROJECTS_PATH` 可覆盖） |
-| 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖） |
+| 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖）。**provider 映射**：`provider_metadata_json` 的计费名（`OpenCodeGo`→`opencode-go`、`Tokenrouter`→`tokenrouter`）；适配器名键（`anthropic`/`openai`——bigmodel 编码套餐走 Anthropic 协议）被跳过，无计费元数据的 `builtin:bigmodel*` provider 一律标 `bigmodel`，其余回落 `opencode-go`。曾因 `{"anthropic":...}` 元数据把整个 provider 误标成 `anthropic`，启动迁移 `purge_zcode_anthropic` 一次性清理并按新指纹重灌 |
 | 12 | `dsh` | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` | zstd 压缩 JSONL，DeepSeek Harness；usage chunk 与 `finish` replayState 配对取 provider/model（`DSH_SESSIONS_PATH` 可覆盖） |
-| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中 `providerId != 'dimcode-api-oauth'` 且 `providerId != 'workbuddy'` 的第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），排除 dim 自身 OAuth 通道避免与 API 双计、排除 workbuddy 通道避免与 `dim-agent` 源双计（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
+| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），并排除所有已有逐请求计量的通道避免双计：`dimcode-api-oauth`（与 API 源双计）、`workbuddy`（与 `dim-agent` 源双计）、`grok-build-proxy`（与 grok 代理日志双计）、`ollama-cloud-proxy`（与 `ollama-proxy` 源双计）、`cc-proxy`（与 `cc-proxy` 源双计——displayName "Command Code" 曾被 slug 成 provider `command-code` 单独出现在 vendor 图表中，2026-09-12 修复 + store 一次性迁移清除）（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
 | 14 | `ccswitch` | `~/.cc-switch/cc-switch.db` | 仅当设置了 `USE_CC_SWITCH` 环境变量才加载（`CCSWITCH_DB_PATH` 可覆盖） |
 | 15 | `codebuddy` | `~/.codebuddy/projects/**/*.jsonl` | JSONL；事件的 `providerData.rawUsage` 含 credits 与 token 用量（`CODEBUDDY_PROJECTS_PATH` 可覆盖） |
 | 16 | `cc-proxy` | `~/.token-stats/cc-proxy-usage.jsonl` | JSONL，由内置 loopback Command Code 代理写入（`CC_PROXY_USAGE_LOG_PATH` 可覆盖）；`provider=commandcode`（成本走 `cc:` 价格 ÷ `commandcode_divisor`），`model` 已剥 vendor 前缀 |
 | 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | JSONL，由 workbuddy CLIProxyAPI 插件（`~/workbuddy-proxy`，systemd 服务 `token-stats-workbuddy.service`）写入——DimAgent 经 Tencent CodeBuddy Web API 的请求；`provider=codebuddy`（成本走 `codebuddy_cny_per_credit` 积分换算，与原生 codebuddy 源同一计费公式），`WORKBUDDY_USAGE_LOG_PATH` 可覆盖 |
+| 18 | `ollama-proxy` | `~/.token-stats/ollama-usage.jsonl` | JSONL，由 `ollama-usage` CLIProxyAPI 插件（`~/workbuddy-proxy/ollama-usage-plugin`，与 workbuddy 同实例）写入——DimAgent 经 CPA `ollama-cloud` 上游（`ollama/` 前缀）的**逐请求**用量，含 TTFT/TPS；`provider=ollama-cloud`（vendor merge 并入 `ollama`，成本走经验费率），`OLLAMA_PROXY_USAGE_LOG_PATH` 可覆盖 |
 
 **Grok 代理说明**：`token-stats-grok-proxy.service` 用 `--grok-proxy-only` 启动后端二进制，
 监听 `127.0.0.1:${GROK_PROXY_PORT:-3434}`，为 Grok CLI 提供 `/v1/responses` 转发
 （YAI Router 与官方 xAI 双上游，别名 `grok-4.5-yai` / `grok-4.5-xai` 均重写为 `grok-4.5`），
 从响应中提取 usage 追加到 `~/.token-stats/grok-usage.jsonl`。代理透传上游状态/响应体，
 不记录 prompt、完成文本、请求头与凭据。
+**DimAgent grok-build 通道也走此代理**：dim 的 `grok-build` provider 因 `xai-grok-build`
+driver 硬校验 OAuth 凭据只能发往 `https://*.x.ai`（`PROVIDER_TRANSPORT_CONFIG_ERROR`），
+不能直接改 baseUrl 指向代理。改为自定义 provider `grok-build-proxy`
+（`dim provider add grok-build-proxy --api-key placeholder --base-url http://127.0.0.1:3434/v1
+--adapter openai-responses --model grok-4.6`），其 `openai-responses` driver 发
+`{baseUrl}/responses` 命中代理；代理对裸模型名（`grok-4.5` / `grok-4.6`）路由到官方
+xAI 上游，并从 `~/.dimcode/v2/auth.json` 的 `xaiGrokBuild.access` 注入真实 OAuth token
+（占位 key 被覆盖，token 由 `dim-grok-auth-refresh.py` 每 15 分钟自动刷新），usage 记录
+到 `grok-usage.jsonl`（source=`grok-cli`，provider=`xai-official`）。dim 本地补充排除
+`grok-build-proxy` 通道（`dim.rs` 的 `GROK_BUILD_PROXY_PROVIDER`）防双计；原生
+`grok-build` 通道（直连 x.ai）仍按 run 粒度摄入（历史保留）。
 
 **Command Code 代理说明**：`token-stats-cc-proxy.service` 用 `--cc-proxy-only` 启动后端二进制，
 监听 `127.0.0.1:${CC_PROXY_PORT:-8787}`，为 DimAgent 提供 OpenAI 兼容的
@@ -84,6 +96,117 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 密钥在 `~/workbuddy-proxy/config.yaml`（仅绑 127.0.0.1）。注意：hy3 系列免费
 （credit=0），hy4-preview / glm-5.x / kimi-k* 等消耗积分，按
 `codebuddy_cny_per_credit` 换算 CNY。
+**模型目录**：插件给 dim 的模型列表来自编译内嵌 `models.yaml`（2026-08-30 验证版），
+已改用外部 manifest `~/workbuddy-proxy/workbuddy-models.yaml`（config.yaml 的
+`plugins.configs.workbuddy.model_manifest`，整体替换内嵌目录，CLIProxyAPI 配置重载时
+重新读取）以追加平台新模型（如 `deepseek-v4.1-flash`，2026-09-11 上线）——CodeBuddy CLI
+的模型列表跟平台走，插件清单不会自动跟上，新模型需手动加进 manifest 并重启
+`token-stats-workbuddy.service`，然后在 dim 侧执行 `dim model refresh workbuddy`
+（模型缓存在 `~/.dimcode/v2/dimcode.sqlite` 的 `providers.models`，`dim provider list`
+显示的数量不会自动更新）。
+**模型前缀**：同一 manifest 下新增 `plugins.configs.workbuddy.model_prefix: "wb"`
+（插件已 fork 改造：`config.go` 读取 + `main.go` `wbModels()` 加前缀、
+`stripModelPrefix()` 执行前剥回裸名），使 CPA 共享目录里 workbuddy 模型一律
+`wb/<model>`，与 ollama 的 `ollama/<model>` 不重名。改前缀后（本机由裸名 → `wb/`）
+必须重启 `token-stats-workbuddy.service` + `dim model refresh workbuddy`。
+插件的 `logUsage` 会把前缀剥掉再写 JSONL，所以 token-stats 侧的模型名仍是裸名
+（与 pricing / vendor_merge 的键一致）。
+
+**Ollama Cloud 逐请求说明**：Ollama Cloud 也走**同一个** CPA 实例（8317）——配置里
+新增 `openai-compatibility` 条目 `ollama-cloud`（`prefix: "ollama"`；`models:` 必须显式
+列出，否则 `/v1/models` 为空，用 `scripts/sync-ollama-models.sh` 幂等同步）。另有
+usage-only 插件 `ollama-usage.so`（源码 `~/workbuddy-proxy/ollama-usage-plugin/`，
+Go 1.26 + `CGO_ENABLED=1`，`-buildmode=c-shared`）通过 CPA 的 `UsagePlugin` 回调拿到
+**每次**上游调用的用量与 TTFT，归一化后 append 到 `~/.token-stats/ollama-usage.jsonl`
+——即 `ollama-proxy` 数据源，使详细请求表能显示单次调用（TTFT/TPS），取代原先 dim
+本地库「一次 run 一行」的聚合。
+
+**来源 id vs 显示名（约定）**：`TokenRecord.source` 是**传输通道 id**，由写日志的一方
+固定（`ollama-proxy` = CPA 的 `ollama-usage` 插件；`dim-agent` = workbuddy 插件；
+`cc-proxy` = 内置 CC 代理），用于去重指纹、迁移谓词（`store.rs` / `app.rs` 的
+`source='ollama-proxy'` 等）与增量解析；**不要**为了 UI 好看改它——改了会让历史记录与
+新记录分属两个 source，指纹不同 → 双计。UI 文案只在
+`frontend/src/lib/utils.ts` 的 `SOURCE_LABELS` / `SOURCE_COLORS` 里映射
+（当前 `ollama-proxy → "Dim→Ollama"`、`dim-agent → "Dim→CB"`、`cc-proxy → "Dim→CC"`），
+未登记的 source 会原样显示 id（如旧版曾显示的 "ollama-proxy"）→ 新增来源必须补这两个表。
+
+**「保留 agent 名」目前做不到**：CPA 的 `UsageRecord.Source` 是 `resolveUsageSource()`
+从上游凭据推导的（OAuth 账号邮箱、api-key 明文），**不是**下游客户端身份；
+`api-keys:` 里的 `cb-local-key` 只进 `userApiKey` gin context，`usageAdapter.HandleUsage`
+不会把它透给插件。所以插件拿不到「谁发起的」——同一实例上 workbuddy 与 ollama 的流量
+只能靠 `Provider`（`openai-compatible-<name>`）区分，日志里的 `"apiKeyPrefix":"N/A"` 即
+此原因。若将来要按调用方（DimAgent / 其他客户端）拆分用量，可行路径是给每个客户端
+**分配独立 api-key**，厂商自行维护 `api-key → agent` 映射（token-stats 侧只读日志，
+无法还原）。
+
+**模型命名空间（重要）**：CPA 的 `/v1/models` 返回的是**所有通道的并集**，而 dim 的
+每个 provider 都会把整个并集当成自己的目录 → 同一个模型 ID 会出现在多个 provider
+下且无法区分谁是谁。因此：
+
+- CPA 侧 `force-model-prefix: true`（config.yaml）——**必须开**，否则 workbuddy 插件
+  的模型会既带前缀又以裸名各出现一次（插件模型走 host 的 `applyModelPrefixes`，
+  与该开关相干）；
+- `openai-compatibility` 的 ollama 条目 `prefix: "ollama"` → `ollama/<model>`；
+- workbuddy 插件新增配置 `plugins.configs.workbuddy.model_prefix`（本机 `"wb"`，
+  实现在 fork 的 `config.go` `configuredModelPrefix()` + `main.go` `wbModels()` 前缀
+  加前缀、`stripModelPrefix()` 在执行前剥回裸名）→ `wb/<model>`。
+
+结果：`/v1/models` 里 ollama 模型一律 `ollama/*`、workbuddy 一律 `wb/*`，**无裸名、无
+重名**。两边的请求体仍以裸模型名发往上游（host 与插件各自负责剥前缀）。
+
+**dim 侧只保留一个 provider**：`ollama-cloud-proxy` 与 `workbuddy` 指向同一个
+CPA（`http://127.0.0.1:8317/v1`）且拉到同一份 37 个模型目录，属于重复配置——
+2026-09-12 起只保留 `workbuddy`（`dim provider update workbuddy --name "CPA(ollama+wb)"`），
+用 `ollama/*` 与 `wb/*` 前缀区分通道；`ollama-cloud-proxy` 与旧的直连
+`custom-ollama-cloud-042036d3`（`https://ollama.com/v1`）均已 `dim provider remove`。
+新增/切换模型后必须 `dim model refresh workbuddy`。
+
+**踩坑：直连 ollama provider 会被「重新加回来」**（2026-09-12 复现）。上一条记录后
+`custom-ollama-cloud-042036d3` 又被 `dim provider add` 重建了一次
+（`createdAt` = 2026-09-11T23:13Z，`baseUrl` = `https://ollama.com/v1`），于是模型
+选择器里多出 20 个**裸名**模型（`deepseek-v4.1-flash`、`glm-5.3-flash`…）——它们与
+CPA 的 `ollama/*` 是同一批模型、同一个上游，只是绕开了 CPA（因此没有 `ollama-usage`
+插件计量、没有 `ollama/*` 前缀）。它和 `workbuddy` 的 `ollama/*` 是**完全相同的
+集合**（脚本比对：`set(direct) == set(cpa_ollama)` = True），属于纯重复。
+排查手法：`dim provider list` 里出现多于 `workbuddy` 的 connected provider，或
+`dim model list | grep -v /` 出现裸名。修复：`dim provider remove <id>`，然后
+确认 `sqlite3 ~/.dimcode/v2/dimcode.sqlite "select providerId from providers where enabled=1"`
+只剩预期条目。注意 `remove` **不删历史**——`usage_run_stats` 里该 provider 的
+390 行会保留（token-stats 的 `dim` 源仍会读它们作为历史，见下方 cutoff 逻辑）。
+
+**踩坑（已复现并修复）**：`dim model refresh` 会把 `metadata.enabledModelIds` 收敛为
+「新目录里仍然存在的旧 ID」。若旧目录是 `oc/*`（前缀改名前的历史），refresh 后该字段
+变成 `[]`；随后 `dim exec` 的 `resolveProviderDefaultModel`/`isProviderModelSelectable`
+判定无任何可选模型，报 `Error: Failed to execute prompt`（`activeModelId` 落在不在
+目录里的旧 ID 也会同样报错）。修复：删掉 `metadata.enabledModelIds`（`undefined` =
+不限制，而非空数组 = 全禁），并把 `activeModelId` 指向目录内的新 ID（如 `wb/hy3`）。
+
+**改前缀/删 provider 必须同步修历史会话**：`session_states` 为每个会话存了
+`selectedProviderId + selectedModelId`。改名或 `dim provider remove` 之后，旧会话
+指针失效，dim 解析不到凭据 → 桌面应用报「缺少凭据 / 凭据已失效」
+（`PROVIDER_CREDENTIAL_MISSING: Credential missing for provider: <old-id>`），
+**凭据本身没问题**（`dim provider test`、`dim exec` 直跑都正常）。用
+`scripts/dim-repair-session-models.mjs`（幂等，先 `--dry-run`）把会话重新指向
+合并后的 provider + 正确前缀的模型 ID；脚本同时处理已改名模型
+（`deepseek-v4-flash-vision-exp` → `deepseek-v4.1-flash` 等）。2026-09-12 的
+前缀改动一次性影响了 452 行里的 283 行。**注意**：只修 DB 不够——桌面应用进程内缓存
+着启动时的 provider 目录，点「新建会话」会把旧选择原样写回（Electron LocalStorage 的
+`dimcode:model-recent:v1` 也留着旧条目）。修完必须**重启 DimAgent 桌面应用**，并在模型
+选择器里重选一次 `ollama/<model>` 或 `wb/<model>`，否则会反复复发。
+
+DimAgent 侧：新会话直接选 `workbuddy` provider 下的 `ollama/<model>`（Ollama Cloud）
+或 `wb/<model>`（CodeBuddy）；`dim model refresh workbuddy` 更新目录。
+**两个坑**：① `pluginapi.Metadata` / `UsageRecord` / `UsageDetail` 都**没有 json tag**，
+线格式是 PascalCase（只有 `Capabilities` 是 `usage_plugin` 小写）——写错会让注册被拒
+（日志刷 `invalid metadata` 并反复重试）或用量静默全零；② CPA 上报的 `InputTokens`
+**含**缓存，插件按 `input = InputTokens - cacheRead - cacheWrite` 做减法（`cacheRead` 取
+`max64(CacheReadTokens, CachedTokens)`，CPA 两个字段都填）。插件目录**仅启动时扫描**，
+新增/重建 `.so` 需重启 `token-stats-workbuddy.service`。切换时点由
+`ollama-usage.jsonl` 首行时间确定（append-only）：`dim.rs` 丢弃该时点**及之后**的
+ollama-cloud 按 run 行，之前的保留为历史；`app.rs` 在 cutoff 已知后做一次性 store
+迁移删除（`store.purge_superseded_ollama_run_rows`），启动早于插件首条记录时会在后续
+刷新重试。dim 本地补充同时排除 `ollama-cloud-proxy` 通道防双计（该 provider 已于
+2026-09-12 移除；常量仍在 `dim.rs`，以防重新加入）。
 
 ### 配额数据源（`GET /api/quota`）
 
@@ -100,6 +223,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | Grok | 基于 `grok-cli` 记录 + 订阅配额页面 | `grok_proxy.rs` 读取的用量记录；配额逻辑在 `quota/grok.rs` |
 | Ainaiba 余额 | `api-xai.ainaibahub.com` | `YAI_API_KEY`（`/api/ainaiba-credit` 端点） |
 | DimAgent | **主路径**：本地 `dim usage --json`（CLI 自动发现，见 `quota/dimagent.rs`；OAuth 凭据在 `~/.dimcode/v2/auth.json`，CLI 自动刷新，无需任何环境变量）。**回退**：console API `dimagent.cn/api`（`/me/subscription` + `/me/credits` + `/me/feature-meters` + `/user/quota-estimate`） | `DIMAGENT_SESSION_COOKIE`（浏览器 `session` cookie 值）仅用于回退和近 30 天统计增强；`DIM_USAGE_BIN` 可覆盖 CLI 二进制 |
+| ZCode | **主路径**：BigModel monitor API（逆向 ZCode 桌面应用 app.asar 得出，`quota/zcode.rs`）：`GET open.bigmodel.cn/api/monitor/usage/quota/limit`（套餐 level + 限额窗口；裸 apiKey 放 `authorization` 头，无 Bearer 前缀）+ `GET open.bigmodel.cn/api/biz/subscription/list`（套餐名/续订/到期）。apiKey 从 `~/.zcode/v2/config.json` 的 `provider["builtin:bigmodel-coding-plan"].options.apiKey` 读取（应用自动轮换）。**用量半区**：`source='zcode'` 内存记录聚合（今日/累计 调用、tokens、成本）。**字段语义陷阱**：`usage`=窗口总量、`currentValue`=已用、`remaining`=剩余、`percentage`=已用百分比（currentValue/usage）——命名有误导，前端统一走 `zcodeWindowUsage()`。60s 缓存防 30s 轮询打满；远程失败但本地有记录时 `available:true` + `data.quota_error` 降级显示 | `ZCODE_BIGMODEL_USAGE_API_KEY` / `ZCODE_BIGMODEL_USAGE_QUOTA_URL`（与应用自身 env 名一致）、`ZCODE_CONFIG_PATH`（默认 `~/.zcode/v2/config.json`） |
 
 **DimAgent console API 逆向结论**（`quota/dimagent.rs` / `sources/dim.rs` 验证过）：
 - `GET /api/user/self`、`/api/log/self`（逐次调用明细：`prompt_tokens`/`completion_tokens`/`cache_tokens`/`use_time_ms`/`ttft_ms`/`tps`/`model_name`/`token_name`）、`/api/user/daily-stats`（按日汇总：各 token 字段 + `request_count` + `quota_consumed`）、`/api/me/subscription`、`/api/me/credits`、`/api/me/feature-meters`、`/api/user/quota-estimate` —— 全部只需 `session` cookie（GET）。
@@ -322,6 +446,14 @@ providers = ["openai", "ainaiba", "xai"]
   于 2026-08-17 恢复原价，仅作用于该 provider）。
 - **Command Code**：`cc:` 前缀模型为 Command Code 列表价（部分模型带 `peak_hours_utc`
   峰谷价，DeepSeek 2026-08-16 起实施）；实际成本 = 列表价 / `commandcode_divisor` → CNY。
+  **2026-09-09 新增 `deepseek-v4.1-flash`**（CLI v1.53.0，v4-flash 同价，Go 计划页确认）：
+  `cc:deepseek-v4.1-flash` 低谷 0.15/0.60/0.003，高峰（UTC 01–04 & 06–10，**仅周一–周五**）
+  2× = 0.30/1.20/0.006。注意模型名以 `deepseek-v4.1-` 开头、**不**匹配
+  `normalize_commandcode_model` 的 `starts_with("deepseek-v4-flash")` 分支（走 `cc:` fallback），
+  漏配该键会让 cc-proxy/cmd 记录显示 **N/A** 并从费用合计中消失。周末高峰语义由
+  `ModelPriceConfig.peak_weekdays_only`（+ `TimeSegment.peak_weekdays_only`）实现，已同时
+  用于 cc 的 v4-pro / v4-flash / v4.1-flash；官方免费模型（`cc:laguna-s-2.1-free`）显式记 0，
+  以便计入调用次数而不被当作「无价格」剔除。
 - **CodeBuddy**：记录的 `cost` 保存原始 credits；实际成本 = credits × `codebuddy_cny_per_credit`
   （国内版连续包月活动价 70 元 / 4000 credits = 0.0175 元/credit，直接人民币计价，不经过汇率）。
 - **Kimi 订阅**：`kimi_api_models`（CNY/1M，cache write 免费）+ `kimi_subscription_multiplier`
@@ -333,15 +465,39 @@ providers = ["openai", "ainaiba", "xai"]
   vision-exp input=0.653798 / output=3.922790 / cache_read=0.043587 元每 1M），
   vision-exp 高峰时段（CST 09:00–12:00 / 14:00–18:00 = UTC 01–04 / 06–10）按
   `peak_*_cny` 双倍（客服确认，2026-08-22~09-02 六天日账闭合验证）；v4-flash 无高峰
-  双倍按接口价（0.871818 / 1.743636 / 0.017436）；glm-5.3 全时段 7 折（基础价已含），
+  双倍按接口价（0.871818 / 1.743636 / 0.017436）；deepseek-v4.1-flash-expires-on-0910
+  （2026-09-08 上线的 v4.1 flash 临时命名）费率与 vision-exp 相同
+  （0.653798 / 3.922790 / 0.043587，含高峰双倍）；**2026-09-10 平台把该模型改名为
+  `deepseek-v4.1-flash` 并下调费率**，正式名按价目卡计费（0.890909 / 3.500000 /
+  0.017182，高峰 UTC 01–04 / 06–10 双倍 = 1.781818 / 7.000000 / 0.034364；当日日账
+  闭合验证 <0.01%）——两个名字都保留在 `[[dim_model]]` 中（旧名仅供历史记录，最后
+  一条 2026-09-09T23:14Z），改名漏配会让该模型成本显示 0.00/N/A；seed-2.0-mini 按
+  价目卡（0.174346 / 1.743458 / 0.034869，无高峰）；glm-5.3 全时段 7 折（基础价已含），
   夜间 20:00–08:00 CST（= UTC 12–24）再 5 折（peak 价）；glm-5.3-flash 无折扣按接口价
   （0.477273 / 1.590909 / 0.095455）；无价格模型的记录显示 N/A。
 - **Ainaba**：`USD × ainaba_platform_rate(7.0) / ainaba_segments 分段 divisor`（平台固定汇率，
   不随市场波动）。
 - **订阅类折扣**：`freemodel_divisor`（=汇率/0.1）、`fenno_divisor`、`grok_divisor`；
-  Ollama 用经验 per-token 价 + 模型倍率；讯飞订阅按次计
+  Ollama 用经验 per-token 价 + 模型倍率（`deepseek-v4-flash` / `deepseek-v4.1-flash` 均为 0.2，未登记模型回落 1.0）；讯飞订阅按次计
   （`xunfei_per_call` × 波谷系数 0.8，`peak_hours=[8,22]` + 节假日表）；
   Xiaomi MiMo / Meituan 按话单 per-token。
+- **ZCode / BigModel GLM Coding Plan**（source=`zcode`、provider=`bigmodel`）：按**官方
+  列表价**计费，不走模型价目表。官方积分公式（docs.bigmodel.cn 套餐概览）：
+  `积分 = (输入×2.3 + 缓存命中×0.56 + 输出×8) / 10000`（GLM-5.3-Flash；GLM-5.3 系数
+  6.9/1.7/24，配 `zcode_list_rates`）——积分系数即官方列表价（元/M tokens）。高峰
+  （周一至周五 14:00–18:00 CST）按 1×，其余时段按 50% 抵扣（`zcode_off_peak_factor`）；
+  夜间畅用活动期内（2026-09-03~09-20，每日 23:00–09:00 CST）ZCode 端消耗为 0
+  （`zcode_night_free_*`）；但活动自 **2026-09-13 06:15 CST** 起才实际生效
+  （此前用的旧版 ZCode 客户端不享受免扣，服务端照常扣积分）——该时刻之前落在
+  窗口内的记录按正常波谷 0.5× 计费，由
+  `zcode_night_free_effective_from`（RFC3339 含时区）控制，None = 窗口全程免费。
+  实际成本 = 积分 × `zcode_cny_per_credit`。**实付分摊
+  口径（2026-09-12）**：实付 ¥188.04 买 3 个月 ≈ 13 周 × 10000 积分 = 130,000
+  积分 → 每积分 ¥0.00144646；一周用满 10000 积分 = ¥14.46，一个月用满 ≈ ¥62.68
+  = 月均实付。注意：官方列表价×0.5312 口径高估约 3.7 倍（套餐额度价值远超实付），
+  已废弃。实测验证：积分公式逐请求回算 3768.7 vs 配额
+  API 的 3774（-0.14%），滚动 5h 窗口与分钟级增量同样吻合。公式要求
+  `input_tokens` 为**非缓存输入**（zcode 解析器已减）。
 - **成本展示规则**（`display_cost()`）：`original_provider` 决定公式分支；无任何可用价格
   的非 pi 来源显示 "N/A"；pi 记录沿用其存储 cost（DeepSeek 为 CNY 原样，
   其余 USD 折算）。
@@ -417,6 +573,7 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `CC_PROXY_PORT` | `8787` | loopback Command Code 代理端口（DimAgent 接入） |
 | `CC_PROXY_USAGE_LOG_PATH` | `~/.token-stats/cc-proxy-usage.jsonl` | Command Code 代理用量日志覆盖 |
 | `WORKBUDDY_USAGE_LOG_PATH` | `~/.token-stats/workbuddy-usage.jsonl` | WorkBuddy（CodeBuddy Web API）代理用量日志覆盖 |
+| `OLLAMA_PROXY_USAGE_LOG_PATH` | `~/.token-stats/ollama-usage.jsonl` | CPA `ollama-usage` 插件（Ollama Cloud 逐请求）用量日志覆盖；插件与后端读取同一变量 |
 | `COMMANDCODE_API_BASE` | `https://api.commandcode.ai` | Command Code 代理 API 基址 |
 | `COMMANDCODE_MODELS_URL` | `https://api.commandcode.ai/provider/v1/models` | Command Code 代理模型列表 URL |
 | `GROK_YAI_UPSTREAM_BASE_URL` / `GROK_UPSTREAM_BASE_URL` | `https://api.yairouter.com` | Grok YAI 上游（兼容旧名 `GROK_UPSTREAM_BASE_URL`） |
@@ -427,6 +584,9 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `COMMANDCODE_SESSION_TOKEN` | 未设置 | Command Code 配额卡 cookie 值（仅当无 `~/.commandcode/auth.json` 时作为回退） |
 | `CODEBUDDY_SESSION_COOKIE` / `CODEBUDDY_SESSION_COOKIE_2` | 未设置 | CodeBuddy 套餐配额卡的 `session` / `session_2` cookie 值（两者必需；`scripts/extract-codebuddy-cookies.sh` 可从 Chrome 自动提取并输出 export 行） |
 | `ZCODE_DB_PATH` | `~/.zcode/cli/db/db.sqlite` | ZCode 库位置覆盖 |
+| `ZCODE_CONFIG_PATH` | `~/.zcode/v2/config.json` | ZCode 桌面应用配置路径覆盖（ZCode 配额卡读其中编码套餐 apiKey） |
+| `ZCODE_BIGMODEL_USAGE_API_KEY` | 未设置 | ZCode 配额卡 BigModel apiKey 覆盖（与 ZCode 应用自身 env 名一致；未设置时读 config.json） |
+| `ZCODE_BIGMODEL_USAGE_QUOTA_URL` | `https://open.bigmodel.cn/api/monitor/usage/quota/limit` | ZCode 配额卡 quota 端点覆盖（与 ZCode 应用自身 env 名一致） |
 | `DSH_SESSIONS_PATH` | `~/.dsh/sessions` | DSH 会话目录覆盖 |
 | `DIM_DB_PATH` | 已废弃 | 旧版 Dim 本地 SQLite 库路径，console API 源不再使用 |
 | `DIM_LOCAL_DB_PATH` | `~/.dimcode/v2/dimcode.sqlite` | dim 源本地补充库路径（第三方通道 per-run 记录，如 ollama cloud） |
@@ -495,12 +655,16 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
    到已见过的 id；页内 id 倒序。cookie 失效（401）时优雅降级为空并保留历史。
    启动时若完整回填成功，会对 store 做**一次性迁移**：删除旧的按 run 聚合的
    `source='dim'` 行（指纹不在 API 记录集合中的），避免与逐请求记录双重计数。
-   每次刷新同时读本地 `usage_run_stats` 的第三方通道行（排除 `dimcode-api-oauth`），
-   与 API 记录指纹不同不会双计；`original_provider` 保留原始 providerId 供
-   `display_cost()` 区分计费公式（如 ollama-cloud 订阅价）。`grok-build` 通道映射为
-   `xai-official`（与 grok-cli 的 xAI 官方用量合并计费）：成本按官方 USD 列表价 ×
-   汇率 ÷ `grok_divisor`（SuperGrok 订阅），忽略存储的 catalog 价；启动时对 store
-   做一次性迁移删除旧的 `provider='grok-build'` 行（幂等）。
+   每次刷新同时读本地 `usage_run_stats` 的第三方通道行（排除所有已有逐请求计量的
+   通道：`dimcode-api-oauth`、`workbuddy`、`grok-build-proxy`、`ollama-cloud-proxy`、
+   `cc-proxy`——漏排的通道会和对应的逐请求源双计，`cc-proxy` 就曾因此以 provider
+   `command-code`（displayName "Command Code" 的 slug）重复出现，2026-09-12 修复并
+   一次性迁移清除 `source='dim' AND original_provider='cc-proxy'` 行），
+   与 API 记录指纹不同不会双计；`original_provider`
+   保留原始 providerId 供 `display_cost()` 区分计费公式（如 ollama-cloud 订阅价）。
+   `grok-build` 通道映射为 `xai-official`（与 grok-cli 的 xAI 官方用量合并计费）：
+   成本按官方 USD 列表价 × 汇率 ÷ `grok_divisor`（SuperGrok 订阅），忽略存储的
+   catalog 价；启动时对 store 做一次性迁移删除旧的 `provider='grok-build'` 行（幂等）。
 5. **Grok 记录不出现在请求明细** — 聚合包含 `grok-cli`（以及 dim 的 `xai-official` 通道），但 `paginate_requests` 明确排除
    该 source；detail 表永远不会显示 grok 单条记录。
 6. **Kimi 成本是估算** — Kimi CLI/Code 不报原生 cost；按
@@ -539,3 +703,26 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
     sing-box/xray）与 `TimeoutStartSec=60`——否则 unit 会静默挂死不退出。
     若日志出现 "refresh token is rejected too"，说明 refresh token 也失效，只能
     `dim provider disconnect grok-build` 后重新登录。
+14. **Ollama Cloud 代理插件的两个静默失败模式** — `pluginapi.Metadata` /
+    `UsageRecord` / `UsageDetail` 无 json tag → 线格式 PascalCase（`Capabilities`
+    例外，是 `usage_plugin`）。写错 key 时注册会被拒且 host **反复重试刷屏**
+    （`invalid metadata or no capabilities`），或 `HandleUsage` 照常被调用但字段全零
+    而**静默丢数据**。另外 `pluginhost` 只在启动时扫描插件目录：重建 `.so` 后必须
+    重启 `token-stats-workbuddy.service` 才生效。插件内 panic 会被 host fuse，
+    JSONL 写入是 best-effort（失败只丢记录，不阻塞请求），因此验证时要拿**同一次
+    响应**的 `usage.cached_tokens` 与 JSONL 行比对，不能只看行数。
+15. **Ollama Cloud 切换的双计防护** — `ollama-usage.jsonl` 首行时间即 cutoff。
+    `sources/dim.rs` 在读时丢弃 cutoff 及之后的 `custom-ollama-cloud-042036d3`
+    按 run 行（`ollama_run_record_superseded`），`app.rs` 另做一次性 store 迁移；
+    cutoff 未知（插件尚未产出）时**不截断**，避免切换期丢历史。迁移只在 cutoff
+    已知后 latch，所以先启动仪表盘、后产生首条代理记录的场景会在后续刷新补上。
+16. **CodeBuddy 卡「消失」其实是 cookie 过期（401）** — 卡片在
+    `!available && error 含 "not set"` 时才整卡隐藏（未配置凭据）；cookie 过期时
+    后端返回 `HTTP 401 Unauthorized: (HTML response)`（边缘 WAF 挑战），此时**保留**
+    卡片并显示错误文案（2026-09-12 修复前是一起隐藏，看起来像订阅没了）。排查：
+    `curl -s localhost:3001/api/quota | jq .codebuddy`。修复：跑
+    `./scripts/refresh-codebuddy-cookies.sh`（= 提取 Chrome cookie → 改写
+    `~/.config/token-stats/deploy-env.sh` → 注入各 `token-stats@<port>` drop-in →
+    重启实例；`--dry-run` 只提取不改）。注意 `session`/`session_2` 是 Flask 签名会话，
+    值里含 `|`，写入 systemd `Environment=` 时 `|` 是合法的（不能带引号嵌套），
+    但 `%` 必须转义为 `%%`（deploy.sh 的 `inject_env_dropin` 已处理）。

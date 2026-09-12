@@ -16,7 +16,7 @@
 //!   the source logs still contain the records.
 
 use crate::models::TokenRecord;
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
@@ -77,6 +77,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_token_records_fingerprint
 CREATE INDEX IF NOT EXISTS idx_token_records_time ON token_records(time);
 CREATE INDEX IF NOT EXISTS idx_token_records_source ON token_records(source);
 CREATE INDEX IF NOT EXISTS idx_token_records_provider ON token_records(provider);
+
+-- Small key/value side table for source sync watermarks (e.g. the DimAgent
+-- console API's newest ingested log id). Persisting them keeps a cold start
+-- from re-walking the whole remote history page by page.
+CREATE TABLE IF NOT EXISTS sync_watermarks (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 
 PRAGMA user_version = 1;
 "#;
@@ -308,6 +317,49 @@ impl TokenStore {
         }
     }
 
+    /// Read a persisted sync watermark (e.g. a remote API's newest ingested
+    /// id). Returns `None` when the key was never written or is unparsable.
+    pub fn get_sync_watermark(&self, key: &str) -> Option<i64> {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return None;
+            }
+        };
+        conn.query_row(
+            "SELECT value FROM sync_watermarks WHERE key = ?1",
+            [key],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+    }
+
+    /// Persist a sync watermark. Best-effort: a failure only costs a slower
+    /// next cold start, never correctness.
+    /// TODO(WIP): 待接线 — 当前无调用方（编译期 -D warnings 防死代码）。
+    #[allow(dead_code)]
+    pub fn set_sync_watermark(&self, key: &str, value: i64) {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = conn.execute(
+            "INSERT INTO sync_watermarks (key, value, updated_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+             ON CONFLICT(key) DO UPDATE SET
+                 value = excluded.value,
+                 updated_at = excluded.updated_at",
+            params![key, value.to_string()],
+        ) {
+            tracing::warn!("Failed to persist sync watermark {key}: {e}");
+        }
+    }
+
     /// Remove native cmd rows that stored cache-inclusive input when the
     /// exclusive twin is also present. Idempotent.
     pub fn collapse_commandcode_inclusive_twins(&self) -> usize {
@@ -479,6 +531,39 @@ impl TokenStore {
         deleted
     }
 
+    /// One-time migration helper: remove persisted `source='zcode'` rows
+    /// mislabeled with provider `anthropic`. The bigmodel coding plan speaks
+    /// the Anthropic protocol, so `provider_metadata_json` rows carrying the
+    /// `anthropic` adapter key used to label every `builtin:bigmodel-*`
+    /// record `anthropic`; the source now maps those to `bigmodel`, and the
+    /// old rows would double-count the same requests under the stale name.
+    /// Idempotent (no-op once the rows are gone).
+    pub fn purge_zcode_anthropic(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records WHERE source = 'zcode' AND provider = 'anthropic'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge mislabeled zcode anthropic rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated zcode collection: removed {deleted} row(s) mislabeled \
+                 provider='anthropic', re-ingested as provider='bigmodel'"
+            );
+        }
+        deleted
+    }
+
     /// One-time migration helper: remove persisted `source='dim'` rows whose
     /// provider is the legacy `workbuddy` name. The workbuddy channel is now
     /// covered by the `dim-agent` source (workbuddy-usage.jsonl, written by
@@ -505,6 +590,111 @@ impl TokenStore {
             tracing::info!(
                 "Migrated dim collection: removed {deleted} legacy workbuddy row(s) \
                  replaced by dim-agent records"
+            );
+        }
+        deleted
+    }
+
+    /// One-time migration helper for the built-in Command Code proxy channel.
+    ///
+    /// DimAgent requests routed through the loopback cc-proxy are already
+    /// metered per-request by the `cc-proxy` source (`cc-proxy-usage.jsonl`,
+    /// written by the proxy itself). The dim local supplement used to also
+    /// ingest the same requests as per-run rows from the local dimcode SQLite
+    /// (`original_provider='cc-proxy'`, provider slug of the channel's
+    /// displayName, e.g. `command-code`), double-counting them at a coarser
+    /// granularity. Keyed on `original_provider` (the raw dim providerId) so
+    /// rows persisted under any displayName slug variant are caught.
+    /// Idempotent (no-op once the rows are gone).
+    pub fn purge_dim_cc_proxy(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records
+                 WHERE source = 'dim' AND original_provider = 'cc-proxy'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge dim cc-proxy run rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated dim collection: removed {deleted} cc-proxy run row(s) \
+                 replaced by cc-proxy source records"
+            );
+        }
+        deleted
+    }
+
+    /// One-time migration helper for the Ollama Cloud channel switch.
+    ///
+    /// Dim's local `usage_run_stats` used to expose that channel as one row per
+    /// DimAgent run. Those requests are now metered individually by the
+    /// CLIProxyAPI `ollama-usage` plugin (`source='ollama-proxy'`), so any
+    /// per-run row at or after the proxy's first record would double count the
+    /// same usage. Rows *before* that instant are older history the proxy never
+    /// saw and are kept.
+    ///
+    /// Comparison is done in Rust rather than SQL because stored timestamps mix
+    /// `Z` and `+00:00` suffixes, which do not order lexicographically.
+    /// Idempotent: once the superseded rows are gone this deletes nothing.
+    pub fn purge_superseded_ollama_run_rows(&self, raw_provider: &str) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let to_delete: Vec<i64> = {
+            let mut stmt = match conn.prepare(
+                "SELECT id, time FROM token_records
+                 WHERE original_provider = ?1",
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("Failed to prepare ollama run purge query: {e}");
+                    return 0;
+                }
+            };
+            let iter = stmt.query_map([raw_provider], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            });
+            match iter {
+                Ok(rows) => rows
+                    .flatten()
+                    .filter(|(_, time)| crate::sources::ollama_run_time_superseded(time))
+                    .map(|(id, _)| id)
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!("Failed to iterate ollama run rows for purge: {e}");
+                    return 0;
+                }
+            }
+        };
+        if to_delete.is_empty() {
+            return 0;
+        }
+        let mut deleted = 0usize;
+        for id in &to_delete {
+            match conn.execute("DELETE FROM token_records WHERE id = ?1", [id]) {
+                Ok(n) => deleted += n,
+                Err(e) => {
+                    tracing::warn!("Failed to purge superseded ollama run row {id}: {e}");
+                }
+            }
+        }
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated Ollama Cloud channel: removed {deleted} per-run row(s) \
+                 superseded by ollama-proxy per-request records"
             );
         }
         deleted
@@ -598,16 +788,22 @@ impl TokenStore {
 /// The refresh task queues records here (and publishes them to memory
 /// immediately, so the frontend always sees the latest data). A background
 /// flush task drains the buffer into SQLite in one batch once `delay` has
-/// elapsed since the last queue *or* the last flush — at most one write per
-/// `delay`, and every queued record is persisted within `delay` of arrival.
-/// [`PendingBuffer::take_all`] is the shutdown path: it drains
+/// elapsed since the oldest queued record *or* since the last flush — at most
+/// one write per `delay`, and every queued record is persisted within `delay`
+/// of arrival. [`PendingBuffer::take_all`] is the shutdown path: it drains
 /// unconditionally so the final write on exit is reliable.
 ///
 /// `take_if_due` takes an explicit `now` so the debounce logic is testable
 /// with fake time.
 pub struct PendingBuffer {
     records: Mutex<Vec<TokenRecord>>,
-    last_queued: Mutex<Option<Instant>>,
+    /// When the *current* backlog started, i.e. when records were first queued
+    /// into an empty buffer. This is what bounds the persistence delay: with
+    /// only a "last queued" timestamp, a source that queues something every few
+    /// seconds (the common case — dim/cc-proxy/codex all refresh on the same 30s
+    /// tick) would keep pushing the deadline forward and the buffer would never
+    /// come due. See `pending_buffer_drains_even_under_continuous_queueing`.
+    oldest_queued: Mutex<Option<Instant>>,
     last_flush: Mutex<Option<Instant>>,
 }
 
@@ -615,7 +811,7 @@ impl PendingBuffer {
     pub fn new() -> Self {
         Self {
             records: Mutex::new(Vec::new()),
-            last_queued: Mutex::new(None),
+            oldest_queued: Mutex::new(None),
             last_flush: Mutex::new(None),
         }
     }
@@ -632,8 +828,13 @@ impl PendingBuffer {
             return;
         }
         let mut buf = self.records.lock().unwrap();
+        let was_empty = buf.is_empty();
         buf.extend(records);
-        *self.last_queued.lock().unwrap() = Some(now);
+        if was_empty {
+            // New backlog: remember when it started so it cannot be starved by
+            // records that keep arriving.
+            *self.oldest_queued.lock().unwrap() = Some(now);
+        }
     }
 
     /// Number of records waiting to be written.
@@ -641,17 +842,24 @@ impl PendingBuffer {
         self.records.lock().unwrap().len()
     }
 
-    /// Drain the buffer if a write is due: at least `delay` since the last
-    /// queue or the last flush. Returns the batch to write (empty if not
-    /// due). A write that is drained here is considered a flush, so the
-    /// next one cannot happen before `delay` again.
+    /// Drain the buffer if a write is due: at least `delay` since the oldest
+    /// queued record, or since the last flush. Returns the batch to write
+    /// (empty if not due). A write that is drained here is considered a flush,
+    /// so the next one cannot happen before `delay` again.
+    ///
+    /// The `oldest_queued` arm makes the debounce a **maximum** latency rather
+    /// than a best-effort one: `Flushed 1 queued record(s)` every 30 seconds
+    /// (each refresh tick queues something) is normal, but with only
+    /// `last_queued` the deadline moved forward on every tick and a busy day
+    /// could leave records in memory indefinitely — the observed 7h gap on
+    /// 2026-09-11 left 1000+ records unpublished to SQLite.
     pub fn take_if_due(&self, delay: Duration, now: Instant) -> Vec<TokenRecord> {
         let mut buf = self.records.lock().unwrap();
         if buf.is_empty() {
             return Vec::new();
         }
-        let queued_due = self
-            .last_queued
+        let oldest_due = self
+            .oldest_queued
             .lock()
             .unwrap()
             .is_some_and(|t| now.duration_since(t) >= delay);
@@ -660,9 +868,10 @@ impl PendingBuffer {
             .lock()
             .unwrap()
             .is_some_and(|t| now.duration_since(t) >= delay);
-        if queued_due || flush_due {
+        if oldest_due || flush_due {
             let batch = std::mem::take(&mut *buf);
             *self.last_flush.lock().unwrap() = Some(now);
+            *self.oldest_queued.lock().unwrap() = None;
             batch
         } else {
             Vec::new()
@@ -880,10 +1089,7 @@ mod tests {
         });
     }
 
-    fn seed_legacy_commandcode(
-        path: &Path,
-        rows: &[( &str, i64, i64, i64)],
-    ) {
+    fn seed_legacy_commandcode(path: &Path, rows: &[(&str, i64, i64, i64)]) {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         for (time, input, cache_read, output) in rows {
@@ -975,9 +1181,27 @@ mod tests {
             )
             .unwrap();
         };
-        insert("2026-09-06T14:15:21.333Z", "grok-build", "dim", 296_933, 2_085_504);
-        insert("2026-09-06T14:15:21.333Z", "xai-official", "dim", 296_933, 2_085_504);
-        insert("2026-09-06T14:15:21.333Z", "xai-official", "grok-cli", 100, 0);
+        insert(
+            "2026-09-06T14:15:21.333Z",
+            "grok-build",
+            "dim",
+            296_933,
+            2_085_504,
+        );
+        insert(
+            "2026-09-06T14:15:21.333Z",
+            "xai-official",
+            "dim",
+            296_933,
+            2_085_504,
+        );
+        insert(
+            "2026-09-06T14:15:21.333Z",
+            "xai-official",
+            "grok-cli",
+            100,
+            0,
+        );
         drop(conn);
 
         let store = TokenStore::open(&path);
@@ -992,6 +1216,98 @@ mod tests {
         );
         // Idempotent: second call removes nothing.
         assert_eq!(store.purge_dim_grok_build(), 0);
+    }
+
+    #[test]
+    fn purge_superseded_ollama_run_rows_keeps_history_before_cutoff() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let insert = |time: &str, original: &str, source: &str, model: &str| {
+            conn.execute(
+                INSERT_SQL,
+                params![
+                    time,
+                    &time[..10],
+                    "N/A",
+                    // Vendor merge renamed the provider before persistence.
+                    if source == "dim" {
+                        "ollama"
+                    } else {
+                        "ollama-cloud"
+                    },
+                    original,
+                    model,
+                    source,
+                    1_000i64,
+                    100i64,
+                    5_000i64,
+                    0i64,
+                    6_100i64,
+                    0.0f64,
+                    None::<f64>,
+                    None::<f64>,
+                ],
+            )
+            .unwrap();
+        };
+        insert(
+            "2026-09-05T23:24:12.948+00:00",
+            crate::sources::OLLAMA_CLOUD_RUN_PROVIDER,
+            "dim",
+            "deepseek-v4-flash:0731",
+        );
+        insert(
+            "2026-09-11T14:30:00+00:00",
+            crate::sources::OLLAMA_CLOUD_RUN_PROVIDER,
+            "dim",
+            "deepseek-v4.1-flash",
+        );
+        // A per-request record from the new source is never touched.
+        insert(
+            "2026-09-11T14:30:00+00:00",
+            "ollama-cloud",
+            "ollama-proxy",
+            "deepseek-v4.1-flash",
+        );
+        drop(conn);
+
+        let log_path = dir.path().join("ollama-usage.jsonl");
+        std::fs::write(
+            &log_path,
+            concat!(
+                r#"{"date":"2026-09-11","time":"2026-09-11T14:00:00Z","apiKeyPrefix":"N/A","provider":"ollama-cloud","model":"deepseek-v4.1-flash","source":"ollama-proxy","inputTokens":1,"outputTokens":1,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":2,"cost":0.0}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        temp_env::with_var("OLLAMA_PROXY_USAGE_LOG_PATH", Some(&log_path), || {
+            let store = TokenStore::open(&path);
+            assert_eq!(store.count(), 3);
+            assert_eq!(
+                store.purge_superseded_ollama_run_rows(crate::sources::OLLAMA_CLOUD_RUN_PROVIDER),
+                1
+            );
+            let loaded = store.load_all();
+            assert_eq!(loaded.len(), 2, "only the post-cutoff run row is dropped");
+            assert!(
+                loaded.iter().any(|r| r.source == "ollama-proxy"),
+                "per-request records must survive"
+            );
+            assert!(
+                loaded
+                    .iter()
+                    .any(|r| r.source == "dim" && r.time.starts_with("2026-09-05")),
+                "pre-cutoff run history must be kept"
+            );
+            // Idempotent.
+            assert_eq!(
+                store.purge_superseded_ollama_run_rows(crate::sources::OLLAMA_CLOUD_RUN_PROVIDER),
+                0
+            );
+        });
     }
 
     #[test]
@@ -1120,9 +1436,10 @@ mod tests {
         );
 
         // Not due yet: 1 min after the queue.
-        assert!(buf
-            .take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(60))
-            .is_empty());
+        assert!(
+            buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(60))
+                .is_empty()
+        );
         // Due: 2 min after the queue.
         let batch = buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(121));
         assert_eq!(batch.len(), 1);
@@ -1134,7 +1451,7 @@ mod tests {
         let buf = PendingBuffer::new();
         let t0 = Instant::now();
 
-        // First batch: queued at t0, flushed 2 min later (due via last_queued).
+        // First batch: queued at t0, flushed 2 min later (due via oldest_queued).
         buf.queue_at(
             vec![fixture(
                 "pi",
@@ -1149,7 +1466,7 @@ mod tests {
         assert_eq!(first.len(), 1);
 
         // Continuous load: new data every 30s after the flush, pushing
-        // last_queued forward so the queued_due arm never fires.
+        // last_queued forward. The oldest_queued arm still bounds the delay.
         for i in 1..=3 {
             let at = t0 + Duration::from_secs(150 + 30 * (i - 1));
             buf.queue_at(
@@ -1162,14 +1479,52 @@ mod tests {
                 )],
                 at,
             );
+            // Early: the backlog is younger than the delay.
             assert!(buf.take_if_due(Duration::from_secs(120), at).is_empty());
         }
 
-        // 2 min after the last flush (t0+121s) the flush_due arm fires and
-        // drains everything in one batch.
-        let batch = buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(241));
+        // 2 min after the backlog started (t0+150s) the oldest_queued arm fires
+        // and drains everything in one batch — a steady queue every 30s cannot
+        // postpone the write past the delay.
+        let batch = buf.take_if_due(Duration::from_secs(120), t0 + Duration::from_secs(271));
         assert_eq!(batch.len(), 3, "all queued records flush in one batch");
         assert_eq!(buf.len(), 0);
+    }
+
+    /// Regression: a source queueing something on every refresh tick (30s)
+    /// must not be able to starve the buffer. Before the `oldest_queued` arm
+    /// existed, `last_queued` was pushed forward on every tick and the buffer
+    /// could stay unflushed indefinitely — 2026-09-11 saw a 7h gap and 1000+
+    /// records published to memory but not to SQLite.
+    #[test]
+    fn pending_buffer_drains_even_under_continuous_queueing() {
+        let buf = PendingBuffer::new();
+        let t0 = Instant::now();
+        let delay = Duration::from_secs(120);
+        let mut flushed_at = None;
+        for i in 0..40 {
+            let at = t0 + Duration::from_secs(30 * i);
+            buf.queue_at(
+                vec![fixture(
+                    "dim",
+                    "ollama",
+                    "deepseek-v4.1-flash",
+                    &format!("2026-07-01T01:{:02}:00Z", i),
+                    100,
+                )],
+                at,
+            );
+            if !buf.take_if_due(delay, at).is_empty() {
+                flushed_at = Some(at);
+                break;
+            }
+        }
+        let flushed_at = flushed_at.expect("a steady queue must still drain");
+        assert_eq!(
+            flushed_at,
+            t0 + Duration::from_secs(120),
+            "drain at the first tick where the backlog has aged past the delay"
+        );
     }
 
     #[test]
@@ -1192,8 +1547,9 @@ mod tests {
         let buf = PendingBuffer::new();
         buf.queue(Vec::new());
         assert_eq!(buf.len(), 0);
-        assert!(buf
-            .take_if_due(Duration::from_secs(120), Instant::now())
-            .is_empty());
+        assert!(
+            buf.take_if_due(Duration::from_secs(120), Instant::now())
+                .is_empty()
+        );
     }
 }

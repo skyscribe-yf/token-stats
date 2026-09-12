@@ -86,7 +86,7 @@ ollama_cloud_empirical_weekly_quota = 292307692
 # 均值 ≈ 111.8M（±3%，全在 0.1% 显示粒度舍入误差内，稳定）
 # 周配额 = 5 窗口 × 111.8M ≈ 559M；月 ≈ 2,423M；¥135.79 / 2,423M ≈ ¥0.0560/M
 # 倍率 = 0.0560 / 0.1072 ≈ 0.523；交叉验证：glm-5.2 每窗口 58.46M → 58.46/111.8 = 0.523 ✓
-ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "glm-5.3-flash" = 0.523, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2 }
+ollama_cloud_model_multipliers = { "glm-5.2" = 1.0, "glm-5.3-flash" = 0.523, "deepseek-v4-flash" = 0.2, "deepseek-v4-flash:0731" = 0.2, "deepseek-v4-flash:0731-cloud" = 0.2, "deepseek-v4.1-flash" = 0.2 }
 
 # FreeModel 折扣：1 USD 面值 = 0.1 CNY 实际成本，divisor = 6.7894 / 0.1 = 67.894
 freemodel_divisor = 67.894
@@ -104,6 +104,31 @@ fenno_divisor = 101.841
 # 实际成本 = API 计算价格（CNY）÷ grok_divisor
 # 默认：$1,950 × 6.7894 / 50 = 264.7866
 grok_divisor = 264.7866
+
+# ── ZCode / BigModel GLM Coding Plan 计费（source=zcode, provider=bigmodel）──
+# 官方积分公式（docs.bigmodel.cn/cn/coding-plan/overview）：
+#   积分 =（输入 × Input系数 + 缓存命中 × Cached系数 + 输出 × Output系数）/ 10000
+#   GLM-5.3-Flash: 2.3 / 0.56 / 8；GLM-5.3: 6.9 / 1.7 / 24
+# 高峰时段（周一至周五 14:00–18:00 CST）按 1× 消耗，其余时段按 50% 抵扣；
+# 夜间畅用活动（2026-09-03 ~ 09-20，每日 23:00–09:00 CST，ZCode 端）消耗为 0。
+# 注意：活动自 2026-09-13 06:15 CST 起才实际生效——此前用的旧版 ZCode 客户端
+# 不享受免扣，服务端照常扣积分，该时刻之前落在窗口内的记录按正常波谷 0.5× 计费
+# （zcode_night_free_effective_from）。
+# 实际成本 = 官方积分公式算出的积分 × 高峰因子 × zcode_cny_per_credit。
+#
+# zcode_cny_per_credit 按实付分摊（2026-09-12 实付 ¥188.04 买 3 个月）：
+#   3 个月 ≈ 13 周 × 周额度 10000 积分 = 130,000 积分
+#   每积分 = 188.04 / 130000 ≈ ¥0.00144646
+# 含义：一周用满 10000 积分 = ¥14.46；一个月用满 ≈ ¥62.68 = 月均实付。
+# 注意：官方列表价口径（×0.5312）高估约 3.7 倍，已废弃——套餐额度价值远超实付。
+zcode_cny_per_credit = 0.0014464615384615384
+zcode_credit_rates = { "glm-5.3-flash" = [2.3, 0.56, 8.0], "glm-5.3" = [6.9, 1.7, 24.0] }
+zcode_peak_hours_cst = [[14, 18]]
+zcode_off_peak_factor = 0.5
+zcode_night_free_hours_cst = [[23, 24], [0, 9]]
+zcode_night_free_from = "2026-09-03"
+zcode_night_free_until = "2026-09-20"
+zcode_night_free_effective_from = "2026-09-13T06:15:00+08:00"
 
 # ── 讯飞波谷计费配置（2026年6月18日上线） ──────────────────────────────
 # 分时段差异化计量，错峰使用即可享受优惠费率：
@@ -446,6 +471,43 @@ cache_read_cny = 0.017436
 cache_write_cny = 0.0
 
 [[dim_model]]
+name = "deepseek-v4.1-flash-expires-on-0910"
+# v4.1 flash 的**历史**临时名（含到期日；2026-09-08 上线，2026-09-10 平台
+# 改名为 deepseek-v4.1-flash）。仅保留给该名字下的历史记录
+# （最后一条 2026-09-09T23:14Z），新记录不再使用。费率与
+# deepseek-v4-flash-vision-exp 相同：基础 102.73973 / 616.43836 / 6.84932
+# 积分/M，高峰（CST 09:00–12:00 / 14:00–18:00）2×，即 UTC 01–04 / 06–10。
+# 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode
+input_cny = 0.653798
+output_cny = 3.922790
+cache_read_cny = 0.043587
+cache_write_cny = 0.0
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_input_cny = 1.307597
+peak_output_cny = 7.845579
+peak_cache_read_cny = 0.087173
+peak_cache_write_cny = 0.0
+
+[[dim_model]]
+name = "deepseek-v4.1-flash"
+# v4.1 flash 正式名（2026-09-10 平台去掉 "-expires-on-0910" 后缀，费率同时
+# 下调）。按平台价目卡计费：基础 140 / 550 / 2.7 积分/M，高峰（CST
+# 09:00–12:00 / 14:00–18:00）2× = 280 / 1100 / 5.4，即 UTC 01–04 / 06–10。
+# 日账验证：2026-09-10（CST）按此费率 + 既有各模型费率，与 daily-stats 的
+# quota_consumed 完全闭合（误差 <0.01%）。注意与临时名不同：临时名实际计费
+# 走 vision-exp 费率（102.73973 等），正式名则按价目卡原价。
+# 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode
+input_cny = 0.890909
+output_cny = 3.500000
+cache_read_cny = 0.017182
+cache_write_cny = 0.0
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_input_cny = 1.781818
+peak_output_cny = 7.000000
+peak_cache_read_cny = 0.034364
+peak_cache_write_cny = 0.0
+
+[[dim_model]]
 name = "glm-5.3"
 # 平台对 glm-5.3 有全时段 7 折（entitlement rate=0.7），夜间 20:00–08:00
 # （CST，= UTC 12:00–24:00）再打 5 折。基础价已含 7 折，peak 价 = 7折×5折。
@@ -465,6 +527,17 @@ name = "glm-5.3-flash"
 input_cny = 0.477273
 output_cny = 1.590909
 cache_read_cny = 0.095455
+cache_write_cny = 0.0
+
+[[dim_model]]
+name = "seed-2.0-mini"
+# 按平台价目卡计费：27.3972 / 273.972 / 5.47945 积分/M，无高峰时段。
+# 日账验证：2026-09-07（CST）当天仅有 deepseek-v4-flash + seed-2.0-mini 两种
+# 平台计费模型，扣除前者后剩余的 106.7 积分与本费率算出的值完全一致。
+# 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode
+input_cny = 0.174346
+output_cny = 1.743458
+cache_read_cny = 0.034869
 cache_write_cny = 0.0
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -588,8 +661,10 @@ cache_write = 0.0
 [[model]]
 name = "cc:deepseek-v4-pro"
 # DeepSeek 于该时点起切换为峰谷价；基础字段为低谷，peak_* 为高峰。
+# 高峰仅周一–周五（UTC 周末全天按低谷），见 peak_weekdays_only。
 effective_from = "2026-08-16T16:00:00Z"
 peak_hours_utc = [[1, 4], [6, 10]]
+peak_weekdays_only = true
 input = 0.66
 output = 1.98
 cache_read = 0.022
@@ -617,8 +692,10 @@ cache_write = 0.0
 [[model]]
 name = "cc:deepseek-v4-flash"
 # DeepSeek 于该时点起切换为峰谷价；基础字段为低谷，peak_* 为高峰。
+# 高峰仅周一–周五（UTC 周末全天按低谷），见 peak_weekdays_only。
 effective_from = "2026-08-16T16:00:00Z"
 peak_hours_utc = [[1, 4], [6, 10]]
+peak_weekdays_only = true
 input = 0.22
 output = 0.66
 cache_read = 0.007
@@ -627,6 +704,39 @@ peak_input = 0.44
 peak_output = 1.32
 peak_cache_read = 0.014
 peak_cache_write = 0.0
+
+[[model]]
+name = "cc:deepseek-v4.1-flash"
+# Command Code Go 套餐列表价（2026-09-09 随 CLI v1.53.0 上线，v4.1 flash 与
+# v4-flash 同价）：低谷 $0.15 / $0.60 / $0.003，高峰（01–04 & 06–10 UTC，
+# **周一–周五**）2× = $0.30 / $1.20 / $0.006。
+# 该键由 `normalize_commandcode_model` 的 fallback 生成（模型名不以
+# "deepseek-v4-flash" 开头，故不会命中 v4-flash 分支）；缺此条目时 cc-proxy /
+# commandcode 记录显示 N/A 并从合计中剔除。
+# peak_weekdays_only：官方页明确「Peak runs Monday to Friday only」，周末全天
+# 按低谷计费（该字段是 model 表的新键，首次加入需重建后端；之后随
+# POST /api/pricing/reload 热生效）。
+# 来源：https://commandcode.ai/docs/plans/go（Go plan 模型表）
+input = 0.15
+output = 0.60
+cache_read = 0.003
+cache_write = 0.0
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_input = 0.30
+peak_output = 1.20
+peak_cache_read = 0.006
+peak_cache_write = 0.0
+peak_weekdays_only = true
+
+[[model]]
+name = "cc:laguna-s-2.1-free"
+# 官方免费模型（"laguna-s-2.1-free is free. Requests on this model cost no
+# credits."）：显式记 0，使记录计入调用次数而不是退回 N/A 被合计剔除。
+# 来源：https://commandcode.ai/docs/resources/pricing-limits
+input = 0.0
+output = 0.0
+cache_read = 0.0
+cache_write = 0.0
 
 [[model]]
 name = "cc:kimi-k2.6"

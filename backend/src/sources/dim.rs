@@ -41,12 +41,16 @@
 //! `~/.dimcode/v2/dimcode.sqlite` `usage_run_stats` table (per-run
 //! aggregates). We read that table read-only, **excluding** the
 //! `dimcode-api-oauth` provider (already covered by the API, would
-//! double-count), and map each third-party provider id to the dashboard's
-//! canonical provider name (e.g. `custom-ollama-cloud-042036d3` →
+//! double-count) and every channel that has its own per-request meter —
+//! workbuddy (`dim-agent` source), grok-build-proxy (grok proxy's log),
+//! ollama-cloud-proxy (`ollama-proxy` source) and cc-proxy (`cc-proxy`
+//! source) — and map each remaining third-party provider id to the
+//! dashboard's canonical provider name (e.g. `custom-ollama-cloud-042036d3` →
 //! `ollama-cloud`, which vendor_merge.toml merges into the `ollama` group
 //! and pricing.rs bills with the empirical subscription rate).
 
 use super::DataSource;
+use super::OLLAMA_CLOUD_RUN_PROVIDER;
 use crate::models::TokenRecord;
 use chrono::TimeZone;
 use serde::Deserialize;
@@ -75,13 +79,30 @@ const DIM_OAUTH_PROVIDER: &str = "dimcode-api-oauth";
 /// plugin); rows with this provider are excluded from the local supplement
 /// to avoid double-counting the same requests.
 const WORKBUDDY_PROVIDER: &str = "workbuddy";
+/// Provider id of the custom grok-build proxy channel (openai-responses
+/// adapter pointed at the loopback grok proxy) — already covered by the
+/// grok proxy's per-request log (source `grok-cli`); rows with this provider
+/// are excluded from the local supplement to avoid double-counting.
+const GROK_BUILD_PROXY_PROVIDER: &str = "grok-build-proxy";
+/// Provider id of the custom channel that routes Ollama Cloud through the
+/// shared CLIProxyAPI instance (an `openai-compatible` upstream with the `oc/`
+/// prefix). Rows with this provider are excluded from the local supplement:
+/// those requests are now metered per-call by the `ollama-usage` CPA plugin and
+/// ingested through the `ollama-proxy` source.
+const OLLAMA_CLOUD_PROXY_PROVIDER: &str = "ollama-cloud-proxy";
+/// Provider id of the built-in Command Code proxy channel — already metered
+/// per-request by the loopback proxy itself (source `cc-proxy`,
+/// `cc-proxy-usage.jsonl`). Rows with this provider are excluded from the
+/// local supplement to avoid double-counting the same requests (the proxy IS
+/// the transport, so every request it sees is logged there).
+const CC_PROXY_PROVIDER: &str = "cc-proxy";
 
 /// Map a local `usage_run_stats.providerId` to the dashboard's canonical
 /// provider name. Unknown ids fall back to the raw id (lowercased) so new
 /// third-party channels still show up instead of being silently dropped.
 fn map_local_provider(provider_id: &str) -> String {
     match provider_id {
-        "custom-ollama-cloud-042036d3" => "ollama-cloud".to_string(),
+        OLLAMA_CLOUD_RUN_PROVIDER => "ollama-cloud".to_string(),
         // Dim's Grok Build channel routes to xAI's official API — the same
         // SuperGrok subscription the grok-cli proxy bills against. Map it to
         // the canonical provider so usage aggregates and the Grok quota card
@@ -97,7 +118,13 @@ fn fallback_provider_name(provider_id: &str, provider_names: &HashMap<String, St
     if let Some(display) = provider_names.get(provider_id) {
         let slug: String = display
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
             .collect();
         let slug = slug.trim_matches('-').to_string();
         if !slug.is_empty() {
@@ -140,21 +167,34 @@ struct LogItem {
 
 // ─── Polling state ───────────────────────────────────────────────────────────
 
+/// Key under which the console-API watermark is persisted in the token
+/// store's `sync_watermarks` table. A cold start resumes from it instead of
+/// walking the entire remote history again (279+ page requests, ~90s).
+const WATERMARK_KEY: &str = "dim_console_last_id";
+
 /// Polling state for the console API.
 struct DimPollState {
     /// Newest `id` already ingested; poll stops fetching pages once it
     /// crosses back to an id ≤ this value.
     last_seen_id: Option<i64>,
-    /// Whether the most recent sync ran to completion (every page up to the
-    /// watermark / end of history was fetched without error). Only complete
-    /// syncs may advance `last_seen_id` and are safe to build the legacy-row
-    /// migration purge on.
+    /// Whether the most recent console-API sync ran to completion (every page
+    /// up to the watermark / end of history was fetched without error).
+    /// Session-scoped: used by the migration to decide whether the records
+    /// just loaded cover the whole remote history.
     last_sync_complete: bool,
+    /// Whether a full-history backfill has ever completed in this store.
+    /// Persisted alongside the watermark: the legacy-row migration needs a
+    /// *complete* history read (incremental polls only ever see page 1, so
+    /// they cannot prove the historic per-run rows are superseded).
+    /// TODO(WIP): 待接线 — 当前无读取方（编译期 -D warnings 防死代码）。
+    #[allow(dead_code)]
+    backfill_done: bool,
 }
 
 static POLL_STATE: Mutex<DimPollState> = Mutex::new(DimPollState {
     last_seen_id: None,
     last_sync_complete: false,
+    backfill_done: false,
 });
 
 fn http_client() -> &'static reqwest::blocking::Client {
@@ -172,9 +212,12 @@ impl DataSource for DimSource {
         "dim"
     }
 
-    /// Full sync: fetch every available page (used at startup/restore).
+    /// Sync the console API. Startup resumes from the persisted watermark
+    /// (one page when nothing new happened); a store without one — fresh
+    /// install, or a store predating the watermark table — pays a single
+    /// full backfill and records it.
     fn load(&self) -> Vec<TokenRecord> {
-        let (items, complete) = match Self::sync(None) {
+        let (items, complete) = match Self::sync(Self::resume_watermark()) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("DimAgent API sync failed: {e}");
@@ -215,11 +258,47 @@ impl DimSource {
         POLL_STATE.lock().unwrap().last_sync_complete
     }
 
+    /// Whether a complete backfill covering the *whole* remote history has
+    /// ever finished against this token store. Only then do the stored dim
+    /// rows demonstrably supersede the legacy per-run rows, which the
+    /// fingerprint-guarded purge relies on.
+    /// TODO(WIP): 待接线 — 当前无调用方（编译期 -D warnings 防死代码）。
+    #[allow(dead_code)]
+    pub fn full_backfill_done() -> bool {
+        POLL_STATE.lock().unwrap().backfill_done
+    }
+
+    /// Console-API watermark to resume a startup sync from:
+    /// - the in-process state when this process already synced, else
+    /// - the value persisted in the token store, else
+    /// - `None` → one full backfill (its completion is persisted).
+    fn resume_watermark() -> Option<i64> {
+        if let Some(id) = POLL_STATE.lock().unwrap().last_seen_id {
+            return Some(id);
+        }
+        match crate::store::TokenStore::open_default().get_sync_watermark(WATERMARK_KEY) {
+            Some(id) => {
+                {
+                    let mut state = POLL_STATE.lock().unwrap();
+                    state.last_seen_id = Some(id);
+                }
+                tracing::info!(
+                    "DimAgent API: resuming from persisted watermark id={id} \
+                     (skipping the full history walk)"
+                );
+                Some(id)
+            }
+            None => None,
+        }
+    }
+
     /// Read third-party provider usage from the local dimcode SQLite
     /// (`usage_run_stats`), excluding Dim's own OAuth channel (covered by
-    /// the console API) and the workbuddy channel (covered by the
-    /// `dim-agent` source). Returns an empty vec when the DB is missing or
-    /// unreadable (graceful degradation).
+    /// the console API) and every channel with its own per-request meter:
+    /// workbuddy (`dim-agent` source), grok-build-proxy (grok proxy log),
+    /// ollama-cloud-proxy (`ollama-proxy` source) and cc-proxy (`cc-proxy`
+    /// source). Returns an empty vec when the DB is missing or unreadable
+    /// (graceful degradation).
     fn load_local_supplement() -> Vec<TokenRecord> {
         let path = Self::local_db_path();
         if !path.exists() {
@@ -243,6 +322,9 @@ impl DimSource {
                    WHERE status = 'completed'
                      AND providerId != ?1
                      AND providerId != ?2
+                     AND providerId != ?3
+                     AND providerId != ?4
+                     AND providerId != ?5
                      AND (inputTokens > 0 OR outputTokens > 0
                           OR cacheReadTokens > 0 OR cacheWriteTokens > 0)";
         let mut stmt = match conn.prepare(sql) {
@@ -252,20 +334,29 @@ impl DimSource {
                 return Vec::new();
             }
         };
-        let rows = stmt.query_map([DIM_OAUTH_PROVIDER, WORKBUDDY_PROVIDER], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, Option<i64>>(7)?,
-                row.get::<_, Option<i64>>(8)?,
-                row.get::<_, String>(9)?,
-            ))
-        });
+        let rows = stmt.query_map(
+            [
+                DIM_OAUTH_PROVIDER,
+                WORKBUDDY_PROVIDER,
+                GROK_BUILD_PROXY_PROVIDER,
+                OLLAMA_CLOUD_PROXY_PROVIDER,
+                CC_PROXY_PROVIDER,
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            },
+        );
         let mut records = Vec::new();
         match rows {
             Ok(iter) => {
@@ -295,6 +386,9 @@ impl DimSource {
                         &cost_json,
                         &provider_names,
                     ) {
+                        if super::ollama_run_record_superseded(&rec) {
+                            continue;
+                        }
                         records.push(rec);
                     }
                 }
@@ -342,10 +436,7 @@ impl DimSource {
         })
     }
 
-    fn sync_inner(
-        cookie: &str,
-        last_seen: Option<i64>,
-    ) -> Result<(Vec<LogItem>, bool), String> {
+    fn sync_inner(cookie: &str, last_seen: Option<i64>) -> Result<(Vec<LogItem>, bool), String> {
         let client = http_client();
         let mut items = Vec::new();
         let mut page = 1u64;
@@ -383,9 +474,7 @@ impl DimSource {
             }
             page += 1;
             if page > MAX_PAGES {
-                tracing::warn!(
-                    "DimAgent API backfill hit MAX_PAGES ({MAX_PAGES}); stopping"
-                );
+                tracing::warn!("DimAgent API backfill hit MAX_PAGES ({MAX_PAGES}); stopping");
                 return Ok((items, false));
             }
         }
@@ -395,8 +484,7 @@ impl DimSource {
     /// sync completed. Items with zero total tokens (e.g. failed calls) are
     /// dropped, matching the dashboard's zero-token convention.
     fn commit(items: Vec<LogItem>, complete: bool) -> Vec<TokenRecord> {
-        let records: Vec<TokenRecord> =
-            items.iter().filter_map(item_to_record).collect();
+        let records: Vec<TokenRecord> = items.iter().filter_map(item_to_record).collect();
         {
             let mut state = POLL_STATE.lock().unwrap();
             state.last_sync_complete = complete;
@@ -656,8 +744,14 @@ mod tests {
 
     fn sample_provider_names() -> HashMap<String, String> {
         HashMap::from([
-            ("custom-ollama-cloud-042036d3".to_string(), "ollama cloud".to_string()),
-            ("dimcode-api-oauth".to_string(), "DimAgent OAuth".to_string()),
+            (
+                "custom-ollama-cloud-042036d3".to_string(),
+                "ollama cloud".to_string(),
+            ),
+            (
+                "dimcode-api-oauth".to_string(),
+                "DimAgent OAuth".to_string(),
+            ),
         ])
     }
 
@@ -691,12 +785,24 @@ mod tests {
     fn maps_local_ollama_cloud_row() {
         let (pid, mid, s, e, c, i, o, cr, cw, cost) = sample_local_row();
         let r = local_row_to_record(
-            &pid, &mid, s.as_deref(), e.as_deref(), &c, i, o, cr, cw, &cost,
+            &pid,
+            &mid,
+            s.as_deref(),
+            e.as_deref(),
+            &c,
+            i,
+            o,
+            cr,
+            cw,
+            &cost,
             &sample_provider_names(),
         )
         .unwrap();
         assert_eq!(r.provider, "ollama-cloud");
-        assert_eq!(r.original_provider.as_deref(), Some("custom-ollama-cloud-042036d3"));
+        assert_eq!(
+            r.original_provider.as_deref(),
+            Some("custom-ollama-cloud-042036d3")
+        );
         assert_eq!(r.source, "dim");
         assert_eq!(r.model, "deepseek-v4-flash:0731");
         // inputTokens includes cacheReadTokens → subtract (0 here).
@@ -726,7 +832,16 @@ mod tests {
             r#"{"totalCostUsd":1.712644}"#.to_string(),
         );
         let r = local_row_to_record(
-            &pid, &mid, s.as_deref(), e.as_deref(), &c, i, o, cr, cw, &cost,
+            &pid,
+            &mid,
+            s.as_deref(),
+            e.as_deref(),
+            &c,
+            i,
+            o,
+            cr,
+            cw,
+            &cost,
             &sample_provider_names(),
         )
         .unwrap();
@@ -745,8 +860,17 @@ mod tests {
     fn local_row_subtracts_cache_from_input() {
         let (pid, mid, s, e, c, _i, _o, _cr, _cw, cost) = sample_local_row();
         let r = local_row_to_record(
-            &pid, &mid, s.as_deref(), e.as_deref(), &c, 500_000, 1_000, Some(400_000), Some(0),
-            &cost, &sample_provider_names(),
+            &pid,
+            &mid,
+            s.as_deref(),
+            e.as_deref(),
+            &c,
+            500_000,
+            1_000,
+            Some(400_000),
+            Some(0),
+            &cost,
+            &sample_provider_names(),
         )
         .unwrap();
         assert_eq!(r.input_tokens, 100_000);
@@ -757,19 +881,39 @@ mod tests {
     #[test]
     fn local_row_drops_zero_total() {
         let (pid, mid, s, e, c, _i, _o, _cr, _cw, cost) = sample_local_row();
-        assert!(local_row_to_record(
-            &pid, &mid, s.as_deref(), e.as_deref(), &c, 0, 0, Some(0), Some(0), &cost,
-            &sample_provider_names(),
-        )
-        .is_none());
+        assert!(
+            local_row_to_record(
+                &pid,
+                &mid,
+                s.as_deref(),
+                e.as_deref(),
+                &c,
+                0,
+                0,
+                Some(0),
+                Some(0),
+                &cost,
+                &sample_provider_names(),
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn unknown_local_provider_uses_display_name_slug() {
         let names = HashMap::from([("custom-foo-bar".to_string(), "Foo Bar Cloud".to_string())]);
         let r = local_row_to_record(
-            "custom-foo-bar", "some-model", Some("2026-09-06T05:00:00Z"), None,
-            "2026-09-06T05:00:00Z", 10, 10, Some(0), Some(0), "{}", &names,
+            "custom-foo-bar",
+            "some-model",
+            Some("2026-09-06T05:00:00Z"),
+            None,
+            "2026-09-06T05:00:00Z",
+            10,
+            10,
+            Some(0),
+            Some(0),
+            "{}",
+            &names,
         )
         .unwrap();
         assert_eq!(r.provider, "foo-bar-cloud");

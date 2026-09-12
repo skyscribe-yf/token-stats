@@ -49,6 +49,7 @@ import {
   getDisplayModelOptions,
   reconcileSelectedModels,
 } from "./lib/pivotTable";
+import { zcodeWindowUsage } from "./lib/quotaCards";
 import {
   buildCsvFilterParam,
   isEmptyAppliedSelection,
@@ -773,6 +774,25 @@ export default function App() {
           type: "expiring_soon",
           message: "Kimi 订阅即将到期",
           detail: `下次计费日: ${nextBilling.toLocaleDateString()}，请注意续费`,
+        });
+      }
+    }
+
+    // ZCode: alert when the primary quota window crosses 80% usage.
+    if (quota?.zcode?.available && quota.zcode.data) {
+      const z = quota.zcode.data;
+      const zUsages = z.limits.map((l) => zcodeWindowUsage(l));
+      const zIdx = zUsages.findIndex((u) => u != null);
+      const zUsage = zIdx >= 0 ? zUsages[zIdx] : null;
+      if (zUsage && zUsage.usedPct >= 80) {
+        alerts.push({
+          id: "zcode_quota_low",
+          provider: "ZCode",
+          type: "quota_low",
+          message: `ZCode 套餐额度已用 ${zUsage.usedPct.toFixed(0)}%`,
+          detail: z.limits[zIdx]?.nextResetTime
+            ? `重置于 ${new Date(z.limits[zIdx].nextResetTime!).toLocaleString()}`
+            : "建议关注剩余额度",
         });
       }
     }

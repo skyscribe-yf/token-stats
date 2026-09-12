@@ -5,15 +5,18 @@
 use crate::models::TokenRecord;
 use crate::quota::QuotaFetcher;
 use crate::routes;
-use crate::sources::{load_all_sources, load_changed_sources, DimSource};
+use crate::sources::{
+    DimSource, OLLAMA_CLOUD_RUN_PROVIDER, load_all_sources, load_changed_sources,
+};
 use crate::store::{PendingBuffer, TokenStore};
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
@@ -105,6 +108,11 @@ pub struct AppState {
     /// the flush task (and unconditionally on shutdown).
     pub pending: Arc<PendingBuffer>,
     pub quota_fetcher: Arc<QuotaFetcher>,
+    /// One-shot guard for the Ollama Cloud channel migration. The cutoff is
+    /// only known once the CLIProxyAPI `ollama-usage` plugin has written its
+    /// first record — which can happen long after startup — so the purge is
+    /// retried on each refresh until it succeeds once.
+    ollama_run_purged: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -156,6 +164,39 @@ impl AppState {
         // same requests.
         let dim_workbuddy_migrated = store.purge_dim_workbuddy() > 0;
 
+        // ── Dim Command Code proxy migration ─────────────────────────────
+        // DimAgent requests routed through the built-in loopback cc-proxy are
+        // already metered per-request by the `cc-proxy` source. Rows the dim
+        // local supplement persisted for the same channel (original_provider
+        // `cc-proxy`, provider slug `command-code`) would otherwise
+        // double-count them at a coarser per-run granularity. The proxy log
+        // predates every persisted run row, so the purge is unconditional.
+        let dim_cc_proxy_migrated = store.purge_dim_cc_proxy() > 0;
+
+        // ── ZCode provider relabel migration ─────────────────────────────
+        // The bigmodel coding plan speaks the Anthropic protocol, so its
+        // `provider_metadata_json` rows used to label every
+        // `builtin:bigmodel-*` record `anthropic`. The source now maps those
+        // to `bigmodel`; the mislabeled rows would double-count the same
+        // requests under the stale provider name.
+        let zcode_anthropic_purged = store.purge_zcode_anthropic() > 0;
+
+        // ── Ollama Cloud channel switch ──────────────────────────────────
+        // The channel now routes through CLIProxyAPI and is metered per request
+        // by the `ollama-usage` plugin (source `ollama-proxy`). Per-run rows at
+        // or after the proxy's first record cover the same usage and would
+        // double count it; earlier rows are history the proxy never saw.
+        //
+        // The cutoff only exists once the plugin has written its first line, so
+        // this is a no-op on a fresh install and is retried from
+        // `refresh_records` (see `purge_superseded_ollama_rows`).
+        let ollama_cutoff_known = crate::sources::ollama_run_cutoff().is_some();
+        let ollama_run_purged = if ollama_cutoff_known {
+            store.purge_superseded_ollama_run_rows(OLLAMA_CLOUD_RUN_PROVIDER) > 0
+        } else {
+            false
+        };
+
         let new_from_sources: Vec<TokenRecord> = source_records
             .into_iter()
             .filter(|r| seen.insert(r.fingerprint()))
@@ -179,9 +220,7 @@ impl AppState {
             .filter(|r| {
                 // Drop the legacy per-run dim rows the migration purge just
                 // removed from the store so memory and DB stay in sync.
-                !(dim_migrated
-                    && r.source == "dim"
-                    && !dim_keep.contains(&r.fingerprint()))
+                !(dim_migrated && r.source == "dim" && !dim_keep.contains(&r.fingerprint()))
             })
             .filter(|r| {
                 // Drop the legacy grok-build dim rows the migration purge
@@ -192,6 +231,26 @@ impl AppState {
                 // Drop the legacy workbuddy dim rows the migration purge
                 // just removed from the store so memory and DB stay in sync.
                 !(dim_workbuddy_migrated && r.source == "dim" && r.provider == "workbuddy")
+            })
+            .filter(|r| {
+                // Drop the dim cc-proxy run rows the migration purge just
+                // removed from the store so memory and DB stay in sync.
+                !(dim_cc_proxy_migrated
+                    && r.source == "dim"
+                    && r.original_provider.as_deref() == Some("cc-proxy"))
+            })
+            .filter(|r| {
+                // Drop the per-run Ollama Cloud rows the proxy supersedes, so
+                // memory and DB stay in sync with the purge above.
+                !(ollama_run_purged && crate::sources::ollama_run_record_superseded(r))
+            })
+            .filter(|r| {
+                // Drop the mislabeled zcode anthropic rows the migration
+                // purge just removed from the store so memory and DB stay
+                // in sync.
+                !(zcode_anthropic_purged
+                    && r.source == "zcode"
+                    && r.provider == "anthropic")
             })
             .chain(new_from_sources)
             .collect();
@@ -217,7 +276,49 @@ impl AppState {
             store,
             pending: Arc::new(PendingBuffer::new()),
             quota_fetcher: Arc::new(QuotaFetcher::new()),
+            // The startup purge above already ran whenever the cutoff was
+            // known; leaving the flag unset then would just repeat the scan.
+            ollama_run_purged: Arc::new(AtomicBool::new(ollama_cutoff_known)),
         }
+    }
+
+    /// Drop `source=dim` rows from the legacy per-run Ollama Cloud channel that
+    /// the per-request `ollama-proxy` source now supersedes, from both memory
+    /// and the store.
+    ///
+    /// One-shot, and a no-op until the proxy's first record makes the cutoff
+    /// known; afterwards no new legacy rows can arrive because
+    /// [`crate::sources::DimSource`] filters them at read time. Keeping the
+    /// fingerprints in the in-memory `seen` set also stops a re-read from
+    /// resurrecting them.
+    async fn purge_superseded_ollama_rows(&self) {
+        if self.ollama_run_purged.load(Ordering::Relaxed) {
+            return;
+        }
+        if crate::sources::ollama_run_cutoff().is_none() {
+            return; // Proxy has not recorded anything yet.
+        }
+        let removed_from_db = self
+            .store
+            .purge_superseded_ollama_run_rows(OLLAMA_CLOUD_RUN_PROVIDER);
+
+        let removed_from_memory = {
+            let mut guard = self.records.write().await;
+            let before = guard.records.len();
+            guard
+                .records
+                .retain(|r| !crate::sources::ollama_run_record_superseded(r));
+            before - guard.records.len()
+        };
+        if removed_from_db > 0 || removed_from_memory > 0 {
+            tracing::info!(
+                "Ollama Cloud migration: dropped {removed_from_memory} in-memory / \
+                 {removed_from_db} stored per-run row(s) superseded by ollama-proxy records"
+            );
+        }
+        // Only latch once the cutoff is known, so a fresh install that starts
+        // before the proxy's first request still migrates on a later refresh.
+        self.ollama_run_purged.store(true, Ordering::Relaxed);
     }
 
     /// Incrementally refresh records from all data sources.
@@ -234,6 +335,11 @@ impl AppState {
     /// pending queue are updated under the same lock, so a shutdown flush
     /// can never observe memory without the matching queued records.
     pub async fn refresh_records(&self) -> usize {
+        // The Ollama Cloud proxy may publish its first record after startup,
+        // which is when the per-run migration cutoff becomes known. Cheap
+        // no-op once applied (or while the cutoff is still unknown).
+        self.purge_superseded_ollama_rows().await;
+
         let new_records = load_changed_sources();
 
         // Phase 1: Fast path — check against the maintained fingerprint set
@@ -587,12 +693,7 @@ mod tests {
 
     #[test]
     fn keeps_unknown_codex_when_no_twin() {
-        let mut records = vec![rec(
-            "codex",
-            "ainaba",
-            "unknown",
-            "2026-08-25T10:00:00Z",
-        )];
+        let mut records = vec![rec("codex", "ainaba", "unknown", "2026-08-25T10:00:00Z")];
         drop_unknown_codex_twins(&mut records);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].model, "unknown");

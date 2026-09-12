@@ -368,6 +368,7 @@ export interface QuotaResponse {
   fenno_ex: FennoQuotaStatus | null;
   grok: GrokQuotaStatus | null;
   dimagent: DimAgentQuotaStatus | null;
+  zcode: ZcodeQuotaStatus | null;
 }
 
 // ─── DimAgent Subscription Quota ────────────────────────────────────────────
@@ -528,6 +529,61 @@ export interface GrokQuotaBreakdown {
 export interface GrokQuotaStatus {
   available: boolean;
   data: GrokQuotaData | null;
+  error: string | null;
+}
+
+// ─── ZCode (BigModel GLM coding plan) Quota ──────────────────────────────────
+
+export interface ZcodeUsageDetail {
+  modelCode: string;
+  displayName?: string | null;
+  usage: number;
+}
+
+export interface ZcodeLimitEntry {
+  kind: string | null;
+  unit?: number | null;
+  number?: number | null;
+  usage?: number | null;
+  currentValue?: number | null;
+  remaining?: number | null;
+  percentage?: number | null;
+  nextResetTime?: string | null;
+  usageDetails: ZcodeUsageDetail[];
+}
+
+export interface ZcodeSubscription {
+  productName: string | null;
+  billingCycle?: string | null;
+  nextRenewTime?: string | null;
+  expireTime?: string | null;
+  autoRenew: boolean;
+}
+
+export interface ZcodeQuotaData {
+  planLevel: string | null;
+  limits: ZcodeLimitEntry[];
+  subscription: ZcodeSubscription | null;
+  todayCalls: number;
+  todayInputTokens: number;
+  todayOutputTokens: number;
+  todayCacheReadTokens: number;
+  todayCacheWriteTokens: number;
+  todayTotalTokens: number;
+  todayCostCny: number;
+  totalCalls: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  totalTokens: number;
+  totalCostCny: number;
+  quotaError?: string | null;
+}
+
+export interface ZcodeQuotaStatus {
+  available: boolean;
+  data: ZcodeQuotaData | null;
   error: string | null;
 }
 

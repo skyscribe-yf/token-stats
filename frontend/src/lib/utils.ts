@@ -174,6 +174,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   dim: "#f97316", // orange-500 - Dim (dimcode)
   codebuddy: "#0ea5e9", // sky-500
   "dim-agent": "#14b8a6", // teal-500 (DimAgent via CodeBuddy workbuddy proxy)
+  "ollama-proxy": "#0891b2", // cyan-600 (DimAgent via CLIProxyAPI, per-request Ollama Cloud)
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -187,6 +188,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   "opencode-go": "#f97316", // orange-500
   opencode: "#fb923c",     // orange-400
   tokenrouter: "#a3e635",   // lime-400
+  bigmodel: "#3b82f6",      // blue-500 (Zhipu GLM coding plan via zcode)
   "xiaomi-mimo": "#ef4444", // red-500
   anthropic: "#6366f1",    // indigo-500
   openai: "#06b6d4",       // cyan-500
@@ -246,6 +248,11 @@ export const SOURCE_LABELS: Record<string, string> = {
   dim: "Dim",
   codebuddy: "CodeBuddy",
   "dim-agent": "Dim→CB",
+  // Source ids name the transport (which proxy wrote the record); the label is
+  // what the dashboard shows. This one is the shared CLIProxyAPI instance's
+  // Ollama Cloud upstream, reached by DimAgent — name the upstream, not the
+  // proxy binary, so it stays meaningful next to the other Dim rows.
+  "ollama-proxy": "Dim→Ollama",
 };
 
 export function getSourceColor(source: string): string {

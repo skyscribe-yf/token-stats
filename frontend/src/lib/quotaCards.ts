@@ -20,6 +20,7 @@ export const QUOTA_CARD_DEFS: QuotaCardDef[] = [
   { key: "meituan", label: "美团 LongCat", matches: (id) => id === "quota-meituan" },
   { key: "grok", label: "Super Grok", matches: (id) => id === "quota-grok" },
   { key: "dimagent", label: "DimAgent", matches: (id) => id === "quota-dimagent" },
+  { key: "zcode", label: "ZCode", matches: (id) => id === "quota-zcode" },
 ];
 
 export function isQuotaCardHidden(
@@ -29,4 +30,38 @@ export function isQuotaCardHidden(
   return QUOTA_CARD_DEFS.some(
     (d) => d.matches(cardId) && hiddenCards.has(d.key)
   );
+}
+
+/** Whether a configured quota card should be omitted when its fetch fails.
+ *  Cookie expiry / 401 must keep the card visible with an error — otherwise
+ *  a live subscription looks like it vanished. Only cards that are truly
+ *  unconfigured (no credentials at all) may hide. */
+export function hideUnavailableQuotaCard(
+  unconfigured?: boolean
+): boolean {
+  return unconfigured === true;
+}
+
+/** ZCode limit-window usage math.
+ *  Live-API semantics (verified 2026-09-12): `usage` is the window TOTAL,
+ *  `currentValue` is consumed, `remaining` is what's left, and `percentage`
+ *  is the used percent (currentValue/usage). Falls back to
+ *  currentValue+remaining when `usage` is missing. Returns null when the
+ *  window has no size at all. */
+export function zcodeWindowUsage(entry: {
+  usage?: number | null;
+  currentValue?: number | null;
+  remaining?: number | null;
+}): { used: number; limit: number; usedPct: number } | null {
+  const total =
+    entry.usage != null && entry.usage > 0
+      ? entry.usage
+      : (entry.currentValue ?? 0) + (entry.remaining ?? 0);
+  if (!(total > 0)) return null;
+  const used =
+    entry.currentValue != null
+      ? entry.currentValue
+      : Math.max(total - (entry.remaining ?? 0), 0);
+  const usedPct = Math.min(Math.max((used / total) * 100, 0), 100);
+  return { used, limit: total, usedPct };
 }
