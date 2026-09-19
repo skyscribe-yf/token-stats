@@ -66,7 +66,10 @@ fn read_auth_file(path: &std::path::Path) -> Option<CommandCodeAccount> {
 
 /// Read the primary account (`auth.json`) plus extra accounts
 /// (`auth*.json`, e.g. `auth_frank.json`). Env-specific files
-/// (`auth.local.json` / `auth.staging.json`) are skipped.
+/// (`auth.local.json` / `auth.staging.json`) are skipped, and files holding
+/// the same account as the primary (or as an earlier extra) are dropped —
+/// a stale copy such as `auth_fei.json` duplicating `auth.json` must not
+/// shadow the real second account.
 ///
 /// Results are cached for [`ACCOUNTS_CACHE_TTL`] keyed by the resolved
 /// `~/.commandcode` directory, so the per-poll calls (primary + EX) and
@@ -109,7 +112,7 @@ fn load_accounts_inner() -> (Option<CommandCodeAccount>, Vec<CommandCodeAccount>
     let dir = commandcode_dir();
     let primary = read_auth_file(&dir.join("auth.json"));
 
-    let mut extras = Vec::new();
+    let mut extras: Vec<CommandCodeAccount> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         let mut paths: Vec<std::path::PathBuf> = entries
             .flatten()
@@ -131,11 +134,28 @@ fn load_accounts_inner() -> (Option<CommandCodeAccount>, Vec<CommandCodeAccount>
         paths.sort();
         for path in paths {
             if let Some(account) = read_auth_file(&path) {
+                let duplicate = primary
+                    .as_ref()
+                    .is_some_and(|p| same_account(p, &account))
+                    || extras.iter().any(|e| same_account(e, &account));
+                if duplicate {
+                    info!(
+                        "CommandCode: ignoring {} — same account as an earlier auth file",
+                        path.display()
+                    );
+                    continue;
+                }
                 extras.push(account);
             }
         }
     }
     (primary, extras)
+}
+
+/// Whether two auth files describe the same platform account. `userId` is the
+/// identity; `apiKey` catches files that predate a user id being stored.
+fn same_account(a: &CommandCodeAccount, b: &CommandCodeAccount) -> bool {
+    a.api_key == b.api_key || (!a.user_id.is_empty() && a.user_id == b.user_id)
 }
 
 // ─── Auth helpers ────────────────────────────────────────────────────────────
@@ -312,8 +332,8 @@ pub async fn fetch_commandcode_quota(client: &Client) -> CommandCodeQuotaStatus 
     }
 }
 
-/// Fetch quota for the second account (first extra `auth*.json` file,
-/// e.g. `auth_frank.json`).
+/// Fetch quota for the second account (first extra `auth*.json` file that
+/// holds a different account than the primary, e.g. `auth_frank.json`).
 pub async fn fetch_commandcode_quota_ex(client: &Client) -> CommandCodeQuotaStatus {
     let (_primary, extras) = load_accounts();
     match extras.into_iter().next() {
@@ -656,6 +676,67 @@ mod tests {
             assert_eq!(extras.len(), 1, "only auth_frank.json should be extra");
             assert_eq!(extras[0].user_name, "bob");
             assert_eq!(extras[0].api_key, "key-second");
+        });
+    }
+
+    #[test]
+    fn skips_auth_file_duplicating_the_primary_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let cc_dir = dir.path().join(".commandcode");
+        std::fs::create_dir_all(&cc_dir).unwrap();
+        std::fs::write(
+            cc_dir.join("auth.json"),
+            r#"{"apiKey":"key-main","userId":"u1","userName":"alice"}"#,
+        )
+        .unwrap();
+        // Exact copy of the primary account: must not shadow the real second account.
+        std::fs::write(
+            cc_dir.join("auth_fei.json"),
+            r#"{"apiKey":"key-main","userId":"u1","userName":"alice"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            cc_dir.join("auth_frank.json"),
+            r#"{"apiKey":"key-second","userId":"u2","userName":"bob"}"#,
+        )
+        .unwrap();
+
+        temp_env::with_var("HOME", Some(dir.path().to_str().unwrap()), || {
+            let (primary, extras) = load_accounts();
+            assert_eq!(primary.expect("primary account").user_name, "alice");
+            assert_eq!(extras.len(), 1, "duplicate file must be skipped");
+            assert_eq!(extras[0].user_name, "bob");
+            assert_eq!(extras[0].api_key, "key-second");
+        });
+    }
+
+    #[test]
+    fn skips_duplicate_extras_even_without_primary() {
+        let dir = tempfile::tempdir().unwrap();
+        let cc_dir = dir.path().join(".commandcode");
+        std::fs::create_dir_all(&cc_dir).unwrap();
+        // No auth.json at all: dedupe still applies among the extras.
+        std::fs::write(
+            cc_dir.join("auth_a.json"),
+            r#"{"apiKey":"key-1","userId":"u1","userName":"alice"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            cc_dir.join("auth_b.json"),
+            r#"{"apiKey":"key-2","userId":"u1","userName":"alice"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            cc_dir.join("auth_c.json"),
+            r#"{"apiKey":"key-3","userId":"u2","userName":"bob"}"#,
+        )
+        .unwrap();
+
+        temp_env::with_var("HOME", Some(dir.path().to_str().unwrap()), || {
+            let (primary, extras) = load_accounts();
+            assert!(primary.is_none());
+            let names: Vec<&str> = extras.iter().map(|e| e.user_name.as_str()).collect();
+            assert_eq!(names, vec!["alice", "bob"]);
         });
     }
 

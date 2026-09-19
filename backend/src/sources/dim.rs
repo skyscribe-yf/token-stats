@@ -182,12 +182,11 @@ struct DimPollState {
     /// Session-scoped: used by the migration to decide whether the records
     /// just loaded cover the whole remote history.
     last_sync_complete: bool,
-    /// Whether a full-history backfill has ever completed in this store.
-    /// Persisted alongside the watermark: the legacy-row migration needs a
-    /// *complete* history read (incremental polls only ever see page 1, so
-    /// they cannot prove the historic per-run rows are superseded).
-    /// TODO(WIP): 待接线 — 当前无读取方（编译期 -D warnings 防死代码）。
-    #[allow(dead_code)]
+    /// Whether a full-history backfill has ever completed in this process.
+    /// Set only by a sync that started with no persisted watermark (and thus
+    /// covered the *whole* remote history — incremental polls only see page
+    /// 1, so they cannot prove the historic per-run rows are superseded).
+    /// Gates the startup legacy-row purge.
     backfill_done: bool,
 }
 
@@ -217,14 +216,16 @@ impl DataSource for DimSource {
     /// install, or a store predating the watermark table — pays a single
     /// full backfill and records it.
     fn load(&self) -> Vec<TokenRecord> {
-        let (items, complete) = match Self::sync(Self::resume_watermark()) {
+        let watermark = Self::resume_watermark();
+        let from_scratch = watermark.is_none();
+        let (items, complete) = match Self::sync(watermark) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("DimAgent API sync failed: {e}");
                 return Vec::new();
             }
         };
-        let mut records = Self::commit(items, complete);
+        let mut records = Self::finish_sync(items, complete, from_scratch);
         records.extend(Self::load_local_supplement());
         records
     }
@@ -240,7 +241,7 @@ impl DataSource for DimSource {
                 return Vec::new();
             }
         };
-        let mut records = Self::commit(items, complete);
+        let mut records = Self::finish_sync(items, complete, false);
         records.extend(Self::load_local_supplement());
         records
     }
@@ -251,19 +252,10 @@ impl DataSource for DimSource {
 }
 
 impl DimSource {
-    /// Whether the most recent console-API sync completed successfully (no
-    /// page fetch failed / no safety-cap stop). Used by the startup migration
-    /// to decide it is safe to drop the legacy per-run rows.
-    pub fn last_sync_completed() -> bool {
-        POLL_STATE.lock().unwrap().last_sync_complete
-    }
-
     /// Whether a complete backfill covering the *whole* remote history has
-    /// ever finished against this token store. Only then do the stored dim
-    /// rows demonstrably supersede the legacy per-run rows, which the
+    /// finished in this process. Only then do the freshly loaded dim records
+    /// demonstrably supersede the legacy per-run rows, which the
     /// fingerprint-guarded purge relies on.
-    /// TODO(WIP): 待接线 — 当前无调用方（编译期 -D warnings 防死代码）。
-    #[allow(dead_code)]
     pub fn full_backfill_done() -> bool {
         POLL_STATE.lock().unwrap().backfill_done
     }
@@ -480,9 +472,9 @@ impl DimSource {
         }
     }
 
-    /// Convert fetched items to records and advance the watermark when the
-    /// sync completed. Items with zero total tokens (e.g. failed calls) are
-    /// dropped, matching the dashboard's zero-token convention.
+    /// Convert fetched items to records and advance the in-process watermark
+    /// when the sync completed. Items with zero total tokens (e.g. failed
+    /// calls) are dropped, matching the dashboard's zero-token convention.
     fn commit(items: Vec<LogItem>, complete: bool) -> Vec<TokenRecord> {
         let records: Vec<TokenRecord> = items.iter().filter_map(item_to_record).collect();
         {
@@ -500,6 +492,31 @@ impl DimSource {
                 records.len(),
                 if complete { "" } else { " (partial sync)" }
             );
+        }
+        records
+    }
+
+    /// Convert fetched items to records, advance the watermark to the store
+    /// when the sync completed, and mark full-history backfills.
+    ///
+    /// The persisted watermark lets the next cold start resume from it
+    /// instead of re-walking the entire remote history (~279 pages, ~90s).
+    /// `from_scratch` marks a sync that started with no watermark at all and
+    /// therefore covered the *whole* remote history — only such a sync may
+    /// arm the legacy per-run row purge (`full_backfill_done`), because a
+    /// watermark-resumed sync only sees records newer than the watermark and
+    /// its fingerprint set must never be treated as "the whole history".
+    fn finish_sync(items: Vec<LogItem>, complete: bool, from_scratch: bool) -> Vec<TokenRecord> {
+        let records = Self::commit(items, complete);
+        if complete {
+            let last_seen = POLL_STATE.lock().unwrap().last_seen_id;
+            if let Some(id) = last_seen {
+                crate::store::TokenStore::open_default()
+                    .set_sync_watermark(WATERMARK_KEY, id);
+            }
+            if from_scratch {
+                POLL_STATE.lock().unwrap().backfill_done = true;
+            }
         }
         records
     }

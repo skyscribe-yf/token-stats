@@ -183,6 +183,7 @@ pub struct QuotaResponse {
     pub grok: Option<GrokQuotaStatus>,
     pub dimagent: Option<DimAgentQuotaStatus>,
     pub zcode: Option<ZcodeQuotaStatus>,
+    pub zai: Option<ZaiQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -361,6 +362,81 @@ pub struct CodeBuddyQuotaData {
 pub struct CodeBuddyQuotaStatus {
     pub available: bool,
     pub data: Option<CodeBuddyQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── ZAI (api.zairouter.com) types ───────────────────────────────────────────
+
+/// One top-up card ("到账卡") on the ZAI account. ZAI grants USD face value
+/// 1:1 with the RMB paid, so `amount`/`balance` are USD-denominated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZaiCreditCard {
+    pub amount: f64,
+    pub balance: f64,
+    pub reference: String,
+    pub granted_at: String,
+    pub expires_at: String,
+}
+
+/// Per-model usage for one window returned by `dashboard/live`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZaiModelUsage {
+    pub model: String,
+    pub requests: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    /// Credit (USD face value) charged for this model in the window.
+    pub credit_used: f64,
+}
+
+/// ZAI (ZAI Router) account balance and usage.
+///
+/// ZAI settles in USD credit bought 1:1 with RMB: the top-up order records
+/// `amount` (分) and `credit_amount` (美元额度) as the same number, e.g.
+/// ¥100 → 100.0. The dashboard therefore presents the balance in RMB
+/// (`= credit`), matching what the platform console shows the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZaiQuotaData {
+    pub user_id: i64,
+    pub name: String,
+    pub alias: String,
+    pub email: String,
+    /// Remaining balance (RMB == USD credit, 1:1).
+    pub balance: f64,
+    /// Sum of all active top-up cards' granted amounts.
+    pub credit_total: f64,
+    /// Lifetime credit consumed.
+    pub credit_used: f64,
+    /// Earliest card expiry.
+    pub expires_at: String,
+    pub cards: Vec<ZaiCreditCard>,
+    pub total_requests: i64,
+    pub suspended: bool,
+    /// Today's usage (platform-local day).
+    pub daily_used: f64,
+    pub daily_requests: i64,
+    pub daily_input_tokens: i64,
+    pub daily_output_tokens: i64,
+    pub daily_cache_read_tokens: i64,
+    pub daily_cache_write_tokens: i64,
+    pub daily_models: Vec<ZaiModelUsage>,
+    /// Current calendar month's usage.
+    pub monthly_used: f64,
+    pub monthly_requests: i64,
+    pub monthly_input_tokens: i64,
+    pub monthly_output_tokens: i64,
+    pub monthly_cache_read_tokens: i64,
+    pub monthly_cache_write_tokens: i64,
+    pub monthly_models: Vec<ZaiModelUsage>,
+}
+
+/// ZAI quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZaiQuotaStatus {
+    pub available: bool,
+    pub data: Option<ZaiQuotaData>,
     pub error: Option<String>,
 }
 
@@ -654,9 +730,30 @@ pub struct ZcodeQuotaData {
     pub total_cache_write_tokens: i64,
     pub total_tokens: i64,
     pub total_cost_cny: f64,
+    /// Weekend Build 体验套餐 (trial grant) usage, accounted locally from
+    /// `provider='bigmodel-start'` records. The BigModel monitor API rejects
+    /// the start-plan key (401, verified 2026-09-13), so there is no remote
+    /// half; the grant total comes from `ZCODE_START_PLAN_TOTAL_TOKENS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_plan: Option<ZcodeStartPlanUsage>,
     /// Set when the remote quota fetch failed but local usage is still shown.
     #[serde(default)]
     pub quota_error: Option<String>,
+}
+
+/// Local accounting for the ZCode Weekend Build trial grant
+/// (体验套餐, provider=`bigmodel-start`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZcodeStartPlanUsage {
+    /// Grant size in tokens (default 3 亿, env-overridable).
+    pub grant_tokens: i64,
+    /// Tokens consumed so far (sum of total_tokens, cache included).
+    pub used_tokens: i64,
+    /// grant_tokens - used_tokens, floored at 0.
+    pub remaining_tokens: i64,
+    /// Requests billed against the grant.
+    pub calls: i64,
 }
 
 /// ZCode quota status for the dashboard.

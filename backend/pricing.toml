@@ -18,8 +18,17 @@ rate = 6.7894
 # 讯飞订阅：199 元 / 90000 次调用
 xunfei_per_call = 0.002211111111
 
-# CodeBuddy：国内版连续包月活动价 70 元 / 4000 credits（0.0175 元/credit，直接人民币计价，不经过汇率）
+# CodeBuddy：国内版连续包月活动价 70 元 / 4000 credits（0.0175 元/credit，直接人民币计价，不经过汇率）。
+# 这是历史基准价：早于下面所有分段的记录沿用该值。
 codebuddy_cny_per_credit = 0.0175
+
+# 套餐升级分段：2026-09-14 13:00 CST 起升级为 140 元 / 9000 credits，
+# 每 credit 摊销价 140 / 9000 ≈ 0.0155556 元（比原 0.0175 低约 11%）。
+# 语义与 opencode_model_segments 一致：取最近一个已生效的 effective_from；
+# 早于首个分段的记录仍按上面的基准价计费。
+codebuddy_credit_segments = [
+    { effective_from = "2026-09-14T13:00:00+08:00", cny_per_credit = 0.015555555555555556 },
+]
 
 # Kimi legacy flat rate (kept only for compatibility; no longer used)
 kimi_per_token = 0.000000071071429
@@ -110,7 +119,9 @@ grok_divisor = 264.7866
 #   积分 =（输入 × Input系数 + 缓存命中 × Cached系数 + 输出 × Output系数）/ 10000
 #   GLM-5.3-Flash: 2.3 / 0.56 / 8；GLM-5.3: 6.9 / 1.7 / 24
 # 高峰时段（周一至周五 14:00–18:00 CST）按 1× 消耗，其余时段按 50% 抵扣；
-# 夜间畅用活动（2026-09-03 ~ 09-20，每日 23:00–09:00 CST，ZCode 端）消耗为 0。
+# 夜间畅用活动（2026-09-03 ~ 09-20，每日 23:00–09:00 CST，ZCode 端）消耗为 0，
+# 且仅限 Flash（官方活动为 GLM-5.3-Flash × ZCode 专属，zcode_night_free_models）；
+# GLM-5.3 夜间不在活动范围，照常按高峰/波谷因子扣积分。
 # 注意：活动自 2026-09-13 06:15 CST 起才实际生效——此前用的旧版 ZCode 客户端
 # 不享受免扣，服务端照常扣积分，该时刻之前落在窗口内的记录按正常波谷 0.5× 计费
 # （zcode_night_free_effective_from）。
@@ -126,9 +137,101 @@ zcode_credit_rates = { "glm-5.3-flash" = [2.3, 0.56, 8.0], "glm-5.3" = [6.9, 1.7
 zcode_peak_hours_cst = [[14, 18]]
 zcode_off_peak_factor = 0.5
 zcode_night_free_hours_cst = [[23, 24], [0, 9]]
+zcode_night_free_models = ["glm-5.3-flash"]
 zcode_night_free_from = "2026-09-03"
 zcode_night_free_until = "2026-09-20"
 zcode_night_free_effective_from = "2026-09-13T06:15:00+08:00"
+
+# ── ZAI (api.zairouter.com) 计费 ───────────────────────────────────────────
+# ZAI 是 Claude Code 的中转站：充值人民币、按 **1 元 = 1 美元额度** 到账
+# （订单实测：amount=10000 分 → credit_amount 100.0）。
+#
+# 它**不公布价目表**，且实收费率不是官方价的统一倍数 —— 例如 claude-fable-5-1
+# 输入按官方 2.5× 而输出按 2×，缓存命中/ 缓存写又各有折扣。因此下面直接登记
+# **平台实收费率**（USD / 1M），而不是官方价 + 倍率。
+#
+# 数据来源：把平台账本（`dashboard/live` 的 credit_used 增量与逐模型日账）与
+# 请求 usage 对齐后反推（2026-09-15，受控探针覆盖各 token 规模；并用当天 108 条
+# 真实 claude-fable-5-1 记录交叉验证：按此表回算与平台记账逐条吻合）。
+# 已确认无长上下文分档（273K 输入仍为同一费率）与峰谷差异。
+#
+# 注：claude-haiku-4-5 在该订阅下不可用（平台返回 "The long context beta is not
+# yet available for this subscription"），故未登记。
+#
+# 成本 = 实收费率 × zai_rate_cny_per_usd。
+zai_rate_cny_per_usd = 1.0
+
+# ── Qoder（qodercli / Qoder Desktop）计费 ──────────────────────────────────
+# 当前套餐**免费**：模型目录里每个模型都是 `isFree: true` + `priceFactor: 0`，
+# 因此 provider=qoder 的记录成本恒为 ¥0（而不是「无价目 → N/A」）。
+# 套餐转为付费后把本开关关掉，并改用 [[model]] 登记真实价目。
+qoder_free = true
+
+# claude-fable-5-1 / claude-mythos-5-1（官方 10/50/0.25/12.5）
+[[zai_model]]
+name = "claude-fable-5-1"
+input = 25.00
+output = 100.00
+cache_read = 0.63
+cache_write = 50.00
+
+[[zai_model]]
+name = "claude-mythos-5-1"
+input = 25.00
+output = 100.00
+cache_read = 0.63
+cache_write = 50.00
+
+# claude-opus-5 / 4-8 / 4-7 / 4-6（官方 5/25/0.5/6.25，实收 5/25/0.5/10）
+[[zai_model]]
+name = "claude-opus-5"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 10.00
+
+[[zai_model]]
+name = "claude-opus-4-8"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 10.00
+
+[[zai_model]]
+name = "claude-opus-4-7"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 10.00
+
+[[zai_model]]
+name = "claude-opus-4-6"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 10.00
+
+# claude-sonnet-5 / 4-6 / 4-5（官方 3/15/0.3/3.75，实收 3/15/0.3/6）
+[[zai_model]]
+name = "claude-sonnet-5"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 6.00
+
+[[zai_model]]
+name = "claude-sonnet-4-6"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 6.00
+
+[[zai_model]]
+name = "claude-sonnet-4-5-20250929"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 6.00
 
 # ── 讯飞波谷计费配置（2026年6月18日上线） ──────────────────────────────
 # 分时段差异化计量，错峰使用即可享受优惠费率：
@@ -371,6 +474,75 @@ input = 1.00
 output = 5.00
 cache_read = 0.10
 cache_write = 1.25
+
+# ── Claude 新模型官方标价（USD / 1M）────────────────────────────────────────
+# 这些官方价同时供 ZAI 使用：ZAI 按官方价 × 逐模型倍率扣美元额度
+# （见 [special] 的 zai_model_multipliers）。ZAI 的缓存写走 1h 档
+# （= 官方 5m 档 ×2），在倍率表里用 zai_cache_write_multipliers 表达。
+# 注意 cache_write 一律填官方 5m 档（= input × 1.25）。
+[[model]]
+name = "claude-fable-5-1"
+input = 10.00
+output = 50.00
+cache_read = 0.25
+cache_write = 12.50
+
+[[model]]
+name = "claude-mythos-5-1"
+input = 10.00
+output = 50.00
+cache_read = 0.25
+cache_write = 12.50
+
+# Fable 5 / Mythos 5 的缓存命中官方为 $1.00（5.1 才降到 $0.25）。
+[[model]]
+name = "claude-fable-5"
+input = 10.00
+output = 50.00
+cache_read = 1.00
+cache_write = 12.50
+
+[[model]]
+name = "claude-mythos-5"
+input = 10.00
+output = 50.00
+cache_read = 1.00
+cache_write = 12.50
+
+[[model]]
+name = "claude-opus-5"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "claude-opus-4-8"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "claude-opus-4-6"
+input = 5.00
+output = 25.00
+cache_read = 0.50
+cache_write = 6.25
+
+[[model]]
+name = "claude-sonnet-5"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 3.75
+
+[[model]]
+name = "claude-sonnet-4-5-20250929"
+input = 3.00
+output = 15.00
+cache_read = 0.30
+cache_write = 3.75
 
 # Yairouter Grok 4.5: effective USD/M values that reproduce the observed
 # CNY credit deduction with usd_to_cny = 6.7894. The rate doubles once total

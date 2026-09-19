@@ -88,7 +88,7 @@ cd backend && ./target/release/token-stats-backend
 | OpenCode | `~/.local/share/opencode/opencode.db` |
 | Kimi CLI | `~/.kimi/sessions/*/wire.jsonl` |
 | Kimi Code | `~/.kimi-code*/sessions/*/*/agents/*/wire.jsonl` |
-| Qoder / Qoder CN | `~/.qoder/projects/*/*.jsonl` / `~/.qoder-cn/logs/sessions/` |
+| Qoder CLI / Qoder Desktop | `~/.qoder/logs/sessions/*/segments/*.jsonl` / `~/.qoder-cn/logs/sessions/*/segments/*.jsonl` |
 | Grok CLI | `~/.token-stats/grok-usage.jsonl`（代理写入） |
 | Command Code | `~/.commandcode/projects/<slug>/<session-id>.jsonl` |
 | cc-proxy（Dim→CC） | `~/.token-stats/cc-proxy-usage.jsonl`（代理写入） |

@@ -906,6 +906,41 @@ export default function App() {
       }
     }
 
+    // ZAI: the platform suspends the account outright once the balance goes
+    // negative, so warn a bit earlier than the generic 20% rule.
+    if (quota?.zai?.available && quota.zai.data) {
+      const za = quota.zai.data;
+      if (za.suspended || za.balance <= 0) {
+        alerts.push({
+          id: "zai_suspended",
+          provider: "ZAI",
+          type: "quota_low",
+          message: "ZAI 账号已暂停",
+          detail:
+            za.balance <= 0
+              ? `余额 ¥${za.balance.toFixed(2)}，请充值后恢复`
+              : "平台已暂停访问，请检查套餐与账单",
+        });
+      } else if (za.credit_total > 0 && za.balance / za.credit_total <= 0.2) {
+        alerts.push({
+          id: "zai_quota_low",
+          provider: "ZAI",
+          type: "quota_low",
+          message: "ZAI 余额不足",
+          detail: `剩余 ¥${za.balance.toFixed(2)}（${((za.balance / za.credit_total) * 100).toFixed(0)}%），建议充值`,
+        });
+      }
+      if (za.expires_at && isWithin24Hours(za.expires_at)) {
+        alerts.push({
+          id: "zai_expiring",
+          provider: "ZAI",
+          type: "expiring_soon",
+          message: "ZAI 额度即将到期",
+          detail: `到期日: ${za.expires_at.slice(0, 10)}`,
+        });
+      }
+    }
+
     if (quota?.commandcode?.available && quota.commandcode.data) {
       const cc = quota.commandcode.data;
       const ccRatio = cc.monthly_credits_total != null && cc.monthly_credits_total > 0

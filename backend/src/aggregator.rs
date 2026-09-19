@@ -76,6 +76,13 @@ pub struct FilterCriteria<'a> {
     pub exclude_zero_tokens: bool,
 }
 
+/// Whether a record belongs in the aggregates: zero-token records normally mark
+/// failed requests (429 etc.), except for sources whose gateway never reports
+/// usage — those calls are real and must still be counted.
+fn counts_in_stats(record: &TokenRecord) -> bool {
+    !record.is_zero_token() || record.counts_as_call_without_tokens()
+}
+
 pub fn aggregate_records(
     records: &[TokenRecord],
     filters: &FilterCriteria,
@@ -95,7 +102,7 @@ pub fn aggregate_records(
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
-        .filter(|r| !r.is_zero_token()) // stats always exclude 0-token records
+        .filter(|r| counts_in_stats(r)) // 0-token records only count when they're real calls
         .collect();
 
     let overall = compute_overall_stats(&filtered, ps);
@@ -132,7 +139,7 @@ pub fn filter_records<'a>(
                 && (providers.is_empty() || providers.contains(&r.provider.as_str()))
                 && (models.is_empty() || models.contains(&r.model.as_str()))
                 && (sources.is_empty() || sources.contains(&r.source.as_str()))
-                && (!filters.exclude_zero_tokens || !r.is_zero_token());
+                && (!filters.exclude_zero_tokens || counts_in_stats(r));
             matches.then_some((parsed, r))
         })
         .collect();
@@ -171,7 +178,7 @@ pub fn filter_records_unsorted<'a>(
                 && (providers.is_empty() || providers.contains(&r.provider.as_str()))
                 && (models.is_empty() || models.contains(&r.model.as_str()))
                 && (sources.is_empty() || sources.contains(&r.source.as_str()))
-                && (!filters.exclude_zero_tokens || !r.is_zero_token())
+                && (!filters.exclude_zero_tokens || counts_in_stats(r))
         })
         .collect()
 }
@@ -828,7 +835,7 @@ pub fn compute_rpm_analysis(
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
-        .filter(|r| !r.is_zero_token()) // RPM analysis excludes 0-token records
+        .filter(|r| counts_in_stats(r)) // RPM analysis counts real calls, token usage or not
         .collect();
 
     // 1. Count requests per minute using integer minute indices to avoid

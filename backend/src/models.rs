@@ -78,6 +78,14 @@ impl TokenRecord {
             && self.cache_write_tokens == 0
     }
 
+    /// Zero-token records normally mean a failed request (429 etc.) and are
+    /// filtered out. Qoder Desktop is the exception: its gateway never returns
+    /// usage to the client, so every request logs zeros while still being a
+    /// real call. Keep those so call counts stay visible.
+    pub fn counts_as_call_without_tokens(&self) -> bool {
+        self.source == "qoder-desktop"
+    }
+
     pub fn parsed_date(&self) -> Option<NaiveDate> {
         NaiveDate::parse_from_str(&self.date, "%Y-%m-%d").ok()
     }

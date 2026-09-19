@@ -44,6 +44,23 @@ pub struct OpencodeModelSegment {
     pub divisor: f64,
 }
 
+/// Time-based CodeBuddy credit price (CNY per credit).
+///
+/// Plan upgrades change the amortized price of a credit (e.g. ¥70 / 4000
+/// credits → ¥140 / 9000 credits on 2026-09-14). Records before the first
+/// segment keep [`SpecialPricing::codebuddy_cny_per_credit`] (the historical
+/// rate); when several segments qualify, the latest `effective_from` wins
+/// (same rule as model prices / OpenCode segments).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodebuddyCreditSegment {
+    /// Inclusive start: RFC3339 with offset, or `"YYYY-MM-DD"` = 00:00 UTC+8.
+    /// `None` = baseline override applying to all records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_from: Option<String>,
+    /// CNY per credit from `effective_from` onwards.
+    pub cny_per_credit: f64,
+}
+
 /// Kimi API list price in CNY per 1M tokens. Subscription estimates apply a
 /// user-selected multiplier to this raw API equivalent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,8 +102,15 @@ fn default_kimi_api_models() -> Vec<KimiApiModelPrice> {
 pub struct SpecialPricing {
     pub xunfei_per_call: f64,
     /// CodeBuddy credits are priced at ¥70 per 4000 credits (CNY, no FX).
+    /// Baseline for records that precede every `codebuddy_credit_segments`
+    /// entry (kept at the historical plan price).
     #[serde(default = "default_codebuddy_cny_per_credit")]
     pub codebuddy_cny_per_credit: f64,
+    /// Plan-upgrade segments for the CodeBuddy credit → CNY rate, e.g.
+    /// `{ effective_from = "2026-09-14T13:00:00+08:00", cny_per_credit = 140.0 / 9000.0 }`.
+    /// Empty = always use the flat `codebuddy_cny_per_credit`.
+    #[serde(default)]
+    pub codebuddy_credit_segments: Vec<CodebuddyCreditSegment>,
     /// Legacy flat Kimi rate, retained solely to parse existing pricing files.
     #[serde(default)]
     pub kimi_per_token: f64,
@@ -193,8 +217,31 @@ pub struct SpecialPricing {
     /// 全程有效。
     #[serde(default)]
     pub zcode_night_free_effective_from: Option<String>,
+    /// 夜间畅用适用的模型白名单（lowercase）。官方活动为 GLM-5.3-Flash 专属，
+    /// GLM-5.3 夜间照常按高峰/波谷因子扣积分。缺省 = ["glm-5.3-flash"]。
+    #[serde(default = "default_zcode_night_free_models")]
+    pub zcode_night_free_models: Vec<String>,
+    /// ZAI (api.zairouter.com) 充值汇率：¥1 = 1 美元额度（订单实测
+    /// amount=10000 分 → credit_amount=100.0）。实际成本 = 平台实收美元费率 ×
+    /// 本汇率。本机为 1.0；换套餐/换汇率时改这里。
+    #[serde(default = "default_zai_rate_cny_per_usd")]
+    pub zai_rate_cny_per_usd: f64,
+    /// Qoder（qodercli / Qoder Desktop）当前套餐完全免费：模型目录里
+    /// `isFree: true`、`priceFactor: 0`，账单不扣额度。为 true 时
+    /// provider=qoder 的记录成本恒为 ¥0，而不是落到「无价目条目 → N/A」。
+    /// 套餐转付费后请关掉本项并登记 `[[model]]` 价目。
+    #[serde(default)]
+    pub qoder_free: bool,
 }
 
+fn default_zai_rate_cny_per_usd() -> f64 {
+    1.0
+}
+
+/// Baseline credit price: ¥70 / 4000 credits（国内版连续包月活动价）。
+/// Serves as the fallback for records that predate every
+/// `codebuddy_credit_segments` entry — the 2026-09-14 升级套餐
+/// (¥140 / 9000 credits) is expressed as a segment, not by moving this value.
 fn default_codebuddy_cny_per_credit() -> f64 {
     70.0 / 4000.0
 }
@@ -239,6 +286,10 @@ fn default_zcode_off_peak_factor() -> f64 {
 
 fn default_zcode_night_free_hours() -> Vec<[u32; 2]> {
     vec![[23, 24], [0, 9]]
+}
+
+fn default_zcode_night_free_models() -> Vec<String> {
+    vec!["glm-5.3-flash".to_string()]
 }
 
 /// Xunfei off-peak (波谷) pricing configuration.
@@ -392,6 +443,14 @@ pub struct PricingConfig {
     /// (CST 09:00–12:00 / 14:00–18:00) double pricing.
     #[serde(default)]
     pub dim_model: Vec<ModelPriceConfig>,
+    /// ZAI (api.zairouter.com) **billed** model rates (USD / 1M). ZAI publishes
+    /// no price list and its charge is not a uniform multiple of the official
+    /// Anthropic price, so the absolute billed rates live here — reverse
+    /// engineered from the platform's own `credit_used` ledger. Only records
+    /// with provider == "zai" use this table; models absent from it fall back
+    /// to the official `[[model]]` price.
+    #[serde(default)]
+    pub zai_model: Vec<ModelPriceConfig>,
 }
 
 impl Default for PricingConfig {
@@ -403,6 +462,7 @@ impl Default for PricingConfig {
             special: SpecialPricing {
                 xunfei_per_call: 199.0 / 90_000.0,
                 codebuddy_cny_per_credit: default_codebuddy_cny_per_credit(),
+                codebuddy_credit_segments: Vec::new(),
                 kimi_per_token: 199.0 / 2_800_000_000.0,
                 kimi_subscription_multiplier: default_kimi_subscription_multiplier(),
                 kimi_api_models: default_kimi_api_models(),
@@ -432,10 +492,14 @@ impl Default for PricingConfig {
                 zcode_night_free_from: None,
                 zcode_night_free_until: None,
                 zcode_night_free_effective_from: None,
+                zcode_night_free_models: default_zcode_night_free_models(),
+                zai_rate_cny_per_usd: default_zai_rate_cny_per_usd(),
+                qoder_free: false,
             },
             model: Vec::new(),
             yairouter_model: Vec::new(),
             dim_model: Vec::new(),
+            zai_model: Vec::new(),
         }
     }
 }
@@ -452,6 +516,10 @@ impl PricingConfig {
 
     fn build_dim_model_map(&self) -> HashMap<String, ModelPrice> {
         Self::build_model_map_for(&self.dim_model)
+    }
+
+    fn build_zai_model_map(&self) -> HashMap<String, ModelPrice> {
+        Self::build_model_map_for(&self.zai_model)
     }
 
     fn build_model_map_for(models: &[ModelPriceConfig]) -> HashMap<String, ModelPrice> {
@@ -901,6 +969,7 @@ pub(crate) struct PricingState {
     model_map: HashMap<String, ModelPrice>,
     yairouter_model_map: HashMap<String, ModelPrice>,
     dim_model_map: HashMap<String, ModelPrice>,
+    zai_model_map: HashMap<String, ModelPrice>,
     kimi_api_model_map: HashMap<String, KimiApiModelPrice>,
     rate_schedule: RateSchedule,
 }
@@ -910,6 +979,7 @@ impl PricingState {
         let model_map = config.build_model_map();
         let yairouter_model_map = config.build_yairouter_model_map();
         let dim_model_map = config.build_dim_model_map();
+        let zai_model_map = config.build_zai_model_map();
         let kimi_api_model_map = config
             .special
             .kimi_api_models
@@ -923,6 +993,7 @@ impl PricingState {
             model_map,
             yairouter_model_map,
             dim_model_map,
+            zai_model_map,
             kimi_api_model_map,
             rate_schedule,
         }
@@ -932,6 +1003,7 @@ impl PricingState {
         self.model_map = config.build_model_map();
         self.yairouter_model_map = config.build_yairouter_model_map();
         self.dim_model_map = config.build_dim_model_map();
+        self.zai_model_map = config.build_zai_model_map();
         self.kimi_api_model_map = config
             .special
             .kimi_api_models
@@ -1361,6 +1433,87 @@ fn is_xunfei_off_peak(record: &TokenRecord, config: &XunfeiOffPeakConfig) -> boo
 
 // ── Cost calculation ─────────────────────────────────────────────────────────
 
+/// Whether this record was billed by ZAI (ZAI Router, `api.zairouter.com`).
+///
+/// ZAI is a Chinese relay for Claude Code: you top up RMB and get USD face
+/// value 1:1 (order probe: ¥100 → credit_amount 100.0), but each model is
+/// charged at a multiple of the official Anthropic list price. Measured
+/// 2026-09-15 against the platform's own `credit_used` ledger:
+///
+/// | model                              | in | out | cache_read | cache_write | vs official |
+/// |------------------------------------|----|-----|------------|-------------|-------------|
+/// | claude-fable-5-1 / mythos-5-1      | 25 | 100 |    0.63    |     50      |  ×2.5 (cw ×4) |
+/// | claude-fable-5 / mythos-5          | 25 | 100 |    0.078   |     50      |  ×2.5 (cw ×4) |
+/// | claude-opus-5 / 4-8 / 4-7 / 4-6    |  5 |  25 |    0.50    |     10      |  1× (cw = 1h tier) |
+/// | claude-sonnet-5 / 4-6 / 4-5        |  3 |  15 |    0.30    |      6      |  1× (cw = 1h tier) |
+///
+/// `claude-haiku-4-5` is not usable on this subscription (the platform
+/// rejects it with "The long context beta is not yet available").
+///
+/// The multipliers live in `pricing.toml` (`zai_model_multipliers`) so the
+/// table can be corrected without a rebuild.
+fn is_zai_billed(record: &TokenRecord) -> bool {
+    let effective = record
+        .original_provider
+        .as_deref()
+        .unwrap_or(&record.provider);
+    record.provider == "zai" || effective == "zai"
+}
+
+/// Cost of a ZAI record in CNY.
+///
+/// ZAI publishes no public price list, so `pricing.toml` carries the platform's
+/// actual **billed** rates per model (USD / 1M) in `[[zai_model]]`, reverse
+/// engineered from the platform's own `credit_used` ledger. Rates are not a
+/// uniform multiple of the official Anthropic price: Fable 5.1 bills input at
+/// 2.5× official but output at 2×, and its cache terms differ again — so the
+/// absolute rates are stored rather than a multiplier.
+///
+/// Models without a `[[zai_model]]` entry fall back to the official list price
+/// (`[[model]]`), which under-bills but keeps the card useful for a model the
+/// table hasn't been calibrated for yet.
+///
+/// Model names are matched with any `vendor/` prefix stripped, because the
+/// platform's own mapper accepts both `claude-fable-5-1` and
+/// `anthropic/claude-fable`.
+fn compute_zai_cost(state: &PricingState, record: &TokenRecord) -> Option<f64> {
+    let special = &state.config.special;
+
+    let bare = record
+        .model
+        .rsplit_once('/')
+        .map(|(_, m)| m)
+        .unwrap_or(&record.model)
+        .to_lowercase();
+
+    let usd = if let Some(billed) = state.zai_model_map.get(&bare) {
+        // Calibrated billed rates: flat, no long-context tier and no peak
+        // windows (verified up to 273K input tokens).
+        billed.compute_usd(
+            record.input_tokens,
+            record.output_tokens,
+            record.cache_read_tokens,
+            record.cache_write_tokens,
+            &record.time,
+        )
+    } else {
+        let normalized = TokenRecord {
+            model: bare.clone(),
+            ..record.clone()
+        };
+        resolve_model_price(state, &normalized)?
+            .compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+            )
+    };
+
+    Some(usd * special.zai_rate_cny_per_usd)
+}
+
 /// Yairouter / Ainaba billed providers share the same settlement:
 /// official USD list price × fixed platform rate / subscription divisor.
 fn is_yairouter_billed(record: &TokenRecord) -> bool {
@@ -1379,6 +1532,43 @@ fn is_yairouter_billed(record: &TokenRecord) -> bool {
 /// Model-scoped segments override [`SpecialPricing::opencode_divisor`] when
 /// the model name contains a listed substring and the record time is on or
 /// after that segment's `effective_from`. The latest qualifying segment wins.
+/// Select the CodeBuddy credit → CNY rate for a record.
+///
+/// `codebuddy_credit_segments` (plan upgrades) take precedence; records older
+/// than every segment keep the flat `codebuddy_cny_per_credit` baseline, which
+/// stays at the historical plan price (¥70 / 4000 credits).
+fn codebuddy_cny_per_credit_for(special: &SpecialPricing, record_time: &str) -> f64 {
+    if special.codebuddy_credit_segments.is_empty() {
+        return special.codebuddy_cny_per_credit;
+    }
+
+    let record_dt = DateTime::parse_from_rfc3339(record_time).ok();
+    let mut chosen: Option<(i64, f64)> = None;
+
+    for segment in &special.codebuddy_credit_segments {
+        let effective_from = segment
+            .effective_from
+            .as_deref()
+            .and_then(parse_rate_effective_from);
+        let qualifies = match (effective_from, record_dt) {
+            (None, _) => true,
+            (Some(from), Some(rt)) => rt >= from,
+            (Some(_), None) => false,
+        };
+        if !qualifies {
+            continue;
+        }
+        let ts = effective_from.map(|dt| dt.timestamp()).unwrap_or(i64::MIN);
+        if chosen.is_none_or(|(prev, _)| ts >= prev) {
+            chosen = Some((ts, segment.cny_per_credit));
+        }
+    }
+
+    chosen
+        .map(|(_, rate)| rate)
+        .unwrap_or(special.codebuddy_cny_per_credit)
+}
+
 fn get_opencode_divisor(special: &SpecialPricing, model: &str, record_time: &str) -> f64 {
     if special.opencode_model_segments.is_empty() {
         return special.opencode_divisor;
@@ -1466,7 +1656,9 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
 ///   credits = (input×6.9 + cache_read×1.7 + output×24) / 10000  (GLM-5.3)
 /// Peak hours (Mon–Fri 14:00–18:00 UTC+8) consume 1×; all other times 0.5×.
 /// During the Flash×ZCode night promo (2026-09-03..09-20, 23:00–09:00 CST,
-/// ZCode client) credits are 0 — but only from
+/// ZCode client) credits are 0 — but only for the models whitelisted in
+/// `zcode_night_free_models` (the official promo is GLM-5.3-Flash-only;
+/// GLM-5.3 bills normally at night), and only from
 /// `zcode_night_free_effective_from` onwards: the old ZCode client build did
 /// not enjoy the promo server-side, so records in the window before that
 /// instant (2026-09-13 06:15 CST) bill at the normal peak/off-peak factor.
@@ -1478,17 +1670,24 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
 /// parser subtracts them, Anthropic convention) — matches the "输入 Token" term
 /// in the official formula.
 fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> Option<f64> {
+    // Weekend Build 体验套餐（provider=bigmodel-start，赠送的 3 亿 token 额度）
+    // 不消耗正式套餐积分 → 实际成本 0。
+    if record.provider == "bigmodel-start" {
+        return Some(0.0);
+    }
     if special.zcode_cny_per_credit <= 0.0 {
         return None;
     }
-    let rates = special.zcode_credit_rates.get(&record.model.to_lowercase())?;
+    let model_key = record.model.to_lowercase();
+    let rates = special.zcode_credit_rates.get(&model_key)?;
     let rt = DateTime::parse_from_rfc3339(&record.time).ok()?;
     let cst = rt.with_timezone(&FixedOffset::east_opt(8 * 3600)?);
     let hour = cst.hour();
 
     // 夜间畅用活动：活动日期内每日 23:00–09:00 CST，ZCode 端积分消耗为 0。
-    // 但活动对旧版客户端不生效（zcode_night_free_effective_from 之前服务端
-    // 照常扣积分），窗口内的更早记录跳过免费分支，按正常高峰/波谷因子计费。
+    // 活动仅限白名单模型（zcode_night_free_models，官方为 GLM-5.3-Flash 专属，
+    // GLM-5.3 夜间照常扣积分）；且对旧版客户端不生效（zcode_night_free_effective_from
+    // 之前服务端照常扣积分），窗口内的更早记录跳过免费分支，按正常高峰/波谷因子计费。
     if let (Some(from), Some(until)) = (
         special.zcode_night_free_from.as_deref(),
         special.zcode_night_free_until.as_deref(),
@@ -1499,8 +1698,16 @@ fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> 
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|effective| cst >= effective)
             .unwrap_or(true);
+        let model_eligible = special
+            .zcode_night_free_models
+            .iter()
+            .any(|m| *m == model_key);
         let date = cst.format("%Y-%m-%d").to_string();
-        if promo_live && date.as_str() >= from && date.as_str() <= until {
+        if promo_live
+            && model_eligible
+            && date.as_str() >= from
+            && date.as_str() <= until
+        {
             let in_free = special.zcode_night_free_hours_cst.iter().any(|[s, e]| {
                 if s <= e {
                     *s <= hour && hour < *e
@@ -1564,11 +1771,20 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     let schedule = &state.rate_schedule;
 
     // CodeBuddy stores the raw credit charge in TokenRecord.cost. Convert
-    // credits to CNY at the flat domestic rate (¥70 / 4000 credits).
+    // credits to CNY at the plan's amortized credit price: baseline
+    // ¥70 / 4000 credits, superseded by `codebuddy_credit_segments` after the
+    // 2026-09-14 plan upgrade (¥140 / 9000 credits).
     // `dim-agent` records (DimAgent via the workbuddy proxy) carry the same
     // credit cost from the CodeBuddy web API, so they share this formula.
     if record.source == "codebuddy" || record.source == "dim-agent" {
-        return record.cost * cfg.special.codebuddy_cny_per_credit;
+        return record.cost * codebuddy_cny_per_credit_for(&cfg.special, &record.time);
+    }
+
+    // 1a. Qoder (qodercli / Qoder Desktop) — the current plan is free: the
+    //     catalog marks every model `isFree: true` with `priceFactor: 0`, so
+    //     price it at ¥0 rather than falling through to "no entry → N/A".
+    if record.provider == "qoder" && cfg.special.qoder_free {
+        return 0.0;
     }
 
     // 1. 讯飞 (xunfei / xunfei-ex): flat per-call rate in CNY
@@ -1654,7 +1870,18 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         }
     }
 
-    // 4a. Crof provider: always compute from normalized tokens using
+    // 4a. ZAI (api.zairouter.com): always recompute from token counts, because
+    //     claude-code stores cost=0 for this source. The platform charges the
+    //     official Anthropic list price scaled by a per-model multiplier and
+    //     settles in USD credit bought 1:1 with RMB, so the result is already
+    //     in CNY (zai_rate_cny_per_usd = 1.0).
+    if is_zai_billed(record) {
+        if let Some(cost) = compute_zai_cost(&state, record) {
+            return cost;
+        }
+    }
+
+    // 4a2. Crof provider: always compute from normalized tokens using
     //     crof model prices from pricing.toml. We ignore the extension's stored
     //     cost because it was calculated with incorrect pricing.
     //
@@ -2068,6 +2295,162 @@ mod tests {
         assert_eq!(cfg.special.opencode_model_segments[0].divisor, 3.0);
     }
 
+    /// ZAI charges the official Anthropic list price scaled per model, settled
+    /// at ¥1 = $1 credit. Assert the table matches the measured ledger.
+    #[test]
+    fn project_pricing_toml_carries_measured_zai_rates() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        assert_eq!(cfg.special.zai_rate_cny_per_usd, 1.0);
+
+        let rate = |name: &str| {
+            cfg.zai_model
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("missing [[zai_model]] {name}"))
+        };
+
+        // Fable 5.1: official 10/50/0.25/12.5 → billed 25/100/0.63/50.
+        let fable = rate("claude-fable-5-1");
+        assert_eq!(fable.input, 25.0);
+        assert_eq!(fable.output, 100.0);
+        assert_eq!(fable.cache_read, 0.63);
+        assert_eq!(fable.cache_write, 50.0);
+
+        // Opus/Sonnet bill official input/output but the 1h cache-write rate.
+        let opus = rate("claude-opus-5");
+        assert_eq!(opus.input, 5.0);
+        assert_eq!(opus.cache_write, 10.0);
+        let sonnet = rate("claude-sonnet-5");
+        assert_eq!(sonnet.cache_write, 6.0);
+
+        // The official list prices these were derived from must stay present,
+        // since models missing from [[zai_model]] fall back to them.
+        for name in ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"] {
+            assert!(
+                cfg.model.iter().any(|m| m.name == name),
+                "pricing.toml must define official list price for {name}"
+            );
+        }
+    }
+
+    /// One real `claude-fable-5-1` request from the platform ledger:
+    /// 108 requests today charged 105.24 credit; the first single request
+    /// (54 in / 26922 out / 1790155 cr / 155184 cw) charged ~9.80.
+    #[test]
+    fn zai_fable_5_1_matches_measured_charge() {
+        let _guard = pricing_test_guard();
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml")).unwrap();
+        let state = PricingState::new(cfg);
+
+        let mut record = make_record("claude-code", "zai", "claude-fable-5-1", 0, 0.0);
+        record.time = "2026-09-15T03:10:39Z".to_string();
+        record.input_tokens = 54;
+        record.output_tokens = 26922;
+        record.cache_read_tokens = 1790155;
+        record.cache_write_tokens = 155184;
+
+        let cost = compute_zai_cost(&state, &record).expect("fable 5.1 must be priced");
+        // 54×25 + 26922×100 + 1790155×0.63 + 155184×50, per 1M tokens.
+        let expected = (54.0 * 25.0
+            + 26922.0 * 100.0
+            + 1790155.0 * 0.63
+            + 155184.0 * 50.0)
+            / 1_000_000.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "got {cost}, expected {expected}"
+        );
+    }
+
+    /// The full-day `claude-fable-5-1` aggregate is the real independent check:
+    /// the platform reports the charge (105.2439 credit for 108 requests),
+    /// while we derive it from the token counts (1960979 in / 30238 out /
+    /// 2225481 cr / 1095437 cw). It should close closely.
+    #[test]
+    fn zai_fable_5_1_day_aggregate_matches_platform_ledger() {
+        let _guard = pricing_test_guard();
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml")).unwrap();
+        let state = PricingState::new(cfg);
+
+        let mut record = make_record("claude-code", "zai", "claude-fable-5-1", 0, 0.0);
+        record.time = "2026-09-15T03:10:39Z".to_string();
+        record.input_tokens = 1_960_979;
+        record.output_tokens = 30_238;
+        record.cache_read_tokens = 2_225_481;
+        record.cache_write_tokens = 1_095_437;
+
+        let cost = compute_zai_cost(&state, &record).unwrap();
+        let ledger = 105.2439;
+        let drift = (cost - ledger).abs() / ledger;
+        assert!(
+            drift < 0.05,
+            "day aggregate {cost} vs ledger {ledger} (drift {:.1}%)",
+            drift * 100.0
+        );
+    }
+
+    /// 1x models bill the official price, except cache write (1h tier = 2×).
+    #[test]
+    fn zai_one_x_models_use_official_price_but_1h_cache_write() {
+        let _guard = pricing_test_guard();
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml")).unwrap();
+        let state = PricingState::new(cfg);
+
+        let mut record = make_record("claude-code", "zai", "claude-opus-5", 0, 0.0);
+        record.time = "2026-09-15T03:00:00Z".to_string();
+        record.input_tokens = 100_000;
+        record.output_tokens = 1_000;
+        record.cache_read_tokens = 10_000;
+        record.cache_write_tokens = 10_000;
+
+        let cost = compute_zai_cost(&state, &record).unwrap();
+        // opus-5 billed: 5/25/0.50/10.
+        let expected = (100_000.0 * 5.0
+            + 1_000.0 * 25.0
+            + 10_000.0 * 0.50
+            + 10_000.0 * 10.0)
+            / 1_000_000.0;
+        assert!((cost - expected).abs() < 1e-9, "got {cost}, expected {expected}");
+    }
+
+    /// The provider prefix the platform's model mapper accepts must not break
+    /// rate lookup (`anthropic/claude-fable` is a real model id there).
+    #[test]
+    fn zai_strips_provider_prefix_when_matching_multipliers() {
+        let _guard = pricing_test_guard();
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml")).unwrap();
+        let state = PricingState::new(cfg);
+
+        let mut bare = make_record("claude-code", "zai", "claude-fable-5-1", 0, 0.0);
+        bare.time = "2026-09-15T03:00:00Z".to_string();
+        bare.output_tokens = 1000;
+        let mut prefixed = bare.clone();
+        prefixed.model = "anthropic/claude-fable-5-1".to_string();
+
+        let a = compute_zai_cost(&state, &bare).unwrap();
+        let b = compute_zai_cost(&state, &prefixed).unwrap();
+        assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        // 1000 output × $100/1M = $0.10
+        assert!((a - 0.10).abs() < 1e-9, "got {a}");
+    }
+
+    /// A model with no `[[zai_model]]` entry falls back to the official price
+    /// rather than reporting N/A.
+    #[test]
+    fn zai_unknown_model_falls_back_to_official_price() {
+        let _guard = pricing_test_guard();
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml")).unwrap();
+        let state = PricingState::new(cfg);
+
+        let mut record = make_record("claude-code", "zai", "claude-haiku-4-5", 0, 0.0);
+        record.time = "2026-09-15T03:00:00Z".to_string();
+        record.input_tokens = 1_000_000;
+        // Official haiku-4-5 input = $1.00/1M.
+        assert!((compute_zai_cost(&state, &record).unwrap() - 1.0).abs() < 1e-9);
+    }
+
     #[test]
     fn codebuddy_credits_convert_to_cny_at_flat_rate() {
         let _guard = pricing_test_guard();
@@ -2088,7 +2471,8 @@ mod tests {
         let mut record = make_record("codebuddy", "codebuddy", "gpt-5.6-luna", 100, 3000.0);
         record.date = "2026-08-29".to_string();
         record.time = "2026-08-29T04:44:13.879Z".to_string();
-        // 3000 credits × ¥0.0175 = ¥52.5, regardless of FX segments.
+        // 3000 credits × ¥0.0175 (pre-upgrade baseline, no segments configured)
+        // = ¥52.5, regardless of FX segments.
         assert!((display_cost(&record) - 52.5).abs() < 1e-12);
     }
 
@@ -2096,6 +2480,54 @@ mod tests {
     fn codebuddy_default_price_is_seventy_yuan_per_four_thousand_credits() {
         let config = PricingConfig::default();
         assert!((config.special.codebuddy_cny_per_credit - 70.0 / 4000.0).abs() < 1e-15);
+        assert!(config.special.codebuddy_credit_segments.is_empty());
+    }
+
+    #[test]
+    fn codebuddy_credit_segments_switch_rate_at_plan_upgrade() {
+        let _guard = pricing_test_guard();
+        let mut config = PricingConfig::default();
+        config.special.codebuddy_credit_segments = vec![CodebuddyCreditSegment {
+            effective_from: Some("2026-09-14T13:00:00+08:00".to_string()),
+            cny_per_credit: 140.0 / 9000.0,
+        }];
+        state_cell().write().unwrap().reload(config);
+
+        // 1000 credits just before the upgrade (12:59:59 CST) → ¥70/4000 rate.
+        let mut before = make_record("dim-agent", "codebuddy", "glm-5.3-flash", 100, 1000.0);
+        before.time = "2026-09-14T04:59:59Z".to_string();
+        assert!((display_cost(&before) - 1000.0 * (70.0 / 4000.0)).abs() < 1e-12);
+
+        // At the cutover instant (13:00:00 CST) → ¥140/9000 rate.
+        let mut at = make_record("dim-agent", "codebuddy", "glm-5.3-flash", 100, 1000.0);
+        at.time = "2026-09-14T05:00:00Z".to_string();
+        assert!((display_cost(&at) - 1000.0 * (140.0 / 9000.0)).abs() < 1e-12);
+
+        // The native `codebuddy` source shares the same schedule.
+        let mut native = make_record("codebuddy", "codebuddy", "glm-5.3-flash", 100, 1000.0);
+        native.time = "2026-09-14T06:00:00Z".to_string();
+        assert!((display_cost(&native) - 1000.0 * (140.0 / 9000.0)).abs() < 1e-12);
+
+        // Earlier history (pre-upgrade days) keeps the old plan price.
+        let mut historic = make_record("codebuddy", "codebuddy", "glm-5.3-flash", 100, 1000.0);
+        historic.time = "2026-08-29T04:44:13Z".to_string();
+        assert!((display_cost(&historic) - 1000.0 * (70.0 / 4000.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn project_pricing_toml_has_codebuddy_upgrade_segment() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        // Baseline stays at the historical plan price.
+        assert!((cfg.special.codebuddy_cny_per_credit - 70.0 / 4000.0).abs() < 1e-15);
+        assert_eq!(cfg.special.codebuddy_credit_segments.len(), 1);
+        let seg = &cfg.special.codebuddy_credit_segments[0];
+        assert_eq!(
+            seg.effective_from.as_deref(),
+            Some("2026-09-14T13:00:00+08:00")
+        );
+        assert!((seg.cny_per_credit - 140.0 / 9000.0).abs() < 1e-15);
     }
 
     #[test]
@@ -2610,6 +3042,24 @@ mod tests {
             "zcode bigmodel after promo: expected {}, got {}",
             expected_after,
             after_cost
+        );
+
+        // 夜间畅用仅限 GLM-5.3-Flash：GLM-5.3 在同一免扣窗口内（活动生效后）
+        // 照常按波谷 0.5× 扣积分，系数 6.9/1.7/24。
+        let mut nonflash = make_record("zcode", "bigmodel", "GLM-5.3", 0, 0.0);
+        nonflash.input_tokens = 1_000_000;
+        nonflash.output_tokens = 500_000;
+        nonflash.cache_read_tokens = 2_000_000;
+        nonflash.cache_write_tokens = 0;
+        nonflash.time = "2026-09-12T23:30:00Z".to_string(); // 2026-09-13 07:30 CST，窗口内
+        let nonflash_cost = display_cost(&nonflash);
+        let nf_credits = (1_000_000.0 * 6.9 + 2_000_000.0 * 1.7 + 500_000.0 * 24.0) / 10_000.0;
+        let expected_nf = nf_credits * 0.5 * 0.0014464615384615384;
+        assert!(
+            (nonflash_cost - expected_nf).abs() < 1e-9,
+            "zcode bigmodel glm-5.3 night should NOT be free: expected {}, got {}",
+            expected_nf,
+            nonflash_cost
         );
 
         // Unconfigured models (e.g. the free tokenrouter model) still fall

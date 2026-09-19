@@ -20,7 +20,6 @@ mod ollama_proxy;
 mod opencode;
 mod pi;
 mod qoder;
-mod qoder_cn;
 mod zcode;
 
 use crate::config;
@@ -51,8 +50,7 @@ pub(crate) use ollama_proxy::{
 };
 pub use opencode::OpenCodeSource;
 pub use pi::PiSource;
-pub use qoder::QoderSource;
-pub use qoder_cn::QoderCnSource;
+pub use qoder::{QoderCliSource, QoderDesktopSource};
 pub use zcode::ZcodeSource;
 
 /// Trait for a data source that produces `TokenRecord` batches.
@@ -190,7 +188,9 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" => "openai".to_string(),
         "glm-5" | "glm-5.1" | "glm-4.7-flash" => "opencode-go".to_string(),
         "sonnet" | "haiku" => "anthropic".to_string(),
-        "qmodel_latest" | "efficient" | "auto" => "qoder".to_string(),
+        "qmodel_latest" | "efficient" | "auto" | "qfmodel" | "qmodel_38max" => {
+            "qoder".to_string()
+        }
         "spark-x2" | "spark-x2-flash" => "xunfei".to_string(),
         "qwen3.6-35b" | "qwen3.5-35b" | "qwen3.5-397b" | "qwen3-coder-next" => "qwen".to_string(),
         "minimax-m2.5" => "minimax".to_string(),
@@ -367,8 +367,8 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
             Box::new(OpenCodeSource),
             Box::new(KimiCliSource),
             Box::new(KimiCodeSource),
-            Box::new(QoderSource),
-            Box::new(QoderCnSource),
+            Box::new(QoderCliSource),
+            Box::new(QoderDesktopSource),
             Box::new(GrokCliSource),
             Box::new(CcProxySource),
             Box::new(OllamaProxySource),
@@ -697,6 +697,8 @@ mod tests {
         assert_eq!(resolve_provider_from_model("qmodel_latest"), "qoder");
         assert_eq!(resolve_provider_from_model("efficient"), "qoder");
         assert_eq!(resolve_provider_from_model("auto"), "qoder");
+        assert_eq!(resolve_provider_from_model("qfmodel"), "qoder");
+        assert_eq!(resolve_provider_from_model("qmodel_38max"), "qoder");
     }
 
     #[test]

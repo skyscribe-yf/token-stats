@@ -20,8 +20,16 @@ use std::path::PathBuf;
 /// `openai`) are ignored — the bigmodel coding plan speaks the Anthropic
 /// protocol and would otherwise mislabel GLM traffic as `anthropic`;
 /// provider_ids without billing metadata fall back to a channel-based
-/// default (`builtin:bigmodel*` → `bigmodel`, else the historical
+/// default (`builtin:bigmodel-start-plan` → `bigmodel-start` (trial grant),
+/// other `builtin:bigmodel*` → `bigmodel`, else the historical
 /// `opencode-go`).
+///
+/// Rows of channels whose traffic a loopback proxy already meters per request
+/// (`PROXY_METERED_PROVIDERS`, currently `commandcode` → the built-in
+/// `cc-proxy` source) are dropped: ZCode writes one `model_usage` row for the
+/// same call the proxy already logged, which double-counted every
+/// ZCode→Command Code request in tokens, cost and call count (and inflated the
+/// ZCode quota card, which aggregates `source='zcode'`).
 #[derive(Default)]
 pub struct ZcodeSource;
 
@@ -74,11 +82,39 @@ fn normalize_billing_provider(name: &str) -> String {
 /// labeling those records `anthropic` would misattribute GLM traffic.
 const ADAPTER_METADATA_KEYS: &[&str] = &["anthropic", "openai", "openai-compatible"];
 
+/// Billing provider names that identify a ZCode channel whose traffic another
+/// source already meters per request. `model_usage` rows for those channels are
+/// skipped so the same call is not counted twice.
+///
+/// `commandcode` is the built-in loopback cc-proxy (`127.0.0.1:8787`): ZCode
+/// talks OpenAI-compatible HTTP to it, and the proxy writes one `cc-proxy`
+/// record per request with the same tokens (canonical, prefix-stripped model
+/// name + TTFT/TPS), so the zcode row is pure duplication.
+const PROXY_METERED_PROVIDERS: &[&str] = &["commandcode"];
+
+/// Whether the cc-proxy is actually recording Command Code traffic. While its
+/// usage log is absent/empty the zcode row is the only meter for the channel,
+/// so nothing may be dropped.
+fn cc_proxy_is_metering() -> bool {
+    std::fs::metadata(super::cc_proxy_usage_log_path())
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+}
+
 /// Fallback provider when a provider_id carries no billing metadata:
 /// the built-in BigModel coding-plan channel is Zhipu GLM traffic; older
 /// sessions without metadata rode the OpenCode Go subscription.
+///
+/// The Weekend Build trial channel (`builtin:bigmodel-start-plan`, the 3 亿
+/// token grant) is split into its own provider so its traffic stays
+/// separable from paid-plan credits: the grant does not consume plan
+/// credits, so `display_cost()` bills it 0 and the ZCode quota card
+/// accounts it separately. Must be matched before the generic
+/// `builtin:bigmodel` prefix.
 fn default_provider_for(provider_id: &str) -> String {
-    if provider_id.starts_with("builtin:bigmodel") {
+    if provider_id == "builtin:bigmodel-start-plan" || provider_id == "builtin:zai-start-plan" {
+        "bigmodel-start".to_string()
+    } else if provider_id.starts_with("builtin:bigmodel") {
         "bigmodel".to_string()
     } else {
         "opencode-go".to_string()
@@ -132,6 +168,16 @@ impl ZcodeSource {
     }
 
     fn parse(path: &std::path::Path) -> Vec<TokenRecord> {
+        Self::parse_with_cc_proxy(path, cc_proxy_is_metering())
+    }
+
+    /// `cc_proxy_metering` = the loopback cc-proxy is writing its per-request
+    /// usage log, which makes the `commandcode` channel rows duplicates.
+    /// Split out so tests control that ambient condition.
+    fn parse_with_cc_proxy(
+        path: &std::path::Path,
+        cc_proxy_metering: bool,
+    ) -> Vec<TokenRecord> {
         if !path.exists() {
             tracing::warn!("ZCode DB not found at {:?}, skipping", path);
             return Vec::new();
@@ -169,6 +215,14 @@ impl ZcodeSource {
             }
         };
 
+        // Channels metered by a proxy source are only dropped while that proxy
+        // is recording, so an install without the proxy keeps the rows.
+        let proxy_metered: &[&str] = if cc_proxy_metering {
+            PROXY_METERED_PROVIDERS
+        } else {
+            &[]
+        };
+        let mut skipped_proxy = 0usize;
         let mut records = Vec::new();
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -198,6 +252,19 @@ impl ZcodeSource {
                         cache_read,
                         ttft_ms,
                     ) = row;
+
+                    // Billing provider from provider_metadata_json;
+                    // provider_ids without billing metadata fall back
+                    // to a channel-based default.
+                    let provider = billing
+                        .get(&provider_id)
+                        .cloned()
+                        .unwrap_or_else(|| default_provider_for(&provider_id));
+
+                    if proxy_metered.contains(&provider.as_str()) {
+                        skipped_proxy += 1;
+                        continue;
+                    }
 
                     // OpenAI convention: input_tokens includes cache reads and
                     // cache creations; subtract to match the Anthropic convention.
@@ -248,6 +315,14 @@ impl ZcodeSource {
                 }
             }
             Err(e) => tracing::warn!("Failed to iterate ZCode model_usage rows: {}", e),
+        }
+
+        if skipped_proxy > 0 {
+            tracing::info!(
+                "ZCode: skipped {skipped_proxy} row(s) on proxy-metered channel(s) {:?} \
+                 (already recorded per request by their own source)",
+                PROXY_METERED_PROVIDERS
+            );
         }
 
         records
@@ -501,6 +576,113 @@ mod tests {
         for r in &records {
             assert_eq!(r.provider, "bigmodel", "anthropic adapter key leaked: {r:?}");
         }
+    }
+
+    #[test]
+    fn start_plan_channel_splits_from_coding_plan() {
+        // The Weekend Build trial channel must land on its own provider so
+        // the dashboard can separate grant traffic from paid-plan credits.
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage (
+                id text primary key, logical_request_id text not null,
+                session_id text not null, query_source text not null,
+                provider_id text not null, model_id text not null,
+                status text not null, started_at integer not null,
+                completed_at integer,
+                time_to_first_token_ms integer,
+                input_tokens integer not null default 0,
+                output_tokens integer not null default 0,
+                cache_creation_input_tokens integer not null default 0,
+                cache_read_input_tokens integer not null default 0,
+                provider_metadata_json text
+            );",
+        )
+        .unwrap();
+        for (id, pid) in [
+            ("a", "builtin:bigmodel-start-plan"),
+            ("b", "builtin:bigmodel-coding-plan"),
+        ] {
+            conn.execute(
+                "INSERT INTO model_usage (id, logical_request_id, session_id,
+                    query_source, provider_id, model_id, status, started_at,
+                    completed_at, time_to_first_token_ms, input_tokens,
+                    output_tokens, cache_creation_input_tokens,
+                    cache_read_input_tokens, provider_metadata_json)
+                 VALUES (?1, 'r', 's', 'main_turn', ?2, 'GLM-5.3-Flash',
+                         'completed', 1786539125181, 1786539126181, 50,
+                         100, 20, 0, 0, '{\"rawFinishReason\":\"tool_use\"}')",
+                rusqlite::params![id, pid],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let records = ZcodeSource::parse(&db_path);
+        assert_eq!(records.len(), 2);
+        let mut providers: Vec<&str> =
+            records.iter().map(|r| r.provider.as_str()).collect();
+        providers.sort_unstable();
+        assert_eq!(providers, vec!["bigmodel", "bigmodel-start"]);
+    }
+
+    #[test]
+    fn commandcode_channel_is_dropped_only_while_cc_proxy_meters() {
+        // ZCode's `commandcode` channel is the loopback cc-proxy, which logs
+        // every request itself (`source='cc-proxy'`). Keeping the zcode row
+        // too double-counted the same call.
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage (
+                id text primary key, logical_request_id text not null,
+                session_id text not null, query_source text not null,
+                provider_id text not null, model_id text not null,
+                status text not null, started_at integer not null,
+                completed_at integer,
+                time_to_first_token_ms integer,
+                input_tokens integer not null default 0,
+                output_tokens integer not null default 0,
+                cache_creation_input_tokens integer not null default 0,
+                cache_read_input_tokens integer not null default 0,
+                provider_metadata_json text
+            );",
+        )
+        .unwrap();
+        for (id, pid, meta) in [
+            ("cc", "cc-channel", "{\"commandcode\":{}}"),
+            ("glm", "plan-channel", "{\"rawFinishReason\":\"stop\"}"),
+        ] {
+            conn.execute(
+                "INSERT INTO model_usage (id, logical_request_id, session_id,
+                    query_source, provider_id, model_id, status, started_at,
+                    completed_at, time_to_first_token_ms, input_tokens,
+                    output_tokens, cache_creation_input_tokens,
+                    cache_read_input_tokens, provider_metadata_json)
+                 VALUES (?1, 'r', 's', 'main_turn', ?2, 'deepseek-v4.1-flash',
+                         'completed', 1786539125181, 1786539126181, 50,
+                         100, 20, 0, 0, ?3)",
+                rusqlite::params![id, pid, meta],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let metered = ZcodeSource::parse_with_cc_proxy(&db_path, true);
+        assert_eq!(metered.len(), 1, "cc-proxy already records the channel");
+        assert_eq!(metered[0].provider, "opencode-go");
+
+        // Without the proxy log the zcode row is the only meter for that
+        // traffic, so it must survive.
+        let unmetered = ZcodeSource::parse_with_cc_proxy(&db_path, false);
+        assert_eq!(unmetered.len(), 2);
+        assert_eq!(
+            unmetered.iter().filter(|r| r.provider == "commandcode").count(),
+            1
+        );
     }
 
     #[test]

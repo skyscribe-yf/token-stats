@@ -282,6 +282,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         grok_result,
         dimagent_result,
         zcode_result,
+        zai_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -298,6 +299,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fetcher.fetch_grok_quota(&grok_records),
         fetcher.fetch_dimagent_quota(),
         fetcher.fetch_zcode_quota(&zcode_records),
+        fetcher.fetch_zai_quota(),
     );
 
     let response = QuotaResponse {
@@ -316,6 +318,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         grok: Some(grok_result),
         dimagent: Some(dimagent_result),
         zcode: Some(zcode_result),
+        zai: Some(zai_result),
     };
 
     Json(response)

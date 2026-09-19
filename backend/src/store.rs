@@ -564,6 +564,47 @@ impl TokenStore {
         deleted
     }
 
+    /// One-time migration helper for the ZCode Weekend Build trial channel.
+    ///
+    /// The `builtin:bigmodel-start-plan` provider (3 亿 token 体验套餐) used to
+    /// be ingested as `provider='bigmodel'`, identical to the paid coding
+    /// plan. The source now maps it to `bigmodel-start`, so the persisted
+    /// rows would double-count once re-parsed under the new fingerprint.
+    /// Unlike the other purge helpers this runs BEFORE the startup
+    /// `load_all()` (see `AppState::new`): the deleted window is then
+    /// re-ingested from the zcode DB with the new mapping — coding-plan rows
+    /// regenerate with identical fingerprints, start-plan rows land on
+    /// `bigmodel-start`. Cutoff = first start-plan usage (2026-09-13
+    /// 09:34:58 CST) with a safety margin; earlier history never had the
+    /// trial channel. Idempotent (later runs delete nothing).
+    pub fn purge_zcode_start_plan_bigmodel(&self) -> usize {
+        const CUTOFF: &str = "2026-09-13T01:30:00+00:00";
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records
+                 WHERE source = 'zcode' AND provider = 'bigmodel' AND time >= ?1",
+                [CUTOFF],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge zcode start-plan rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated zcode collection: removed {deleted} row(s) at/after {CUTOFF}, \
+                 re-ingesting with provider='bigmodel-start' for trial-plan traffic"
+            );
+        }
+        deleted
+    }
+
     /// One-time migration helper: remove persisted `source='dim'` rows whose
     /// provider is the legacy `workbuddy` name. The workbuddy channel is now
     /// covered by the `dim-agent` source (workbuddy-usage.jsonl, written by
@@ -628,6 +669,41 @@ impl TokenStore {
             tracing::info!(
                 "Migrated dim collection: removed {deleted} cc-proxy run row(s) \
                  replaced by cc-proxy source records"
+            );
+        }
+        deleted
+    }
+
+    /// One-time migration helper for the ZCode → Command Code channel.
+    ///
+    /// ZCode's `commandcode` channel is the built-in loopback cc-proxy, which
+    /// meters every request into `cc-proxy-usage.jsonl` (`source='cc-proxy'`).
+    /// The `model_usage` row ZCode writes for the same call was persisted as a
+    /// second record (`source='zcode'`, `provider='commandcode'`), double
+    /// counting tokens, cost and call count. The zcode source no longer emits
+    /// those rows (see `PROXY_METERED_PROVIDERS`), so the stored twins go.
+    /// Idempotent (no-op once the rows are gone).
+    pub fn purge_zcode_commandcode(&self) -> usize {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records WHERE source = 'zcode' AND provider = 'commandcode'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge zcode commandcode rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated zcode collection: removed {deleted} commandcode row(s) \
+                 already metered by the cc-proxy source"
             );
         }
         deleted
@@ -1216,6 +1292,54 @@ mod tests {
         );
         // Idempotent: second call removes nothing.
         assert_eq!(store.purge_dim_grok_build(), 0);
+    }
+
+    #[test]
+    fn purge_zcode_commandcode_removes_only_proxy_twins() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let insert = |source: &str, provider: &str| {
+            conn.execute(
+                INSERT_SQL,
+                params![
+                    "2026-09-19T13:10:49.307+00:00",
+                    "2026-09-19",
+                    "N/A",
+                    provider,
+                    None::<String>,
+                    "deepseek-v4.1-flash",
+                    source,
+                    625i64,
+                    2013i64,
+                    92800i64,
+                    0i64,
+                    95438i64,
+                    0.0f64,
+                    None::<f64>,
+                    None::<f64>,
+                ],
+            )
+            .unwrap();
+        };
+        // The same call, once per the two sources.
+        insert("zcode", "commandcode");
+        insert("cc-proxy", "commandcode");
+        insert("zcode", "bigmodel");
+        drop(conn);
+
+        let store = TokenStore::open(&path);
+        assert_eq!(store.count(), 3);
+        assert_eq!(store.purge_zcode_commandcode(), 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 2);
+        assert!(
+            loaded.iter().all(|r| !(r.source == "zcode" && r.provider == "commandcode")),
+            "proxy-metered zcode row should be purged"
+        );
+        // Idempotent: second call removes nothing.
+        assert_eq!(store.purge_zcode_commandcode(), 0);
     }
 
     #[test]

@@ -15,12 +15,13 @@ pub mod ollama;
 pub mod opencode;
 pub mod types;
 pub mod xiaomi_mimo;
+pub mod zai;
 pub mod zcode;
 
 pub use types::{
     CodeBuddyQuotaStatus, CommandCodeQuotaStatus, DimAgentQuotaStatus, FennoQuotaStatus,
     GrokQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
-    QuotaResponse, XiaomiMiMoQuotaStatus, ZcodeQuotaStatus,
+    QuotaResponse, XiaomiMiMoQuotaStatus, ZaiQuotaStatus, ZcodeQuotaStatus,
 };
 
 use serde::de;
@@ -195,6 +196,11 @@ impl QuotaFetcher {
         zcode_records: &[crate::models::TokenRecord],
     ) -> ZcodeQuotaStatus {
         zcode::fetch_zcode_quota(&self.client, zcode_records).await
+    }
+
+    /// Fetch ZAI Router balance and usage (`ZAI_API_KEY`).
+    pub async fn fetch_zai_quota(&self) -> ZaiQuotaStatus {
+        zai::fetch_zai_quota(&self.client).await
     }
 }
 

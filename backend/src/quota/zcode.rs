@@ -21,7 +21,12 @@
 //!
 //! Local per-request usage comes from the `source="zcode"` record snapshot
 //! (aggregated the same way the Grok card does it), so the card keeps
-//! working even when the remote endpoint is unreachable.
+//! working even when the remote endpoint is unreachable. Trial-grant
+//! traffic (`provider="bigmodel-start"`, the Weekend Build 3 亿 token 体验
+//! 套餐) is accounted separately in `start_plan`: the monitor API rejects
+//! the start-plan key (401, verified 2026-09-13), so the grant has no
+//! remote half — total comes from `ZCODE_START_PLAN_TOTAL_TOKENS`
+//! (default 300_000_000), used from the local records.
 
 use super::types::*;
 use crate::models::TokenRecord;
@@ -203,6 +208,19 @@ fn build_data(
         Some(snap) => (snap.level, snap.limits, snap.subscription),
         None => (None, Vec::new(), None),
     };
+    // Trial-grant accounting: shown once the channel has produced traffic
+    // (or the grant size was pinned explicitly via env).
+    let start_plan = if local.start_calls > 0 || start_plan_grant_env_set() {
+        let grant = start_plan_grant_tokens();
+        Some(ZcodeStartPlanUsage {
+            grant_tokens: grant,
+            used_tokens: local.start_used,
+            remaining_tokens: (grant - local.start_used).max(0),
+            calls: local.start_calls,
+        })
+    } else {
+        None
+    };
     ZcodeQuotaData {
         plan_level,
         limits,
@@ -221,8 +239,24 @@ fn build_data(
         total_cache_write_tokens: local.total_cache_write,
         total_tokens: local.total_total,
         total_cost_cny: local.total_cost_cny,
+        start_plan,
         quota_error,
     }
+}
+
+/// Weekend Build trial grant size in tokens (体验套餐赠送额度).
+const DEFAULT_START_PLAN_GRANT_TOKENS: i64 = 300_000_000;
+
+fn start_plan_grant_tokens() -> i64 {
+    std::env::var("ZCODE_START_PLAN_TOTAL_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_START_PLAN_GRANT_TOKENS)
+}
+
+fn start_plan_grant_env_set() -> bool {
+    std::env::var("ZCODE_START_PLAN_TOTAL_TOKENS").is_ok()
 }
 
 // ─── Remote fetching ─────────────────────────────────────────────────────────
@@ -460,13 +494,19 @@ struct LocalUsage {
     total_cache_write: i64,
     total_total: i64,
     total_cost_cny: f64,
+    // Weekend Build trial grant (provider='bigmodel-start'), kept out of the
+    // paid-plan sums above — the grant does not consume plan credits.
+    start_used: i64,
+    start_calls: i64,
 }
 
 impl LocalUsage {
     /// Aggregate the `source="zcode"` snapshot; "today" matches the record's
     /// UTC date (TokenRecord.date is a UTC `YYYY-MM-DD` string). Costs use
     /// the pricing state guard once for the whole loop; unknown-cost (-1)
-    /// records are skipped in the sums, same as the aggregator.
+    /// records are skipped in the sums, same as the aggregator. Trial-grant
+    /// records (`provider='bigmodel-start'`) are excluded here and counted
+    /// separately for `start_plan`.
     fn from_records(records: &[TokenRecord]) -> Self {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let ps = pricing::state_read();
@@ -485,8 +525,15 @@ impl LocalUsage {
             total_cache_write: 0,
             total_total: 0,
             total_cost_cny: 0.0,
+            start_used: 0,
+            start_calls: 0,
         };
         for r in records {
+            if r.provider == "bigmodel-start" {
+                u.start_used += r.total_tokens;
+                u.start_calls += 1;
+                continue;
+            }
             u.total_calls += 1;
             u.total_input += r.input_tokens;
             u.total_output += r.output_tokens;
@@ -630,6 +677,60 @@ mod tests {
         assert_eq!(usage.today_output, 30);
         assert_eq!(usage.total_calls, 3);
         assert_eq!(usage.total_input, 157);
+    }
+
+    #[test]
+    fn local_usage_splits_trial_grant_from_paid_plan() {
+        let mk = |provider: &str, input: i64, output: i64| TokenRecord {
+            date: "2026-09-13".to_string(),
+            time: "2026-09-13T01:00:00Z".to_string(),
+            api_key_prefix: "N/A".to_string(),
+            provider: provider.to_string(),
+            original_provider: None,
+            model: "GLM-5.3-Flash".to_string(),
+            source: "zcode".to_string(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens: input + output,
+            cost: 0.0,
+            ttft_ms: None,
+            tps: None,
+        };
+        let records = vec![
+            mk("bigmodel", 100, 20),
+            mk("bigmodel-start", 1000, 200),
+            mk("bigmodel-start", 500, 50),
+        ];
+        let usage = LocalUsage::from_records(&records);
+        // Paid-plan sums exclude the trial channel entirely.
+        assert_eq!(usage.total_calls, 1);
+        assert_eq!(usage.total_input, 100);
+        assert_eq!(usage.start_calls, 2);
+        assert_eq!(usage.start_used, 1750);
+
+        temp_env::with_var("ZCODE_START_PLAN_TOTAL_TOKENS", None::<&str>, || {
+            let data = build_data(None, &usage, None);
+            let sp = data.start_plan.expect("trial traffic must surface start_plan");
+            assert_eq!(sp.grant_tokens, DEFAULT_START_PLAN_GRANT_TOKENS);
+            assert_eq!(sp.used_tokens, 1750);
+            assert_eq!(sp.remaining_tokens, DEFAULT_START_PLAN_GRANT_TOKENS - 1750);
+            assert_eq!(sp.calls, 2);
+        });
+        // Explicit env override and zero floor.
+        temp_env::with_var("ZCODE_START_PLAN_TOTAL_TOKENS", Some("1000"), || {
+            let data = build_data(None, &usage, None);
+            let sp = data.start_plan.unwrap();
+            assert_eq!(sp.grant_tokens, 1000);
+            assert_eq!(sp.remaining_tokens, 0);
+        });
+        // No trial traffic and no env → field omitted.
+        let paid_only = vec![mk("bigmodel", 1, 1)];
+        temp_env::with_var("ZCODE_START_PLAN_TOTAL_TOKENS", None::<&str>, || {
+            let data = build_data(None, &LocalUsage::from_records(&paid_only), None);
+            assert!(data.start_plan.is_none());
+        });
     }
 
     #[test]

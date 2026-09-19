@@ -120,6 +120,16 @@ impl AppState {
     pub fn new() -> Self {
         let store = Arc::new(TokenStore::open_default());
 
+        // ── ZCode start-plan relabel migration ───────────────────────────
+        // The Weekend Build trial channel (`builtin:bigmodel-start-plan`) is
+        // now ingested as `bigmodel-start` instead of `bigmodel`. Rows
+        // persisted under the old label would double-count once re-parsed
+        // under the new fingerprint, so delete the affected window first;
+        // the full source re-parse below re-ingests it with the new
+        // mapping (coding-plan rows regenerate identical fingerprints).
+        // Must run before `load_all()` — see the helper's doc comment.
+        store.purge_zcode_start_plan_bigmodel();
+
         // Restore history from the durable store, then ingest whatever the
         // session logs contain that isn't persisted yet.
         let db_records = store.load_all();
@@ -144,7 +154,13 @@ impl AppState {
             .filter(|r| r.source == "dim")
             .map(TokenRecord::fingerprint)
             .collect();
-        let dim_migrated = !dim_keep.is_empty() && DimSource::last_sync_completed();
+        // Gate on `full_backfill_done` (this process fetched the *whole*
+        // remote history), NOT `last_sync_completed`: a cold start resuming
+        // from a persisted watermark only sees records newer than the
+        // watermark, and treating that partial fingerprint set as "the whole
+        // history" would purge every older dim row.
+        let dim_migrated =
+            !dim_keep.is_empty() && DimSource::full_backfill_done();
         if dim_migrated {
             store.purge_dim_legacy(&dim_keep);
         }
@@ -180,6 +196,13 @@ impl AppState {
         // to `bigmodel`; the mislabeled rows would double-count the same
         // requests under the stale provider name.
         let zcode_anthropic_purged = store.purge_zcode_anthropic() > 0;
+
+        // ── ZCode Command Code channel migration ─────────────────────────
+        // ZCode's `commandcode` channel is the built-in loopback cc-proxy,
+        // which meters every request per-call (`source='cc-proxy'`). The
+        // `model_usage` rows persisted for the same calls double-counted them,
+        // so drop them; the source no longer emits them.
+        let zcode_commandcode_purged = store.purge_zcode_commandcode() > 0;
 
         // ── Ollama Cloud channel switch ──────────────────────────────────
         // The channel now routes through CLIProxyAPI and is metered per request
@@ -251,6 +274,14 @@ impl AppState {
                 !(zcode_anthropic_purged
                     && r.source == "zcode"
                     && r.provider == "anthropic")
+            })
+            .filter(|r| {
+                // Drop the zcode commandcode rows the migration purge just
+                // removed from the store: the cc-proxy source already meters
+                // those calls, so memory and DB stay in sync.
+                !(zcode_commandcode_purged
+                    && r.source == "zcode"
+                    && r.provider == "commandcode")
             })
             .chain(new_from_sources)
             .collect();
@@ -539,6 +570,35 @@ fn drop_unknown_codex_twins(records: &mut Vec<TokenRecord>) {
     });
 }
 
+/// Cache policy for statically served files. The HTML shell references
+/// content-hashed asset URLs, so it must always be revalidated — otherwise
+/// browsers keep serving the old shell (and old bundle) after a deploy and
+/// new UI features silently never appear. Hashed `/assets/*` files are
+/// immutable and cacheable for a year.
+async fn static_cache_policy(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    let mut resp = next.run(req).await;
+    if path.starts_with("/api") {
+        return resp;
+    }
+    let headers = resp.headers_mut();
+    if path.starts_with("/assets/") {
+        headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    } else {
+        headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+    }
+    resp
+}
+
 /// Build the Axum router with all API routes, CORS, and static file serving.
 pub fn build_router(state: AppState) -> Router {
     let state = Arc::new(state);
@@ -576,6 +636,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(api_routes)
         .fallback_service(ServeDir::new("static").append_index_html_on_directories(true))
+        .layer(axum::middleware::from_fn(static_cache_policy))
         .layer(cors)
         .with_state(state)
 }

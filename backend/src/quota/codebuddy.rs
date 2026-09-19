@@ -7,6 +7,12 @@
 //! Auth requires both `session` and `session_2` cookies of `www.codebuddy.cn`,
 //! provided via `CODEBUDDY_SESSION_COOKIE` and `CODEBUDDY_SESSION_COOKIE_2`
 //! (cookie values only, without the `session=` / `session_2=` prefix).
+//!
+//! NOTE: these cookies expire ~30 days after the last browser login. When they
+//! lapse the edge returns an APISIX `401 Authorization Required` HTML page and
+//! the card shows that error — even though the credentials are being injected
+//! correctly. Re-login at www.codebuddy.cn, then run
+//! `scripts/refresh-codebuddy-cookies.sh`.
 
 use super::types::{CodeBuddyPackage, CodeBuddyQuotaData, CodeBuddyQuotaStatus};
 use super::deserialize_flexible_number;

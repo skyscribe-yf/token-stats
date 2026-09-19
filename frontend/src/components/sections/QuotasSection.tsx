@@ -24,6 +24,7 @@ import type {
   GrokQuotaStatus,
   DimAgentQuotaStatus,
   ZcodeQuotaStatus,
+  ZaiQuotaStatus,
   ZcodeLimitEntry,
   SubscriptionSettings,
 } from "../../api";
@@ -1009,6 +1010,168 @@ function SkeletonBars() {
   );
 }
 
+function ZaiCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: ZaiQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-zai";
+  const flash = useHighlightFlash(highlightId, cardId);
+  const data = status?.data;
+  // Credit is bought 1:1 with RMB, so the credit figure is the RMB figure —
+  // this is what the platform console shows the user.
+  const cycleCountdown = buildCycleCountdown(data?.expires_at ?? null);
+
+  return (
+    <CardShell
+      id={cardId}
+      available={!!status?.available}
+      highlight={flash}
+    >
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="ZAI"
+        suffix="api.zairouter"
+        cycleCountdown={cycleCountdown}
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && data ? (
+        <>
+          <div className="flex items-center justify-between text-[11px] mb-1.5">
+            <span className="font-medium text-slate-600">
+              {data.alias || data.name}
+            </span>
+            <span className="text-slate-400">#{data.user_id}</span>
+          </div>
+          {data.suspended && (
+            <div className="mb-1.5 rounded-md bg-rose-50 px-2 py-1 text-[10px] text-rose-700">
+              账号已被暂停（余额不足），请及时充值
+            </div>
+          )}
+          <div className="flex items-center gap-3 mb-1.5">
+            <div className="text-[10px] text-slate-500">
+              <span className="text-slate-700 font-medium">
+                {formatCalls(data.total_requests)}
+              </span>{" "}
+              总请求
+            </div>
+            <div className="text-[10px] text-slate-500">
+              <span
+                className={`font-medium ${data.balance < 0 ? "text-rose-600" : "text-slate-700"}`}
+              >
+                ¥{data.balance.toFixed(2)}
+              </span>{" "}
+              剩余 / ¥{data.credit_total.toFixed(2)} 到账
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <ProgressBar
+              label="已用"
+              used={Math.max(data.credit_used, 0)}
+              limit={Math.max(data.credit_total, data.credit_used)}
+            />
+            <ProgressBar
+              label="今日"
+              used={data.daily_used}
+              limit={Math.max(data.daily_used, 1)}
+            />
+          </div>
+          {data.cards && data.cards.length > 0 && (
+            <details className="group mt-2 pt-2 border-t border-slate-100">
+              <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700 transition-colors">
+                到账卡明细（{data.cards.length}）
+              </summary>
+              <div className="mt-1.5 space-y-1">
+                {data.cards.map((card, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px]">
+                    <span className="text-slate-500">
+                      卡{i + 1}
+                      {card.expires_at && (
+                        <span className="ml-1 text-slate-400">
+                          ({card.expires_at.slice(0, 10)})
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-slate-700 font-medium tabular-nums">
+                      剩¥{card.balance.toFixed(2)} / ¥{card.amount.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+          <details className="group mt-1.5">
+            <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700 transition-colors">
+              详细用量
+            </summary>
+            <div className="mt-1.5 space-y-1.5">
+              <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+                <div className="text-slate-500">
+                  今日 <span className="text-slate-700">¥{data.daily_used.toFixed(2)}</span>
+                </div>
+                <div className="text-slate-500">
+                  请求 <span className="text-slate-700">{formatCalls(data.daily_requests)}</span>
+                </div>
+                <div className="text-slate-500">
+                  输入 <span className="text-slate-700">{formatNumber(data.daily_input_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  输出 <span className="text-slate-700">{formatNumber(data.daily_output_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  缓存读 <span className="text-slate-700">{formatNumber(data.daily_cache_read_tokens)}</span>
+                </div>
+                <div className="text-slate-500">
+                  缓存写 <span className="text-slate-700">{formatNumber(data.daily_cache_write_tokens)}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+                <div className="text-slate-500">
+                  本月 <span className="text-slate-700">¥{data.monthly_used.toFixed(2)}</span>
+                </div>
+                <div className="text-slate-500">
+                  请求 <span className="text-slate-700">{formatCalls(data.monthly_requests)}</span>
+                </div>
+                <div className="text-slate-500">
+                  累计 <span className="text-slate-700">¥{data.credit_used.toFixed(2)}</span>
+                </div>
+              </div>
+              {data.monthly_models.length > 0 && (
+                <div className="space-y-0.5 pt-1 border-t border-slate-100">
+                  {data.monthly_models.slice(0, 6).map((m) => (
+                    <div key={m.model} className="flex items-center justify-between text-[10px]">
+                      <span className="text-slate-500 truncate mr-2">{m.model}</span>
+                      <span className="text-slate-700 tabular-nums shrink-0">
+                        ¥{m.credit_used.toFixed(2)} · {formatCalls(m.requests)}次
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </details>
+          <div className="pt-1.5 mt-1.5 border-t border-slate-100 text-[10px] text-slate-500">
+            <span>
+              到期 {data.expires_at ? data.expires_at.slice(0, 10) : "-"}
+            </span>
+            <span className="ml-2 text-slate-400">1 元 = 1 美元额度</span>
+          </div>
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function CodeBuddyCard({
   status,
   loading,
@@ -1585,6 +1748,16 @@ function ZcodeCard({
               </div>
             );
           })}
+          {data.startPlan && (
+            <div className="mt-1.5">
+              <ProgressBar
+                label="体验套餐赠量"
+                used={data.startPlan.usedTokens}
+                limit={data.startPlan.grantTokens}
+                suffix={`剩余 ${formatNumber(data.startPlan.remainingTokens)} · ${formatCalls(data.startPlan.calls)} 次`}
+              />
+            </div>
+          )}
           <div className="mt-2 pt-1.5 border-t border-slate-100 space-y-0.5 text-[10px] text-slate-500">
             <div className="flex justify-between">
               <span>今日调用</span>
@@ -1649,6 +1822,13 @@ export const QuotasSection = memo(function QuotasSection({
           <AinaibaCard
             status={ainaibaCredit}
             loading={ainaibaCreditLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-zai") && (
+          <ZaiCard
+            status={quota?.zai ?? null}
+            loading={quotaLoading}
             highlightId={highlightCardId}
           />
         )}

@@ -13,6 +13,75 @@ HEALTH_TIMEOUT=240
 NGINX_CONF_SRC="$PROJECT_DIR/nginx/token-stats.conf"
 NGINX_CONF_DST="/etc/nginx/sites-available/token-stats"
 
+# ── 0a. Load credentials into THIS shell ──────────────────────────────
+# MUST happen before any inject_env_dropin call. clear_env_dropins() wipes the
+# whole drop-in directory, so anything not present in this shell is *deleted*
+# from the new instance — running deploy.sh from a shell without the creds
+# exported silently drops every quota-card credential and the dim source.
+#
+# deploy.sh previously relied on the caller having sourced deploy-env.sh
+# (scripts/deploy-dashboard.sh does so via `exec`). Direct `./deploy.sh` calls
+# inherited whatever happened to be exported, or nothing. Loading it here makes
+# this script self-sufficient either way; already-set values win so an explicit
+# one-off override still works.
+DEPLOY_ENV_FILE="${TOKEN_STATS_DEPLOY_ENV:-$HOME/.config/token-stats/deploy-env.sh}"
+if [ -f "$DEPLOY_ENV_FILE" ]; then
+    _env_overrides="$(env | grep -E '^(CODEBUDDY_|COMMANDCODE_|DIMAGENT_|OPENCODE_GO_|OLLAMA_AUTH_|MEITUAN_|FENNO_|KIMI_|YAI_|ZAI_|XIAOMI_MIMO_|XUNFEI_|GROK_|DIM_|CCSWITCH_|USE_CC_SWITCH)' || true)"
+    set -a
+    # shellcheck disable=SC1090
+    . "$DEPLOY_ENV_FILE"
+    set +a
+    if [ -n "$_env_overrides" ]; then
+        # Re-apply values that were already exported before the source.
+        while IFS= read -r _line; do
+            [ -z "$_line" ] && continue
+            export "$_line"
+        done <<< "$_env_overrides"
+    fi
+    unset _env_overrides _line
+    echo "🔑 Loaded credentials from $DEPLOY_ENV_FILE"
+else
+    echo "⚠️  $DEPLOY_ENV_FILE not found — relying on the current shell's environment"
+fi
+
+# Refuse to deploy when credentials that are *required* for a card/source are
+# missing. This turns a silent "card broke after deploy" into a loud abort.
+# Set TOKEN_STATS_ALLOW_MISSING_CREDS=1 to bypass (e.g. intentionally deploying
+# without a given provider).
+if [ "${TOKEN_STATS_ALLOW_MISSING_CREDS:-}" != "1" ]; then
+    missing=()
+    for pair in \
+        "CODEBUDDY_SESSION_COOKIE:CodeBuddy card" \
+        "CODEBUDDY_SESSION_COOKIE_2:CodeBuddy card (session_2)" \
+        "DIMAGENT_SESSION_COOKIE:dim data source + DimAgent card" \
+        "YAI_API_KEY:Ainaiba/XAI balance" \
+        "ZAI_API_KEY:ZAI card" \
+        "OLLAMA_AUTH_COOKIE:Ollama Cloud" \
+        "FENNO_AUTH_TOKEN:Fenno card" \
+        "MEITUAN_AUTH_COOKIE:Meituan LongCat" \
+        "XIAOMI_MIMO_SERVICE_TOKEN:Xiaomi MiMo"
+    do
+        var="${pair%%:*}"
+        label="${pair#*:}"
+        if [ -z "${!var:-}" ]; then
+            missing+=("$var ($label)")
+        fi
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo ""
+        echo "❌ Aborting deploy — required credentials missing from $DEPLOY_ENV_FILE and the shell:"
+        printf '   • %s\n' "${missing[@]}"
+        echo ""
+        echo "   These would be DELETED from the new instance by clear_env_dropins,"
+        echo "   leaving the corresponding cards/sources dead."
+        echo "   Fix: populate $DEPLOY_ENV_FILE, or set"
+        echo "        TOKEN_STATS_ALLOW_MISSING_CREDS=1 to deploy anyway."
+        echo ""
+        exit 1
+    fi
+    echo "✅ All required credentials present"
+fi
+
 # ── helpers ───────────────────────────────────────────────────────────
 
 health_check() {
@@ -237,6 +306,17 @@ if [ -n "${YAI_API_KEY:-}" ]; then
     echo "✅ Injected YAI_API_KEY"
 else
     echo "⚠️  YAI_API_KEY not set"
+fi
+
+# ZAI (ZAI Router, api.zairouter.com) — balance/usage card on /api/quota.
+# Note this is a *different* account from YAI/Ainaba: separate key, separate
+# balance, and its own billing formula (official Anthropic price × per-model
+# rate, see [[zai_model]] in pricing.toml).
+if [ -n "${ZAI_API_KEY:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "ZAI_API_KEY" "$ZAI_API_KEY"
+    echo "✅ Injected ZAI_API_KEY"
+else
+    echo "⚠️  ZAI_API_KEY not set"
 fi
 
 if [ -n "${XIAOMI_MIMO_SERVICE_TOKEN:-}" ]; then

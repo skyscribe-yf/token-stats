@@ -369,6 +369,7 @@ export interface QuotaResponse {
   grok: GrokQuotaStatus | null;
   dimagent: DimAgentQuotaStatus | null;
   zcode: ZcodeQuotaStatus | null;
+  zai: ZaiQuotaStatus | null;
 }
 
 // ─── DimAgent Subscription Quota ────────────────────────────────────────────
@@ -560,6 +561,13 @@ export interface ZcodeSubscription {
   autoRenew: boolean;
 }
 
+export interface ZcodeStartPlanUsage {
+  grantTokens: number;
+  usedTokens: number;
+  remainingTokens: number;
+  calls: number;
+}
+
 export interface ZcodeQuotaData {
   planLevel: string | null;
   limits: ZcodeLimitEntry[];
@@ -578,6 +586,8 @@ export interface ZcodeQuotaData {
   totalCacheWriteTokens: number;
   totalTokens: number;
   totalCostCny: number;
+  /** Weekend Build 体验套餐（3 亿 token 赠量）本地账本统计 */
+  startPlan?: ZcodeStartPlanUsage | null;
   quotaError?: string | null;
 }
 
@@ -747,6 +757,66 @@ export async function fetchAinaibaCredit(): Promise<AinaibaCreditResponse> {
   const res = await fetch(`${API_BASE}/api/ainaiba-credit`);
   if (!res.ok) throw new Error("Failed to fetch Ainaiba credit");
   return res.json();
+}
+
+// ─── ZAI Router (api.zairouter.com) ──────────────────────────────────────────
+//
+// ZAI is a Claude Code relay: RMB tops up USD face value 1:1 (the order
+// records ¥100 → credit 100.0), so the balance reads the same in either
+// currency. Per-model charges are the official Anthropic list price scaled by
+// a platform-internal multiplier (see `zai_model_multipliers` in pricing.toml).
+
+export interface ZaiCreditCard {
+  amount: number;
+  balance: number;
+  reference: string;
+  granted_at: string;
+  expires_at: string;
+}
+
+export interface ZaiModelUsage {
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  credit_used: number;
+}
+
+export interface ZaiQuotaData {
+  user_id: number;
+  name: string;
+  alias: string;
+  email: string;
+  /** Remaining balance. USD credit is sold 1:1 with RMB, so this is also ¥. */
+  balance: number;
+  credit_total: number;
+  credit_used: number;
+  expires_at: string;
+  cards: ZaiCreditCard[];
+  total_requests: number;
+  suspended: boolean;
+  daily_used: number;
+  daily_requests: number;
+  daily_input_tokens: number;
+  daily_output_tokens: number;
+  daily_cache_read_tokens: number;
+  daily_cache_write_tokens: number;
+  daily_models: ZaiModelUsage[];
+  monthly_used: number;
+  monthly_requests: number;
+  monthly_input_tokens: number;
+  monthly_output_tokens: number;
+  monthly_cache_read_tokens: number;
+  monthly_cache_write_tokens: number;
+  monthly_models: ZaiModelUsage[];
+}
+
+export interface ZaiQuotaStatus {
+  available: boolean;
+  data: ZaiQuotaData | null;
+  error: string | null;
 }
 
 // ─── Xunfei (iFlytek) Coding Plan ─────────────────────────────────────────────

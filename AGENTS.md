@@ -39,16 +39,16 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 4 | `opencode` | `~/.local/share/opencode/opencode.db` | SQLite，直接来自 OpenCode CLI |
 | 5 | `kimi-cli` | `~/.kimi/sessions/*/wire.jsonl` | JSONL（`KIMI_SESSIONS_PATH` 可覆盖目录） |
 | 6 | `kimi-code` | `~/.kimi-code*/sessions/*/*/agents/*/wire.jsonl` | JSONL（`KIMI_CODE_HOME` 可覆盖根目录） |
-| 7 | `qoder` | `~/.qoder/projects/*/*.jsonl` | JSONL（`QODER_PROJECTS_PATH` 可覆盖） |
-| 8 | `qoder-cn` | `~/.qoder-cn/logs/sessions/*/segments/*.jsonl` | JSONL（`QODER_CN_SESSIONS_PATH` 可覆盖） |
+| 7 | `qoder-cli` | `~/.qoder/logs/sessions/<project-slug>/<session-id>/segments/*.jsonl` | JSONL，国际版 `qoder`/`qodercli` CLI（v1.0.14）；只取 `type=model.response.completed` 事件并按 `request_id` 去重；OpenAI 式 `input_tokens` **含**缓存命中，解析时减去归一为 Anthropic 语义；provider 取日志的 `data.provider`，缺失时回落模型别名表（`qfmodel`/`qmodel_latest`/`efficient`/`auto`/`qmodel_38max`→`qoder`）（`QODER_SESSIONS_PATH` 可覆盖）。旧实现读 `~/.qoder/projects/*/*.jsonl`，新版 CLI 已不往那里写 `usage` → 恒 0 条 |
+| 8 | `qoder-desktop` | `~/.qoder-cn/logs/sessions/<project-slug>/<session-id>/segments/*.jsonl` | 同一解析器（`sources/qoder.rs`），数据由 **Qoder Desktop**（`/opt/Qoder CN`，Electron，内嵌 agent SDK 1.1.49 写 `~/.qoder-cn`）产出。**token 恒为 0**：CN 网关对免费 Qwen3.8-Flash 路由不向客户端回传 usage 块（2026-09-18 实测 686/686 条 `model.response.completed` 全零、缓存字段同样为 0，应用自己的上下文快照也写着 `tokenCountsAvailable: false`；客户端没有 `include_usage`/feature gate 可打开），所以这个源**只有调用次数有意义**。为此新增 `TokenRecord::counts_as_call_without_tokens()`（仅 `qoder-desktop`），让统计/筛选/RPM 三处跳过 `is_zero_token` 过滤，否则全部记录会被当作失败请求丢弃（`QODER_CN_SESSIONS_PATH` 可覆盖） |
 | 9 | `grok-cli` | `~/.token-stats/grok-usage.jsonl` | JSONL，由内置 loopback Grok 代理写入（`GROK_USAGE_LOG_PATH` 可覆盖） |
 | 10 | `commandcode` | `~/.commandcode/projects/<slug>/<session-id>.jsonl` | JSONL；`type=message` 行含 `usage`；跳过侧车 `*.checkpoints.jsonl`（`COMMANDCODE_PROJECTS_PATH` 可覆盖） |
-| 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖）。**provider 映射**：`provider_metadata_json` 的计费名（`OpenCodeGo`→`opencode-go`、`Tokenrouter`→`tokenrouter`）；适配器名键（`anthropic`/`openai`——bigmodel 编码套餐走 Anthropic 协议）被跳过，无计费元数据的 `builtin:bigmodel*` provider 一律标 `bigmodel`，其余回落 `opencode-go`。曾因 `{"anthropic":...}` 元数据把整个 provider 误标成 `anthropic`，启动迁移 `purge_zcode_anthropic` 一次性清理并按新指纹重灌 |
+| 11 | `zcode` | `~/.zcode/cli/db/db.sqlite` | SQLite `model_usage` 表（`ZCODE_DB_PATH` 可覆盖）。**provider 映射**：`provider_metadata_json` 的计费名（`OpenCodeGo`→`opencode-go`、`Tokenrouter`→`tokenrouter`）；适配器名键（`anthropic`/`openai`——bigmodel 编码套餐走 Anthropic 协议）被跳过，无计费元数据的 `builtin:bigmodel-start-plan`（Weekend Build 体验套餐/3 亿 token 赠量）标 `bigmodel-start`（2026-09-13 起，成本恒 0——不扣正式套餐积分；启动迁移 `purge_zcode_start_plan_bigmodel` 在 `load_all()` **之前**删 cutoff `2026-09-13T01:30Z` 起的旧 `bigmodel` 行、由全量重解析按新指纹回灌防双计），其余无计费元数据的 `builtin:bigmodel*` provider 一律标 `bigmodel`，再其余回落 `opencode-go`。曾因 `{"anthropic":...}` 元数据把整个 provider 误标成 `anthropic`，启动迁移 `purge_zcode_anthropic` 一次性清理并按新指纹重灌。**代理计量通道排除**：`provider_metadata_json` 的键其实是 ZCode 通道显示名，名为 `commandcode` 的那个通道就是内置 cc-proxy（ZCode → `127.0.0.1:8787`），代理已逐请求写 `cc-proxy-usage.jsonl`，故该通道 `model_usage` 行整批丢弃（`PROXY_METERED_PROVIDERS`，且**仅当代理日志非空**——没有代理时 zcode 行是唯一点量）；启动迁移 `purge_zcode_commandcode` 删除已持久化的 `source='zcode' AND provider='commandcode'` 行。坑：在 ZCode 里给该通道改名会换掉元数据键 → 排除失效、重新双计 |
 | 12 | `dsh` | `~/.dsh/sessions/*/session-*/session.jsonl.zstd` | zstd 压缩 JSONL，DeepSeek Harness；usage chunk 与 `finish` replayState 配对取 provider/model（`DSH_SESSIONS_PATH` 可覆盖） |
-| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），并排除所有已有逐请求计量的通道避免双计：`dimcode-api-oauth`（与 API 源双计）、`workbuddy`（与 `dim-agent` 源双计）、`grok-build-proxy`（与 grok 代理日志双计）、`ollama-cloud-proxy`（与 `ollama-proxy` 源双计）、`cc-proxy`（与 `cc-proxy` 源双计——displayName "Command Code" 曾被 slug 成 provider `command-code` 单独出现在 vendor 图表中，2026-09-12 修复 + store 一次性迁移清除）（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除 |
+| 13 | `dim` | DimAgent 控制台 API `https://dimagent.cn/api/log/self` + 本地 SQLite 补充 | **HTTP 轮询**（每刷新周期一次，默认 30s）：逐请求明细（time/model/prompt/completion/cache/ttft/tps），即控制台 Activity 页数据；`p` 分页 + `page_size` 上限 100 + `type=2`。**本地补充**：只读 `~/.dimcode/v2/dimcode.sqlite` 的 `usage_run_stats` 中第三方通道记录（如 `custom-ollama-cloud-042036d3` → `ollama-cloud`，vendor merge 并入 `ollama` 组；`grok-build` → `xai-official`，与 grok-cli 的 xAI 官方用量合并计费），并排除所有已有逐请求计量的通道避免双计：`dimcode-api-oauth`（与 API 源双计）、`workbuddy`（与 `dim-agent` 源双计）、`grok-build-proxy`（与 grok 代理日志双计）、`ollama-cloud-proxy`（与 `ollama-proxy` 源双计）、`cc-proxy`（与 `cc-proxy` 源双计——displayName "Command Code" 曾被 slug 成 provider `command-code` 单独出现在 vendor 图表中，2026-09-12 修复 + store 一次性迁移清除）（`DIM_LOCAL_DB_PATH` 可覆盖库路径；`DIM_DB_PATH` 已废弃）。旧 per-run 记录在首次成功同步后被一次性迁移清除。**冷启动 watermark**：store `sync_watermarks` 表的 `dim_console_last_id` 记录已见最大 id，`finish_sync` 在每次成功同步后持久化（2026-09-13 接线，此前该写入从未发生→每次冷启动全量翻页 ~279 页 ≈90s）；冷启动从 watermark 续读只拉增量。**注意**：legacy per-run 行的一次性 purge（`purge_dim_legacy`）门槛是 `full_backfill_done`（本进程做过**从零**全量回填）而非 `last_sync_completed`——从 watermark 续读得到的只是增量指纹集合，若当全量历史用会把全部历史 dim 行误删 |
 | 14 | `ccswitch` | `~/.cc-switch/cc-switch.db` | 仅当设置了 `USE_CC_SWITCH` 环境变量才加载（`CCSWITCH_DB_PATH` 可覆盖） |
 | 15 | `codebuddy` | `~/.codebuddy/projects/**/*.jsonl` | JSONL；事件的 `providerData.rawUsage` 含 credits 与 token 用量（`CODEBUDDY_PROJECTS_PATH` 可覆盖） |
-| 16 | `cc-proxy` | `~/.token-stats/cc-proxy-usage.jsonl` | JSONL，由内置 loopback Command Code 代理写入（`CC_PROXY_USAGE_LOG_PATH` 可覆盖）；`provider=commandcode`（成本走 `cc:` 价格 ÷ `commandcode_divisor`），`model` 已剥 vendor 前缀 |
+| 16 | `cc-proxy` | `~/.token-stats/cc-proxy-usage.jsonl` | JSONL，由内置 loopback Command Code 代理写入（`CC_PROXY_USAGE_LOG_PATH` 可覆盖）；`provider=commandcode`（成本走 `cc:` 价格 ÷ `commandcode_divisor`），`model` 已剥 vendor 前缀。**该代理同时服务 DimAgent 与 ZCode 的 `commandcode` 通道**，两个客户端的逐请求用量都只在这里计量（ZCode 侧的 `model_usage` 重复行已被 zcode 源排除） |
 | 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | JSONL，由 workbuddy CLIProxyAPI 插件（`~/workbuddy-proxy`，systemd 服务 `token-stats-workbuddy.service`）写入——DimAgent 经 Tencent CodeBuddy Web API 的请求；`provider=codebuddy`（成本走 `codebuddy_cny_per_credit` 积分换算，与原生 codebuddy 源同一计费公式），`WORKBUDDY_USAGE_LOG_PATH` 可覆盖 |
 | 18 | `ollama-proxy` | `~/.token-stats/ollama-usage.jsonl` | JSONL，由 `ollama-usage` CLIProxyAPI 插件（`~/workbuddy-proxy/ollama-usage-plugin`，与 workbuddy 同实例）写入——DimAgent 经 CPA `ollama-cloud` 上游（`ollama/` 前缀）的**逐请求**用量，含 TTFT/TPS；`provider=ollama-cloud`（vendor merge 并入 `ollama`，成本走经验费率），`OLLAMA_PROXY_USAGE_LOG_PATH` 可覆盖 |
 
@@ -215,15 +215,16 @@ ollama-cloud 按 run 行，之前的保留为历史；`app.rs` 在 cutoff 已知
 | Kimi / Kimi EX | `https://auth.kimi.com` 刷新 token 后查 `/usages` | `KIMI_CREDENTIALS_PATH` / `KIMI_CREDENTIALS_PATH_EX`；EX 默认指向 `~/.kimi-code-user2/credentials/kimi-code.json`；`KIMI_AUTH_BASE_URL` 可覆盖 |
 | OpenCode Go / OpenCode Go EX | HTTP 抓取 `https://opencode.ai/workspace/{id}/go` 的 `<div data-slot="usage">`（`reqwest`+`scraper`） | `OPENCODE_GO_WORKSPACE_ID(_EX)` + `OPENCODE_GO_AUTH_COOKIE(_EX)` |
 | Xiaomi MiMo | MiMo token 计划 API | `XIAOMI_MIMO_SERVICE_TOKEN` + `XIAOMI_MIMO_USER_ID` |
-| Command Code | `https://api.commandcode.ai`（`/alpha/billing/subscriptions`、`/alpha/billing/credits`、`/alpha/usage/summary`）；主账号从 `~/.commandcode/auth.json` 的 `apiKey`（Bearer），第二账号（EX）从 `auth*.json`（如 `auth_frank.json`）；无 auth 文件时回退 `COMMANDCODE_SESSION_TOKEN` cookie（`/internal/*` 旧路由） | `COMMANDCODE_SESSION_TOKEN` 作为 `__Secure-commandcode_prod_.session_token` cookie（仅回退） |
+| Command Code | `https://api.commandcode.ai`（`/alpha/billing/subscriptions`、`/alpha/billing/credits`、`/alpha/usage/summary`）；主账号从 `~/.commandcode/auth.json` 的 `apiKey`（Bearer），第二账号（EX）从 `auth*.json`（如 `auth_frank.json`）——与主账号 apiKey/userId 相同的重复 auth*.json 会被跳过（否则 EX 卡会显示主账号）；无 auth 文件时回退 `COMMANDCODE_SESSION_TOKEN` cookie（`/internal/*` 旧路由） | `COMMANDCODE_SESSION_TOKEN` 作为 `__Secure-commandcode_prod_.session_token` cookie（仅回退） |
 | CodeBuddy 套餐 | `www.codebuddy.cn` billing meter API（`POST /billing/meter/get-user-resource-summary` 取各套餐包周期总量/剩余，`POST /billing/meter/get-user-resource` 取套餐名与周期；即 `/profile/plans-usage` 页同源接口）。**必需 `session` + `session_2` 两个 cookie**（单 `session` 返回 401）；边缘 WAF 拒绝过旧 Chrome UA（Chrome/126 被拦、152 可过）。cookie 从 Chrome 提取：`scripts/extract-codebuddy-cookies.sh`（约 30 天过期需重取） | `CODEBUDDY_SESSION_COOKIE` + `CODEBUDDY_SESSION_COOKIE_2`（仅 cookie 值） |
 | Ollama Cloud | Ollama 云端 API | `OLLAMA_AUTH_COOKIE`（`__Secure-session=...`） |
 | Meituan LongCat | 美团 API | `MEITUAN_AUTH_COOKIE`（`passport_token_key`） |
 | Fenno / Fenno EX | `https://api.fenno.ai/api/v1/subscriptions/active` | `FENNO_AUTH_TOKEN` + `FENNO_REFRESH_TOKEN` 引导凭据管理器；轮换凭据持久化到 `FENNO_AUTH_STATE_PATH`（默认 `~/.config/token-stats/fenno-auth.json`）并自动刷新 |
 | Grok | 基于 `grok-cli` 记录 + 订阅配额页面 | `grok_proxy.rs` 读取的用量记录；配额逻辑在 `quota/grok.rs` |
 | Ainaiba 余额 | `api-xai.ainaibahub.com` | `YAI_API_KEY`（`/api/ainaiba-credit` 端点） |
+| ZAI | `api.zairouter.com` 的 `/dashboard/info` + `/dashboard/live` + `/dashboard/status`（Bearer `ZAI_API_KEY`）——账户、到账卡、逐模型日/月用量、`suspended`。**计费**：充值 **1 元 = 1 美元额度**（订单实测 `amount`=10000 分 → `credit_amount`=100.0），但按平台内部价目表扣费，**不对外公布且不是官方价的统一倍数**；实测费率登记在 `pricing.toml` 的 `[[zai_model]]`（见"成本计算"）。`claude-haiku-4-5` 在该订阅下不可用（平台返回 long-context beta 未开通）。余额符号取决于账号 `factor`（1→`¥`，否则 `$`），本机 `factor=1` 但 1:1 兑换使两者数值相同 | `ZAI_API_KEY`（浏览器控制台/`~/.bash_env`）。注意与 `YAI_API_KEY` 是**两个不同账号**（充值独立、倍率独立） |
 | DimAgent | **主路径**：本地 `dim usage --json`（CLI 自动发现，见 `quota/dimagent.rs`；OAuth 凭据在 `~/.dimcode/v2/auth.json`，CLI 自动刷新，无需任何环境变量）。**回退**：console API `dimagent.cn/api`（`/me/subscription` + `/me/credits` + `/me/feature-meters` + `/user/quota-estimate`） | `DIMAGENT_SESSION_COOKIE`（浏览器 `session` cookie 值）仅用于回退和近 30 天统计增强；`DIM_USAGE_BIN` 可覆盖 CLI 二进制 |
-| ZCode | **主路径**：BigModel monitor API（逆向 ZCode 桌面应用 app.asar 得出，`quota/zcode.rs`）：`GET open.bigmodel.cn/api/monitor/usage/quota/limit`（套餐 level + 限额窗口；裸 apiKey 放 `authorization` 头，无 Bearer 前缀）+ `GET open.bigmodel.cn/api/biz/subscription/list`（套餐名/续订/到期）。apiKey 从 `~/.zcode/v2/config.json` 的 `provider["builtin:bigmodel-coding-plan"].options.apiKey` 读取（应用自动轮换）。**用量半区**：`source='zcode'` 内存记录聚合（今日/累计 调用、tokens、成本）。**字段语义陷阱**：`usage`=窗口总量、`currentValue`=已用、`remaining`=剩余、`percentage`=已用百分比（currentValue/usage）——命名有误导，前端统一走 `zcodeWindowUsage()`。60s 缓存防 30s 轮询打满；远程失败但本地有记录时 `available:true` + `data.quota_error` 降级显示 | `ZCODE_BIGMODEL_USAGE_API_KEY` / `ZCODE_BIGMODEL_USAGE_QUOTA_URL`（与应用自身 env 名一致）、`ZCODE_CONFIG_PATH`（默认 `~/.zcode/v2/config.json`） |
+| ZCode | **主路径**：BigModel monitor API（逆向 ZCode 桌面应用 app.asar 得出，`quota/zcode.rs`）：`GET open.bigmodel.cn/api/monitor/usage/quota/limit`（套餐 level + 限额窗口；裸 apiKey 放 `authorization` 头，无 Bearer 前缀）+ `GET open.bigmodel.cn/api/biz/subscription/list`（套餐名/续订/到期）。apiKey 从 `~/.zcode/v2/config.json` 的 `provider["builtin:bigmodel-coding-plan"].options.apiKey` 读取（应用自动轮换）。**用量半区**：`source='zcode'` 内存记录聚合（今日/累计 调用、tokens、成本），其中 `provider='bigmodel-start'`（体验套餐）行被排除、单独进 `data.startPlan`（本地账本：grantTokens 总量默认 3 亿 / usedTokens / remainingTokens / calls；monitor API 拒收 start-plan key 返回 401，无远端半区）。**字段语义陷阱**：`usage`=窗口总量、`currentValue`=已用、`remaining`=剩余、`percentage`=已用百分比（currentValue/usage）——命名有误导，前端统一走 `zcodeWindowUsage()`。60s 缓存防 30s 轮询打满；远程失败但本地有记录时 `available:true` + `data.quota_error` 降级显示 | `ZCODE_BIGMODEL_USAGE_API_KEY` / `ZCODE_BIGMODEL_USAGE_QUOTA_URL`（与应用自身 env 名一致）、`ZCODE_CONFIG_PATH`（默认 `~/.zcode/v2/config.json`） |
 
 **DimAgent console API 逆向结论**（`quota/dimagent.rs` / `sources/dim.rs` 验证过）：
 - `GET /api/user/self`、`/api/log/self`（逐次调用明细：`prompt_tokens`/`completion_tokens`/`cache_tokens`/`use_time_ms`/`ttft_ms`/`tps`/`model_name`/`token_name`）、`/api/user/daily-stats`（按日汇总：各 token 字段 + `request_count` + `quota_consumed`）、`/api/me/subscription`、`/api/me/credits`、`/api/me/feature-meters`、`/api/user/quota-estimate` —— 全部只需 `session` cookie（GET）。
@@ -354,7 +355,7 @@ cache_hit_ratio = cache_read_tokens / (input_tokens + cache_read_tokens) × 100%
 
 | 来源 | 原始约定 | 解析器处理 |
 |------|---------|-----------|
-| Codex / Qoder / Qoder CN | OpenAI：`input_tokens` **包含** cache read | 减去：`effective_input = input_tokens - cache_read_tokens` |
+| Codex / Qoder（`qoder-cli`、`qoder-desktop`） | OpenAI：`input_tokens` **包含** cache read | 减去：`effective_input = input_tokens - cache_read_tokens` |
 | Dim（console API） | OpenAI/OpenCode 式：`prompt_tokens` **包含** cache（`cache_tokens`） | 减去：`effective_input = prompt_tokens - cache_tokens`；`cache_write = 0`（API 无 cache 写入字段） |
 | Command Code `cmd` | OpenAI：`inputTokens` **包含** `cacheReadTokens` | 解析时减去（存原始 input 会双计缓存且把命中率封顶在 50%） |
 | Pi-via-Command-Code | 同上 | 在 `load_all_sources()` 中减去 |
@@ -444,6 +445,19 @@ providers = ["openai", "ainaiba", "xai"]
   支持按时间分段；DeepSeek 用 `input_cny/output_cny/cache_read_cny/cache_write_cny`
   （CNY 定价，**不经过汇率换算**）；`yairouter_model` 是 Yairouter 专属覆盖（如 GPT-5.6
   于 2026-08-17 恢复原价，仅作用于该 provider）。
+  **Yairouter `gpt-6-astra` 实际服务模型不符（2026-09-18 受控探针验证）**：向
+  `api.yairouter.com/responses` 请求 `gpt-6-astra`（带不带 codex 的
+  `x-codex-routing-hint` 头都一样），响应 `response.model` 均为 **`gpt-5.6-luna`**；
+  sol/luna/terra 则请求什么服务什么。但**计费按请求模型 `gpt-6-astra` 的列表价**
+  走（`/dashboard/live` 的 `ModelUsage.gpt-6-astra` 增量与
+  `(input×$10 + output×$50)/1M × factor(7)` 分毫不差，luna 条目不动）——即
+  花 astra 价买到的是 luna。因此 token-stats 按 `turn_context` 请求模型计费
+  **与实际扣费一致，无需修改**；codex 本地数据（rollout / logs_2.sqlite）只记
+  请求模型，**拿不到**实际服务模型，无法在解析器侧检测此调包。修复只能在
+  codex 配置层（停用/绕开 astra）或向平台反馈。探针脚本思路：POST
+  `/responses` + `stream:true`，比对 `response.created`/`response.completed`
+  里的 `model` 字段与请求模型；计费口径用 `/dashboard/live` 的
+  `daily_usage.ModelUsage.<model>.CreditUsed` 前后差值验证。
 - **Command Code**：`cc:` 前缀模型为 Command Code 列表价（部分模型带 `peak_hours_utc`
   峰谷价，DeepSeek 2026-08-16 起实施）；实际成本 = 列表价 / `commandcode_divisor` → CNY。
   **2026-09-09 新增 `deepseek-v4.1-flash`**（CLI v1.53.0，v4-flash 同价，Go 计划页确认）：
@@ -454,8 +468,12 @@ providers = ["openai", "ainaiba", "xai"]
   `ModelPriceConfig.peak_weekdays_only`（+ `TimeSegment.peak_weekdays_only`）实现，已同时
   用于 cc 的 v4-pro / v4-flash / v4.1-flash；官方免费模型（`cc:laguna-s-2.1-free`）显式记 0，
   以便计入调用次数而不被当作「无价格」剔除。
-- **CodeBuddy**：记录的 `cost` 保存原始 credits；实际成本 = credits × `codebuddy_cny_per_credit`
-  （国内版连续包月活动价 70 元 / 4000 credits = 0.0175 元/credit，直接人民币计价，不经过汇率）。
+- **CodeBuddy**：记录的 `cost` 保存原始 credits；实际成本 = credits × 每 credit 单价（直接人民币
+  计价，不经过汇率）。单价由 `codebuddy_cny_per_credit`（历史基准：连续包月活动价 70 元 /
+  4000 credits = 0.0175）与 `codebuddy_credit_segments`（套餐升级分段）共同决定：取最近一个
+  已生效的 `effective_from`，早于所有分段的记录沿用基准价。**2026-09-14 13:00 CST** 起升级为
+  140 元 / 9000 credits = 0.0155556 元/credit（比原价低约 11%）。`codebuddy` 与 `dim-agent`
+  两个 source 共用该公式，均按记录时间选段（改价只影响新记录，历史波动不会被追溯改写）。
 - **Kimi 订阅**：`kimi_api_models`（CNY/1M，cache write 免费）+ `kimi_subscription_multiplier`
   （默认 20，设置抽屉可调、持久化）：`成本 = (input×in + cache_read×cr + output×out) / 1M / 倍率`。
 - **OpenCode**：原始 cost / `opencode_divisor`（6.0）；`opencode_model_segments` 可按模型+
@@ -477,6 +495,19 @@ providers = ["openai", "ainaiba", "xai"]
   （0.477273 / 1.590909 / 0.095455）；无价格模型的记录显示 N/A。
 - **Ainaba**：`USD × ainaba_platform_rate(7.0) / ainaba_segments 分段 divisor`（平台固定汇率，
   不随市场波动）。
+- **Qoder**（provider=`qoder`，`qoder-cli` / `qoder-desktop` 源）：当前套餐**免费**（模型目录
+  `isFree: true` + `priceFactor: 0`），`pricing.toml` 的 `[special] qoder_free = true` 让
+  `display_cost()` 直接返回 ¥0，而不是落到「无价目条目 → N/A」从而被聚合统计剔除。套餐转付费后
+  关掉该开关并登记 `[[model]]` 价目即可回到通用路径。
+- **ZAI**（provider=`zai`，claude-code 源）：**不公布价目表**，实收费率也**不是官方价的统一
+  倍数**，因此 `pricing.toml` 直接登记**平台实收费率**（USD/1M，`[[zai_model]]`），
+  `成本 = 实收费率 × zai_rate_cny_per_usd(1.0)`。充值 **1 元 = 1 美元额度**（订单实测
+  `amount`=10000 分 → `credit_amount`=100.0），故该值恒为 1 元/美元。实测费率
+  （2026-09-15，受控探针 + 当天日账交叉验证）：
+  `claude-fable-5-1`/`mythos-5-1` 25/100/0.63/50（官方 10/50/0.25/12.5）；
+  `claude-opus-5`/`4-8`/`4-7`/`4-6` 5/25/0.50/10（官方缓存写 6.25，实收走 1h 档）；
+  `claude-sonnet-5`/`4-6`/`4-5` 3/15/0.30/6。已确认无长上下文分档（273K 输入同费率）。
+  未登记模型回落官方 `[[model]]` 价（不会显示 N/A）。`claude-haiku-4-5` 在该订阅不可用。
 - **订阅类折扣**：`freemodel_divisor`（=汇率/0.1）、`fenno_divisor`、`grok_divisor`；
   Ollama 用经验 per-token 价 + 模型倍率（`deepseek-v4-flash` / `deepseek-v4.1-flash` 均为 0.2，未登记模型回落 1.0）；讯飞订阅按次计
   （`xunfei_per_call` × 波谷系数 0.8，`peak_hours=[8,22]` + 节假日表）；
@@ -487,7 +518,9 @@ providers = ["openai", "ainaiba", "xai"]
   6.9/1.7/24，配 `zcode_list_rates`）——积分系数即官方列表价（元/M tokens）。高峰
   （周一至周五 14:00–18:00 CST）按 1×，其余时段按 50% 抵扣（`zcode_off_peak_factor`）；
   夜间畅用活动期内（2026-09-03~09-20，每日 23:00–09:00 CST）ZCode 端消耗为 0
-  （`zcode_night_free_*`）；但活动自 **2026-09-13 06:15 CST** 起才实际生效
+  （`zcode_night_free_*`），**仅限 GLM-5.3-Flash**（`zcode_night_free_models`
+  白名单，2026-09-14 修正；GLM-5.3 夜间照常按高峰/波谷因子扣积分）；但活动自
+  **2026-09-13 06:15 CST** 起才实际生效
   （此前用的旧版 ZCode 客户端不享受免扣，服务端照常扣积分）——该时刻之前落在
   窗口内的记录按正常波谷 0.5× 计费，由
   `zcode_night_free_effective_from`（RFC3339 含时区）控制，None = 窗口全程免费。
@@ -566,8 +599,8 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `KIMI_CREDENTIALS_PATH` | `~/.kimi-code/credentials/kimi-code.json`（优先，存在时）；回退 `~/.kimi/credentials/kimi-code.json` | 主账号凭据 |
 | `KIMI_CREDENTIALS_PATH_EX` | `~/.kimi-code-user2/credentials/kimi-code.json` | EX（kimi2）账号凭据 |
 | `KIMI_AUTH_BASE_URL` | `https://auth.kimi.com` | Kimi 认证基址 |
-| `QODER_PROJECTS_PATH` | `~/.qoder/projects` | Qoder 会话目录覆盖 |
-| `QODER_CN_SESSIONS_PATH` | `~/.qoder-cn/logs/sessions` | Qoder CN 会话目录覆盖 |
+| `QODER_SESSIONS_PATH` | `~/.qoder/logs/sessions` | qoder-cli（国际版 CLI）段日志目录覆盖（旧版 `QODER_PROJECTS_PATH` 指向的 `~/.qoder/projects` 已无 usage 数据，随解析器重写废弃） |
+| `QODER_CN_SESSIONS_PATH` | `~/.qoder-cn/logs/sessions` | qoder-desktop（Qoder Desktop 内嵌 SDK）段日志目录覆盖 |
 | `GROK_USAGE_LOG_PATH` | `~/.token-stats/grok-usage.jsonl` | Grok 用量日志覆盖 |
 | `GROK_PROXY_PORT` | `3434` | loopback Grok 代理端口 |
 | `CC_PROXY_PORT` | `8787` | loopback Command Code 代理端口（DimAgent 接入） |
@@ -587,6 +620,7 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 | `ZCODE_CONFIG_PATH` | `~/.zcode/v2/config.json` | ZCode 桌面应用配置路径覆盖（ZCode 配额卡读其中编码套餐 apiKey） |
 | `ZCODE_BIGMODEL_USAGE_API_KEY` | 未设置 | ZCode 配额卡 BigModel apiKey 覆盖（与 ZCode 应用自身 env 名一致；未设置时读 config.json） |
 | `ZCODE_BIGMODEL_USAGE_QUOTA_URL` | `https://open.bigmodel.cn/api/monitor/usage/quota/limit` | ZCode 配额卡 quota 端点覆盖（与 ZCode 应用自身 env 名一致） |
+| `ZCODE_START_PLAN_TOTAL_TOKENS` | `300000000` | ZCode 体验套餐（Weekend Build 赠量）总额度 token 数覆盖；配额卡 `start_plan` 统计的分母 |
 | `DSH_SESSIONS_PATH` | `~/.dsh/sessions` | DSH 会话目录覆盖 |
 | `DIM_DB_PATH` | 已废弃 | 旧版 Dim 本地 SQLite 库路径，console API 源不再使用 |
 | `DIM_LOCAL_DB_PATH` | `~/.dimcode/v2/dimcode.sqlite` | dim 源本地补充库路径（第三方通道 per-run 记录，如 ollama cloud） |
@@ -670,7 +704,12 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 6. **Kimi 成本是估算** — Kimi CLI/Code 不报原生 cost；按
    `kimi_api_models` API 原价 ÷ `kimi_subscription_multiplier` 估算。
 7. **零 token 记录** — 默认从聚合与明细中排除（429 等）；`show_zero_tokens=true` 仅影响
-   明细。`exclude_zero_tokens` 是 `FilterCriteria` 的统一开关。
+   明细。`exclude_zero_tokens` 是 `FilterCriteria` 的统一开关。**例外**：
+   `aggregator::counts_in_stats()` 在 `TokenRecord::counts_as_call_without_tokens()`
+   为真时保留零 token 记录——目前只有 `qoder-desktop`（服务端不回传 usage，token 恒 0
+   但调用真实存在），统计/筛选/RPM 与「请求明细」四处都走这个判断（`paginate_requests`
+   复用 `filter_records`），所以 desktop 的逐次调用默认可见，无需勾选显示零 token；
+   其余零 token 记录（429 等）仍按 `show_zero_tokens` 控制。
 8. **排序稳定性** — 请求按 time DESC，再 source ASC、provider ASC、model ASC。
 9. **部署** — `deploy.sh` 蓝绿：构建 → 备用端口起新实例 → 健康检查 → 切 nginx upstream →
    排空旧实例；首次部署会把旧 `token-stats.service` 迁移为 `token-stats@.service`。
@@ -726,3 +765,29 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
     重启实例；`--dry-run` 只提取不改）。注意 `session`/`session_2` 是 Flask 签名会话，
     值里含 `|`，写入 systemd `Environment=` 时 `|` 是合法的（不能带引号嵌套），
     但 `%` 必须转义为 `%%`（deploy.sh 的 `inject_env_dropin` 已处理）。
+17. **部署不能直接跑 `./deploy.sh`：备用端口残留实例 + 凭据环境**（2026-09-14 发现）—
+    deploy.sh 对**已 active** 的 `systemctl start token-stats@<备端口>` 是 no-op，
+    健康检查照样通过 → nginx 切过去后实际仍在跑**旧二进制**（新代码/新 pricing.toml
+    静默不生效）。另外 deploy.sh 依赖**当前 shell** 里的凭据环境变量：变量缺失时它会先
+    `clear_env_dropins` 再注入空值，新实例直接丢光所有凭据（配额卡、dim 源全挂）。
+    正确入口：`./scripts/deploy-dashboard.sh` —— 自动读 nginx upstream 找出备用端口
+    并停掉残留实例、`source ~/.config/token-stats/deploy-env.sh` 后再 exec deploy.sh。
+    注意仍需 sudo（写 `/etc/systemd/system`、`/var/www`、nginx 配置并 reload）。
+18. **CodeBuddy 积分单价按套餐分段** — `codebuddy_cny_per_credit` 是**历史基准**
+    （70 元 / 4000 credits = 0.0175），套餐升级走 `codebuddy_credit_segments`
+    （2026-09-14 13:00 CST 起 140 元 / 9000 credits ≈ 0.0155556，低约 11%）。
+    改基准值会**追溯改写全部历史**（含 9/1 之前），所以换套餐务必加分段而不是改基准；
+    `source` 为 `codebuddy` 与 `dim-agent` 的记录共用该公式，都按 `record.time` 选段。
+19. **ZCode 的 `commandcode` 通道 = 内置 cc-proxy，会逐请求双计**（2026-09-19 修复）—
+    ZCode 用 `127.0.0.1:8787` 当自定义 provider，因此同一次调用既有代理写的
+    `cc-proxy` 记录、又有 ZCode `model_usage` 行（时间只差 ~30ms、模型名带 `deepseek/`
+    前缀），请求明细里成对出现，tokens/成本/调用次数全部翻倍，ZCode 配额卡的
+    今日/累计用量也被带偏（它聚合 `source='zcode'`）。修复：`sources/zcode.rs` 用
+    `PROXY_METERED_PROVIDERS` 在解析期丢弃该通道（代理日志为空时**不**丢，此时
+    zcode 行是唯一点量）+ 启动迁移 `store.purge_zcode_commandcode()` 清历史行。
+    排查手法：`select time,source,model,input_tokens,output_tokens,cache_read_tokens
+    from token_records where provider='commandcode' order by time desc` 看是否成对。
+    **注意**：同一实例上 ZCode 还把 CPA（`wb/`、`ollama/` 前缀模型）与 Grok 通道
+    当 provider 用，这些行没有计费元数据、回落成 `opencode-go`，目前各只有 1 行
+    （2026-09-15 试验期），若将来流量变大需按同样办法排除（与 `dim-agent` /
+    `ollama-proxy` / `grok-cli` 源双计）。

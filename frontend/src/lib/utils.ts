@@ -163,8 +163,8 @@ export const SOURCE_COLORS: Record<string, string> = {
   "kimi-code": "#d946ef", // fuchsia-500
   opencode: "#fb923c", // orange-400
   "xiaomi-mimo-tp": "#f43f5e", // rose-500
-  qoder: "#14b8a6", // teal-500
-  "qoder-cn": "#0d9488", // teal-600
+  "qoder-cli": "#14b8a6", // teal-500
+  "qoder-desktop": "#0d9488", // teal-600
   meituan: "#facc15", // yellow-400
   "grok-cli": "#e11d48", // rose-600
   "cc-proxy": "#f472b6", // pink-400 (DimAgent via Command Code)
@@ -189,6 +189,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   opencode: "#fb923c",     // orange-400
   tokenrouter: "#a3e635",   // lime-400
   bigmodel: "#3b82f6",      // blue-500 (Zhipu GLM coding plan via zcode)
+  "bigmodel-start": "#93c5fd", // blue-300 (ZCode 体验套餐 / Weekend Build 赠量)
   "xiaomi-mimo": "#ef4444", // red-500
   anthropic: "#6366f1",    // indigo-500
   openai: "#06b6d4",       // cyan-500
@@ -196,6 +197,7 @@ export const VENDOR_COLORS: Record<string, string> = {
   qoder: "#14b8a6",       // teal-500
   meituan: "#facc15",      // yellow-400
   fenno: "#0ea5e9",        // sky-500
+  zai: "#a855f7",          // purple-500 (ZAI Router relay)
 };
 
 export function getVendorColor(vendor: string): string {
@@ -213,6 +215,8 @@ export const VENDOR_LABELS: Record<string, string> = {
   "yai-router": "Yairouter",
   yairouter: "Yairouter",
   fenno: "Fenno",
+  "bigmodel-start": "BigModel 体验",
+  zai: "ZAI",
 };
 
 export function getVendorLabel(vendor: string | undefined): string {
@@ -237,8 +241,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   "kimi-code": "Kimi Code",
   opencode: "OpenCode",
   "xiaomi-mimo-tp": "Xiaomi MiMo TP",
-  qoder: "Qoder",
-  "qoder-cn": "Qoder CN",
+  "qoder-cli": "Qoder CLI",
+  "qoder-desktop": "Qoder Desktop",
   meituan: "美团 LongCat",
   "grok-cli": "Grok CLI",
   "cc-proxy": "Dim→CC",

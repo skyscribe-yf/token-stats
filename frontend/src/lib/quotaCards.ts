@@ -21,6 +21,7 @@ export const QUOTA_CARD_DEFS: QuotaCardDef[] = [
   { key: "grok", label: "Super Grok", matches: (id) => id === "quota-grok" },
   { key: "dimagent", label: "DimAgent", matches: (id) => id === "quota-dimagent" },
   { key: "zcode", label: "ZCode", matches: (id) => id === "quota-zcode" },
+  { key: "zai", label: "ZAI", matches: (id) => id === "quota-zai" },
 ];
 
 export function isQuotaCardHidden(
