@@ -20,9 +20,9 @@ use std::path::PathBuf;
 /// `openai`) are ignored — the bigmodel coding plan speaks the Anthropic
 /// protocol and would otherwise mislabel GLM traffic as `anthropic`;
 /// provider_ids without billing metadata fall back to a channel-based
-/// default (`builtin:bigmodel-start-plan` → `bigmodel-start` (trial grant),
-/// other `builtin:bigmodel*` → `bigmodel`, else the historical
-/// `opencode-go`).
+/// default (any `bigmodel*` coding-plan channel — `builtin:` or the
+/// account-bound `account:` namespace — → `bigmodel`, a `*start-plan`
+/// trial channel → `bigmodel-start`, else the historical `opencode-go`).
 ///
 /// Rows of channels whose traffic a loopback proxy already meters per request
 /// (`PROXY_METERED_PROVIDERS`, currently `commandcode` → the built-in
@@ -102,19 +102,28 @@ fn cc_proxy_is_metering() -> bool {
 }
 
 /// Fallback provider when a provider_id carries no billing metadata:
-/// the built-in BigModel coding-plan channel is Zhipu GLM traffic; older
+/// BigModel GLM Coding Plan channels are Zhipu GLM traffic; older
 /// sessions without metadata rode the OpenCode Go subscription.
 ///
-/// The Weekend Build trial channel (`builtin:bigmodel-start-plan`, the 3 亿
-/// token grant) is split into its own provider so its traffic stays
+/// The channel id is namespaced by how it got into ZCode — `builtin:` for
+/// the plan shipped with the client, `account:` for a plan bound to the
+/// signed-in BigModel account (e.g. `account:bigmodel-individual-coding-plan`)
+/// — so the namespace is stripped before matching: both are the same
+/// subscription and must bill identically.
+///
+/// The Weekend Build trial channel (`*:bigmodel-start-plan` / `*:zai-start-plan`,
+/// the 3 亿 token grant) is split into its own provider so its traffic stays
 /// separable from paid-plan credits: the grant does not consume plan
 /// credits, so `display_cost()` bills it 0 and the ZCode quota card
-/// accounts it separately. Must be matched before the generic
-/// `builtin:bigmodel` prefix.
+/// accounts it separately. Must be matched before the generic `bigmodel`
+/// prefix.
 fn default_provider_for(provider_id: &str) -> String {
-    if provider_id == "builtin:bigmodel-start-plan" || provider_id == "builtin:zai-start-plan" {
+    let channel = provider_id
+        .rsplit_once(':')
+        .map_or(provider_id, |(_, tail)| tail);
+    if channel.ends_with("start-plan") {
         "bigmodel-start".to_string()
-    } else if provider_id.starts_with("builtin:bigmodel") {
+    } else if channel.starts_with("bigmodel") {
         "bigmodel".to_string()
     } else {
         "opencode-go".to_string()
@@ -290,13 +299,7 @@ impl ZcodeSource {
                         date,
                         time,
                         api_key_prefix: "N/A".to_string(),
-                        // Billing provider from provider_metadata_json;
-                        // provider_ids without billing metadata fall back
-                        // to a channel-based default.
-                        provider: billing
-                            .get(&provider_id)
-                            .cloned()
-                            .unwrap_or_else(|| default_provider_for(&provider_id)),
+                        provider,
                         original_provider: None,
                         model: model_id,
                         source: "zcode".to_string(),
@@ -626,6 +629,59 @@ mod tests {
             records.iter().map(|r| r.provider.as_str()).collect();
         providers.sort_unstable();
         assert_eq!(providers, vec!["bigmodel", "bigmodel-start"]);
+    }
+
+    #[test]
+    fn account_bound_bigmodel_channels_match_the_builtin_plan() {
+        // Binding a BigModel plan to the signed-in account creates an
+        // `account:`-namespaced channel that carries no billing metadata, so
+        // it used to fall through to the historical `opencode-go` default and
+        // billed GLM Coding Plan traffic with the wrong formula.
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage (
+                id text primary key, logical_request_id text not null,
+                session_id text not null, query_source text not null,
+                provider_id text not null, model_id text not null,
+                status text not null, started_at integer not null,
+                completed_at integer,
+                time_to_first_token_ms integer,
+                input_tokens integer not null default 0,
+                output_tokens integer not null default 0,
+                cache_creation_input_tokens integer not null default 0,
+                cache_read_input_tokens integer not null default 0,
+                provider_metadata_json text
+            );",
+        )
+        .unwrap();
+        for (id, pid) in [
+            ("paid", "account:bigmodel-individual-coding-plan"),
+            ("trial", "account:bigmodel-start-plan"),
+            ("other", "c3e8e966-ec13-4e19-a715-977b874971d9"),
+        ] {
+            conn.execute(
+                "INSERT INTO model_usage (id, logical_request_id, session_id,
+                    query_source, provider_id, model_id, status, started_at,
+                    completed_at, time_to_first_token_ms, input_tokens,
+                    output_tokens, cache_creation_input_tokens,
+                    cache_read_input_tokens, provider_metadata_json)
+                 VALUES (?1, 'r', 's', 'main_turn', ?2, 'GLM-5.3-Flash',
+                         'completed', 1786539125181, 1786539126181, 50,
+                         100, 20, 0, 0, '{\"rawFinishReason\":\"end_turn\"}')",
+                rusqlite::params![id, pid],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let records = ZcodeSource::parse(&db_path);
+        assert_eq!(records.len(), 3);
+        let mut providers: Vec<&str> =
+            records.iter().map(|r| r.provider.as_str()).collect();
+        providers.sort_unstable();
+        assert_eq!(providers, vec!["bigmodel", "bigmodel-start", "opencode-go"]);
     }
 
     #[test]

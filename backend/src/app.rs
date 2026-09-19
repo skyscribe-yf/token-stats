@@ -130,6 +130,16 @@ impl AppState {
         // Must run before `load_all()` — see the helper's doc comment.
         store.purge_zcode_start_plan_bigmodel();
 
+        // ── ZCode account-plan relabel migration ─────────────────────────
+        // A BigModel plan bound to the signed-in account (`account:` channel
+        // namespace) has no billing metadata and fell through to the
+        // historical `opencode-go` default, so its GLM traffic was billed and
+        // charted as OpenCode Go. The source now maps any `bigmodel*` channel
+        // to `bigmodel`; delete the mislabeled window so the full source
+        // re-parse below re-ingests it under the correct provider.
+        // Must run before `load_all()` — see the helper's doc comment.
+        store.purge_zcode_account_plan_opencode_go();
+
         // Restore history from the durable store, then ingest whatever the
         // session logs contain that isn't persisted yet.
         let db_records = store.load_all();

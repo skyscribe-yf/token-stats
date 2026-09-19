@@ -605,6 +605,51 @@ impl TokenStore {
         deleted
     }
 
+    /// One-time migration helper for ZCode channels in the `account:`
+    /// namespace (a BigModel plan bound to the signed-in account, e.g.
+    /// `account:bigmodel-individual-coding-plan`).
+    ///
+    /// Those rows carry no billing metadata and the fallback only recognised
+    /// the `builtin:` namespace, so the plan's GLM traffic was persisted as
+    /// `provider='opencode-go'` — wrong vendor in the charts and the wrong
+    /// billing formula (OpenCode Go divisor instead of the BigModel credit
+    /// formula). The source now maps any `bigmodel*` channel to `bigmodel`, so
+    /// delete the mislabeled window and let the startup re-parse re-ingest it
+    /// under the correct provider. Like `purge_zcode_start_plan_bigmodel` this
+    /// runs BEFORE `load_all()` (see `AppState::new`); the zcode DB still
+    /// holds every row, so the history comes back with identical fingerprints.
+    /// Cutoff = first `account:`-plan usage (2026-09-19 22:18 CST) with a
+    /// margin, and `GLM%` keeps any genuine OpenCode Go traffic out of the
+    /// window. Idempotent (later runs delete nothing).
+    pub fn purge_zcode_account_plan_opencode_go(&self) -> usize {
+        const CUTOFF: &str = "2026-09-19T14:00:00+00:00";
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                "DELETE FROM token_records
+                 WHERE source = 'zcode' AND provider = 'opencode-go'
+                   AND model LIKE 'GLM%' AND time >= ?1",
+                [CUTOFF],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge zcode account-plan rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated zcode collection: removed {deleted} row(s) at/after {CUTOFF} \
+                 mislabeled provider='opencode-go', re-ingesting account-plan GLM as 'bigmodel'"
+            );
+        }
+        deleted
+    }
+
     /// One-time migration helper: remove persisted `source='dim'` rows whose
     /// provider is the legacy `workbuddy` name. The workbuddy channel is now
     /// covered by the `dim-agent` source (workbuddy-usage.jsonl, written by
@@ -1340,6 +1385,77 @@ mod tests {
         );
         // Idempotent: second call removes nothing.
         assert_eq!(store.purge_zcode_commandcode(), 0);
+    }
+
+    #[test]
+    fn purge_zcode_account_plan_opencode_go_relabels_only_the_plan_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let insert = |time: &str, provider: &str, model: &str| {
+            conn.execute(
+                INSERT_SQL,
+                params![
+                    time,
+                    &time[..10],
+                    "N/A",
+                    provider,
+                    None::<String>,
+                    model,
+                    "zcode",
+                    100i64,
+                    20i64,
+                    0i64,
+                    0i64,
+                    120i64,
+                    0.0f64,
+                    None::<f64>,
+                    None::<f64>,
+                ],
+            )
+            .unwrap();
+        };
+        // Account-bound BigModel plan mislabeled as OpenCode Go.
+        insert(
+            "2026-09-19T14:19:10.655+00:00",
+            "opencode-go",
+            "GLM-5.3-Flash",
+        );
+        // Genuine OpenCode Go traffic and pre-cutoff history must survive, and
+        // so must the CPA channel whose model name carries a `wb/` prefix.
+        insert(
+            "2026-09-19T15:19:10.655+00:00",
+            "opencode-go",
+            "deepseek-v4-flash",
+        );
+        insert(
+            "2026-09-19T15:20:10.655+00:00",
+            "opencode-go",
+            "wb/glm-5.3-flash",
+        );
+        insert(
+            "2026-09-18T14:19:10.655+00:00",
+            "opencode-go",
+            "GLM-5.3-Flash",
+        );
+        insert("2026-09-19T15:21:10.655+00:00", "bigmodel", "GLM-5.3-Flash");
+        drop(conn);
+
+        let store = TokenStore::open(&path);
+        assert_eq!(store.count(), 5);
+        assert_eq!(store.purge_zcode_account_plan_opencode_go(), 1);
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 4);
+        assert!(
+            loaded
+                .iter()
+                .all(|r| !(r.provider == "opencode-go" && r.model == "GLM-5.3-Flash"
+                    && r.time == "2026-09-19T14:19:10.655+00:00")),
+            "mislabeled account-plan row should be gone: {loaded:?}"
+        );
+        // Idempotent: second call removes nothing.
+        assert_eq!(store.purge_zcode_account_plan_opencode_go(), 0);
     }
 
     #[test]
