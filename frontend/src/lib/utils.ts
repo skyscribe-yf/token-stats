@@ -175,6 +175,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   codebuddy: "#0ea5e9", // sky-500
   "dim-agent": "#14b8a6", // teal-500 (DimAgent via CodeBuddy workbuddy proxy)
   "ollama-proxy": "#0891b2", // cyan-600 (DimAgent via CLIProxyAPI, per-request Ollama Cloud)
+  "stepfun-proxy": "#e11d48", // rose-600 (CLIProxyAPI StepFun StepPlan, per-request)
 };
 
 /** Modern, diverse vendor color palette for charts and UI tags */
@@ -198,6 +199,8 @@ export const VENDOR_COLORS: Record<string, string> = {
   meituan: "#facc15",      // yellow-400
   fenno: "#0ea5e9",        // sky-500
   zai: "#a855f7",          // purple-500 (ZAI Router relay)
+  stepfun: "#e11d48",     // rose-600 (StepFun StepPlan via CLIProxyAPI)
+  "step-plan": "#fb7185", // rose-400 (StepFun StepPlan direct DimAgent channel)
 };
 
 export function getVendorColor(vendor: string): string {
@@ -257,6 +260,9 @@ export const SOURCE_LABELS: Record<string, string> = {
   // Ollama Cloud upstream, reached by DimAgent — name the upstream, not the
   // proxy binary, so it stays meaningful next to the other Dim rows.
   "ollama-proxy": "Dim→Ollama",
+  // Same shared CLIProxyAPI instance, StepFun StepPlan upstream (`step/…`).
+  // DimAgent is the client in practice; the proxy cannot report who called.
+  "stepfun-proxy": "Dim→StepFun",
 };
 
 export function getSourceColor(source: string): string {

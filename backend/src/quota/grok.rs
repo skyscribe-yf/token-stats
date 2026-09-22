@@ -272,18 +272,18 @@ async fn fetch_weekly_credits(client: &Client, api_key: &str) -> Result<GrokWeek
 /// protobuf message.  The outer message's field 1 contains the usage config;
 /// the config stores the aggregate used percentage in field 1, period bounds
 /// in fields 4/5, and product usage breakdowns in repeated field 7.
+/// proto3 omits default 0.0, so a freshly reset week has no field 1 / field 7
+/// — treat that as 0% used, not an error.
 fn parse_weekly_credits_response(body: &[u8]) -> Result<GrokWeeklyCredits, String> {
     let payload = first_grpc_web_message(body)?;
     let config = first_length_delimited_field(payload, 1)?.unwrap_or(payload);
 
-    let usage_percent = fixed32_field(config, 1)?
-        .ok_or_else(|| "missing aggregate usage percentage".to_string())?;
+    let usage_percent = clamp_percent(fixed32_field(config, 1)?.unwrap_or(0.0));
     let period_start =
         timestamp_field(config, 4)?.ok_or_else(|| "missing quota period start".to_string())?;
     let period_end =
         timestamp_field(config, 5)?.ok_or_else(|| "missing quota period end".to_string())?;
 
-    let usage_percent = clamp_percent(usage_percent);
     let breakdown = length_delimited_fields(config, 7)?
         .into_iter()
         .filter_map(|message| parse_breakdown(message).ok())
@@ -605,6 +605,26 @@ mod tests {
         assert_eq!(quota.breakdown[0].usage_percent, 26.0);
         assert_eq!(quota.breakdown[1].product, "chat");
         assert_eq!(quota.breakdown[1].usage_percent, 0.0);
+    }
+
+    #[test]
+    fn treats_omitted_aggregate_percent_as_zero_after_weekly_reset() {
+        // Captured 2026-09-22 from GetGrokCreditsConfig after the SuperGrok
+        // weekly reset. proto3 omits default 0.0, so field 1 (aggregate %)
+        // and repeated field 7 (product mix) are absent; period bounds remain.
+        let payload = hex_bytes(
+            "0a4612001a00220c089dc6c3d50610c09489cf022a0c089dbbe8d50610c09489cf02421e0802120c089dc6c3d50610c09489cf021a0c089dbbe8d50610c09489cf02580162006801",
+        );
+        let mut response = vec![0, 0, 0, 0, payload.len() as u8];
+        response.extend(payload);
+
+        let quota = parse_weekly_credits_response(&response)
+            .expect("zero-usage week is a valid Grok response");
+        assert_eq!(quota.usage_percent, 0.0);
+        assert_eq!(quota.remaining_percent, 100.0);
+        assert!(quota.breakdown.is_empty());
+        assert_eq!(quota.period_start, "2026-09-21T07:56:13.702Z");
+        assert_eq!(quota.period_end, "2026-09-28T07:56:13.702Z");
     }
 
     fn hex_bytes(value: &str) -> Vec<u8> {

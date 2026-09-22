@@ -79,6 +79,13 @@ impl ProxyConfig {
                     None,
                     false,
                 ),
+                "grok-4.7-yai" => (
+                    &self.yai_upstream_base_url,
+                    "yai-router",
+                    "grok-4.7",
+                    None,
+                    false,
+                ),
                 "grok-4.5-xai" => (
                     &self.xai_upstream_base_url,
                     "xai-official",
@@ -93,12 +100,20 @@ impl ProxyConfig {
                     self.xai_network_proxy.clone(),
                     false,
                 ),
+                "grok-4.7-xai" => (
+                    &self.xai_upstream_base_url,
+                    "xai-official",
+                    "grok-4.7",
+                    self.xai_network_proxy.clone(),
+                    false,
+                ),
                 // Bare model names route to the official xAI upstream. This is
                 // what DimAgent's grok-build channel sends via this proxy
                 // (custom provider with the `openai-responses` adapter, base
                 // URL pointed here). DimAgent's xai-grok-build driver refuses
                 // to send OAuth credentials to non-*.x.ai hosts, so the proxy
                 // injects the token from DimAgent's auth.json instead.
+                // grok-4.7 is the current flagship (same list price as 4.6).
                 "grok-4.5" => (
                     &self.xai_upstream_base_url,
                     "xai-official",
@@ -110,6 +125,13 @@ impl ProxyConfig {
                     &self.xai_upstream_base_url,
                     "xai-official",
                     "grok-4.6",
+                    self.xai_network_proxy.clone(),
+                    true,
+                ),
+                "grok-4.7" => (
+                    &self.xai_upstream_base_url,
+                    "xai-official",
+                    "grok-4.7",
                     self.xai_network_proxy.clone(),
                     true,
                 ),
@@ -862,6 +884,152 @@ mod tests {
         .unwrap();
         assert_eq!(record.provider, "yai-router");
         assert_eq!(record.model, "grok-4.6");
+    }
+
+    #[tokio::test]
+    async fn routes_grok_4_7_official_alias_to_xai_and_rewrites_the_model() {
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.7","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&xai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer official-key")
+                .body(Body::from(r#"{"model":"grok-4.7-xai"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(yai.received_requests().await.unwrap().is_empty());
+        let requests = xai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.7");
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "xai-official");
+        assert_eq!(record.model, "grok-4.7");
+    }
+
+    #[tokio::test]
+    async fn routes_bare_grok_4_7_to_xai_and_records_usage() {
+        let _lk = lock_dim_home();
+        let empty_home = tempdir().unwrap();
+        unsafe { std::env::set_var("DIM_HOME", empty_home.path().to_str().unwrap()) };
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.7","usage":{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":30}}}"#,
+            ))
+            .mount(&xai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer dim-grok-build-token")
+                .body(Body::from(r#"{"model":"grok-4.7","input":"hi"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(yai.received_requests().await.unwrap().is_empty());
+        let requests = xai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.7");
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "xai-official");
+        assert_eq!(record.model, "grok-4.7");
+        assert_eq!(record.input_tokens, 70);
+        assert_eq!(record.cache_read_tokens, 30);
+        assert_eq!(record.output_tokens, 20);
+        assert_eq!(record.total_tokens, 120);
+    }
+
+    #[tokio::test]
+    async fn routes_grok_4_7_yai_alias_to_yai_and_rewrites_the_model() {
+        let yai = MockServer::start().await;
+        let xai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"model":"grok-4.7","usage":{"input_tokens":1,"output_tokens":1}}"#,
+            ))
+            .mount(&yai)
+            .await;
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("grok-usage.jsonl");
+        let response = proxy_response(
+            ProxyConfig {
+                yai_upstream_base_url: yai.uri(),
+                xai_upstream_base_url: xai.uri(),
+                xai_network_proxy: None,
+                usage_log_path: log_path.clone(),
+            },
+            Request::post("/v1/responses")
+                .header("authorization", "Bearer yai-key")
+                .header("content-length", r#"{"model":"grok-4.7-yai"}"#.len())
+                .body(Body::from(r#"{"model":"grok-4.7-yai"}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(xai.received_requests().await.unwrap().is_empty());
+        let requests = yai.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request_body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request_body["model"], "grok-4.7");
+        to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let record: TokenRecord = serde_json::from_str(
+            std::fs::read_to_string(log_path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.provider, "yai-router");
+        assert_eq!(record.model, "grok-4.7");
     }
 
     #[tokio::test]

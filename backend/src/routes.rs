@@ -283,6 +283,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         dimagent_result,
         zcode_result,
         zai_result,
+        stepfun_result,
     ) = tokio::join!(
         fetcher.fetch_kimi_quota(),
         fetcher.fetch_kimi_quota_ex(),
@@ -300,6 +301,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fetcher.fetch_dimagent_quota(),
         fetcher.fetch_zcode_quota(&zcode_records),
         fetcher.fetch_zai_quota(),
+        fetcher.fetch_stepfun_quota(),
     );
 
     let response = QuotaResponse {
@@ -319,6 +321,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         dimagent: Some(dimagent_result),
         zcode: Some(zcode_result),
         zai: Some(zai_result),
+        stepfun: Some(stepfun_result),
     };
 
     Json(response)
@@ -499,7 +502,7 @@ pub async fn update_subscription_settings(
 }
 
 pub async fn get_pricing() -> impl IntoResponse {
-    Json(pricing::get_config())
+    Json(pricing::config_view())
 }
 
 pub async fn reload_pricing() -> impl IntoResponse {

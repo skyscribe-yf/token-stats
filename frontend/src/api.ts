@@ -370,6 +370,7 @@ export interface QuotaResponse {
   dimagent: DimAgentQuotaStatus | null;
   zcode: ZcodeQuotaStatus | null;
   zai: ZaiQuotaStatus | null;
+  stepfun: StepFunQuotaStatus | null;
 }
 
 // ─── DimAgent Subscription Quota ────────────────────────────────────────────
@@ -816,6 +817,37 @@ export interface ZaiQuotaData {
 export interface ZaiQuotaStatus {
   available: boolean;
   data: ZaiQuotaData | null;
+  error: string | null;
+}
+
+// ─── StepFun (platform.stepfun.com) credit account ───────────────────────────
+
+/** Step Plan subscription monthly credit pool (1M credit = ¥1 list price). */
+export interface StepFunPlanQuota {
+  plan_name: string;
+  /** Monthly pool remaining fraction, 0.0–1.0. */
+  credit_left_rate: number;
+  credit_total: number;
+  credit_residual: number;
+  /** Next monthly pool reset (unix seconds). */
+  next_reset_at: number;
+  /** Subscription expiry (unix seconds). */
+  expired_at: number;
+}
+
+export interface StepFunQuotaData {
+  account_type: string;
+  balance: number;
+  total_cash_balance: number;
+  total_voucher_balance: number;
+  plan: StepFunPlanQuota | null;
+  /** Set when the monthly pool could not be loaded (expired console session). */
+  plan_error?: string | null;
+}
+
+export interface StepFunQuotaStatus {
+  available: boolean;
+  data: StepFunQuotaData | null;
   error: string | null;
 }
 

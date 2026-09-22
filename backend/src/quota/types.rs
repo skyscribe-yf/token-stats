@@ -184,6 +184,7 @@ pub struct QuotaResponse {
     pub dimagent: Option<DimAgentQuotaStatus>,
     pub zcode: Option<ZcodeQuotaStatus>,
     pub zai: Option<ZaiQuotaStatus>,
+    pub stepfun: Option<StepFunQuotaStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,6 +438,54 @@ pub struct ZaiQuotaData {
 pub struct ZaiQuotaStatus {
     pub available: bool,
     pub data: Option<ZaiQuotaData>,
+    pub error: Option<String>,
+}
+
+// ─── StepFun (platform.stepfun.com) types ────────────────────────────────────
+
+/// Step Plan subscription monthly credit pool (console RPC
+/// `QueryStepPlanRateLimit` + `GetStepPlanStatus`, Oasis-Token auth).
+/// 1M credit = ¥1 of list-price usage; the pool resets monthly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepFunPlanQuota {
+    /// Plan tier name, e.g. "Plus".
+    pub plan_name: String,
+    /// Monthly pool remaining fraction, 0.0–1.0.
+    pub credit_left_rate: f64,
+    /// Credits granted to the pool this month (e.g. 1_600_000_000 for Plus).
+    pub credit_total: i64,
+    pub credit_residual: i64,
+    /// Next monthly pool reset (unix seconds).
+    pub next_reset_at: i64,
+    /// Subscription expiry (unix seconds).
+    pub expired_at: i64,
+}
+
+/// StepFun credit account balance (`GET /v1/accounts`), in CNY.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepFunQuotaData {
+    /// "prepaid" or "postpaid".
+    pub account_type: String,
+    /// Current usable balance.
+    pub balance: f64,
+    /// Lifetime top-up total.
+    pub total_cash_balance: f64,
+    /// Lifetime granted (voucher) total.
+    pub total_voucher_balance: f64,
+    /// Step Plan pool; None when console credentials are missing/expired.
+    #[serde(default)]
+    pub plan: Option<StepFunPlanQuota>,
+    /// Why the pool is missing. The balance half still renders; the card
+    /// surfaces this instead of silently dropping the plan percentage.
+    #[serde(default)]
+    pub plan_error: Option<String>,
+}
+
+/// StepFun quota status for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepFunQuotaStatus {
+    pub available: bool,
+    pub data: Option<StepFunQuotaData>,
     pub error: Option<String>,
 }
 

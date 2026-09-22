@@ -9,6 +9,7 @@ mod ainaiba;
 mod app;
 mod cc_proxy;
 mod config;
+mod dim_entitlement;
 mod grok_proxy;
 mod models;
 mod pricing;

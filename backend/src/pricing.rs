@@ -176,6 +176,11 @@ pub struct SpecialPricing {
     /// Default: $1,950 × 6.7894 / 50 = 264.79
     #[serde(default = "default_grok_divisor")]
     pub grok_divisor: f64,
+    /// StepFun StepPlan subscription discount: actual cost = StepFun's CNY list
+    /// price ÷ this divisor. ¥99 buys ¥1600 of API quota (deducted at list
+    /// price), so 1600 / 99 ≈ 16.16.
+    #[serde(default = "default_stepfun_plan_divisor")]
+    pub stepfun_plan_divisor: f64,
     /// Off-peak (波谷) pricing configuration for xunfei/xunfei-ex.
     /// If `None`, no off-peak discount is applied (always full price).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,6 +253,12 @@ fn default_codebuddy_cny_per_credit() -> f64 {
 
 fn default_grok_divisor() -> f64 {
     1950.0 * 6.7894 / 50.0
+}
+
+/// StepFun StepPlan：¥99 套餐给 ¥1600 的 API 额度（按官方列表价扣减），
+/// 所以实付 = 列表价 ÷ (1600 / 99) ≈ 列表价 × 6.19%。
+fn default_stepfun_plan_divisor() -> f64 {
+    1600.0 / 99.0
 }
 
 fn default_fenno_divisor() -> f64 {
@@ -483,6 +494,7 @@ impl Default for PricingConfig {
                 ollama_cloud_empirical_weekly_quota: 292307692,
                 ollama_cloud_model_multipliers: default_ollama_cloud_model_multipliers(),
                 grok_divisor: default_grok_divisor(),
+                stepfun_plan_divisor: default_stepfun_plan_divisor(),
                 xunfei_off_peak: None,
                 zcode_cny_per_credit: 0.0,
                 zcode_credit_rates: HashMap::new(),
@@ -972,6 +984,10 @@ pub(crate) struct PricingState {
     zai_model_map: HashMap<String, ModelPrice>,
     kimi_api_model_map: HashMap<String, KimiApiModelPrice>,
     rate_schedule: RateSchedule,
+    /// DimAgent subscription billing rates learned from the account's own
+    /// entitlement payload. `dim_model_map` holds the platform **list** prices;
+    /// this applies the discount actually charged for each record's moment.
+    dim_rates: crate::dim_entitlement::RateTable,
 }
 
 impl PricingState {
@@ -996,6 +1012,9 @@ impl PricingState {
             zai_model_map,
             kimi_api_model_map,
             rate_schedule,
+            // Loaded by `init()`/`reload()` so unit tests never read the
+            // machine's live entitlement state.
+            dim_rates: HashMap::new(),
         }
     }
 
@@ -1012,6 +1031,7 @@ impl PricingState {
             .map(|price| (price.name.clone(), price))
             .collect();
         self.rate_schedule = RateSchedule::new(&config);
+        self.dim_rates = crate::dim_entitlement::load_table();
         self.config = config;
     }
 }
@@ -1084,6 +1104,7 @@ pub fn init() {
     config.special.grok_divisor = ss.grok_divisor;
     let mut state = state_cell().write().unwrap();
     *state = PricingState::new(config);
+    state.dim_rates = crate::dim_entitlement::load_table();
 }
 
 /// Reload pricing configuration from disk without restarting the server.
@@ -1101,6 +1122,27 @@ pub fn reload() {
 /// Return a clone of the current pricing configuration (for the API endpoint).
 pub fn get_config() -> PricingConfig {
     state_cell().read().unwrap().config.clone()
+}
+
+/// `GET /api/pricing` payload: the TOML config plus the Dim billing rates
+/// learned from the account's entitlement payload, so a wrong-looking Dim cost
+/// can be traced to either side without shell access.
+pub fn config_view() -> serde_json::Value {
+    let state = state_cell().read().unwrap();
+    let mut view = serde_json::to_value(&state.config).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert(
+            "dim_entitlement_rates".to_string(),
+            crate::dim_entitlement::table_view(&state.dim_rates),
+        );
+    }
+    view
+}
+
+/// Replace the learned Dim entitlement rates after a poll. TOML keeps the
+/// platform list prices; this is the discount actually billed.
+pub fn set_dim_entitlement_rates(table: crate::dim_entitlement::RateTable) {
+    state_cell().write().unwrap().dim_rates = table;
 }
 
 /// Current USD→CNY rate (latest segment, or `usd_to_cny` when no segments).
@@ -1458,6 +1500,32 @@ fn is_zai_billed(record: &TokenRecord) -> bool {
         .as_deref()
         .unwrap_or(&record.provider);
     record.provider == "zai" || effective == "zai"
+}
+
+/// Whether a record is StepFun traffic billed against the StepPlan coding
+/// subscription (¥99 for ¥1600 of list-price quota).
+///
+/// Two transports produce these:
+/// - `source == "stepfun-proxy"` — the CLIProxyAPI `stepfun` upstream, metered
+///   per request by the `stepfun-usage` plugin;
+/// - DimAgent channels whose raw provider id is `stepfun` or `step-plan`
+///   (`api.stepfun.com[/step_plan]/v1`). Dim stores no usable cost for them
+///   (`quality: "missing_price"`), so the rate has to come from `pricing.toml`.
+///
+/// Matched on `original_provider` because vendor merge could rename the
+/// displayed provider. `step-plan-intl` (api.stepfun.ai) is priced in USD and
+/// deliberately excluded.
+fn is_stepfun_plan_billed(record: &TokenRecord) -> bool {
+    if record.source == "stepfun-proxy" {
+        return true;
+    }
+    matches!(
+        record
+            .original_provider
+            .as_deref()
+            .unwrap_or(record.provider.as_str()),
+        "stepfun" | "step-plan"
+    )
 }
 
 /// Cost of a ZAI record in CNY.
@@ -1912,6 +1980,39 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
             * multiplier;
     }
 
+    // 4b2. StepFun StepPlan coding subscription (¥99 for ¥1600 of list-price
+    //      quota): bill at StepFun's published CNY list rates and amortize the
+    //      plan over them. Covers both the CLIProxyAPI per-request log
+    //      (`source=stepfun-proxy`) and DimAgent's direct StepPlan channels,
+    //      whose stored cost is `missing_price` (0). `step-plan-intl` is a
+    //      USD-priced endpoint and intentionally not included.
+    if is_stepfun_plan_billed(record) {
+        if let Some(mp) = resolve_model_price(&state, record) {
+            let cny = if mp.is_cny_priced() {
+                mp.compute_cny(
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
+                    &record.time,
+                )
+            } else {
+                mp.compute_usd(
+                    record.input_tokens,
+                    record.output_tokens,
+                    record.cache_read_tokens,
+                    record.cache_write_tokens,
+                    &record.time,
+                ) * schedule.rate_for(&record.time)
+            };
+            let divisor = cfg.special.stepfun_plan_divisor;
+            if divisor > 0.0 {
+                return cny / divisor;
+            }
+            return cny;
+        }
+    }
+
     // 5. Records with stored cost (Pi source, or others that recorded cost)
     if record.cost > 0.0 {
         // 4a. DeepSeek official Pi provider: cost is in CNY, display as-is
@@ -2098,11 +2199,15 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
             }
         }
 
+        // DimAgent console-API records are billed at the platform's credit
+        // rates (`dim_model`), not the upstream API list price that
+        // `model`/`vendor_merge` would resolve to.
         let dim_price = if record.source == "dim" {
             state.dim_model_map.get(&record.model)
         } else {
             None
         };
+        let dim_list_priced = dim_price.is_some();
         if let Some(mp) = dim_price.or_else(|| resolve_model_price(&state, record)) {
             let base_rate = if is_yairouter_billed(record) {
                 cfg.special.ainaba_platform_rate
@@ -2145,6 +2250,20 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
             }
             if record.provider == "xai-official" || record.provider == "xai" {
                 cny /= schedule.grok_divisor_for(&record.time);
+            }
+            // DimAgent subscription discount: the platform bills a subscription
+            // model at list price × the `rate` in the account's own entitlement
+            // payload (deepseek-v4.1-flash has been 0.65 since 2026-09-18;
+            // glm-5.3 is 0.7, and 0.35 inside its 20:00–08:00 夜间优惠 window).
+            // `dim_model` holds list prices only — the rates are learned and
+            // time-segmented in `dim_entitlement`, so history keeps whatever
+            // was in force when the record happened.
+            if record.source == "dim" && dim_list_priced {
+                cny *= crate::dim_entitlement::rate_for(
+                    &state.dim_rates,
+                    &record.model,
+                    &record.time,
+                );
             }
             return cny;
         }
@@ -2225,6 +2344,91 @@ mod tests {
         }
     }
 
+    fn stepfun_config() -> Vec<u8> {
+        br#"
+usd_to_cny = 6.7894
+rate_date = "2026-09-20"
+
+[special]
+xunfei_per_call = 0.002211111111
+kimi_per_token = 0.000000071071429
+opencode_divisor = 6.0
+ainaba_divisor = 1.0
+freemodel_divisor = 67.894
+stepfun_plan_divisor = 16.16161616161616
+
+[[model]]
+name = "step-5-preview"
+input_cny = 7.0
+output_cny = 20.0
+cache_read_cny = 0.35
+cache_write_cny = 0.0
+"#
+        .to_vec()
+    }
+
+    fn stepfun_record(source: &str, provider: &str) -> TokenRecord {
+        let mut record = make_record(source, provider, "step-5-preview", 0, 0.0);
+        record.original_provider = Some(provider.to_string());
+        record.input_tokens = 1_000;
+        record.output_tokens = 500;
+        record.cache_read_tokens = 2_000;
+        record.total_tokens = 3_500;
+        record
+    }
+
+    /// ¥99 for ¥1600 of list-price quota ⇒ actual = list × 99/1600.
+    fn stepfun_expected_cny() -> f64 {
+        let list =
+            1_000.0 / 1e6 * 7.0 + 500.0 / 1e6 * 20.0 + 2_000.0 / 1e6 * 0.35;
+        list * 99.0 / 1600.0
+    }
+
+    #[test]
+    fn stepfun_proxy_records_bill_at_plan_amortized_rate() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&stepfun_config());
+
+        let cost = display_cost(&stepfun_record("stepfun-proxy", "stepfun"));
+        let expected = stepfun_expected_cny();
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "stepfun-proxy should bill list ÷ (1600/99): expected {expected}, got {cost}"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_stepfun_channels_bill_at_plan_amortized_rate() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(&stepfun_config());
+
+        // Dim's own StepPlan channel stores cost 0 ("missing_price"), so the
+        // rate has to come from pricing.toml like the proxy's records.
+        let expected = stepfun_expected_cny();
+        for provider in ["step-plan", "stepfun"] {
+            let cost = display_cost(&stepfun_record("dim", provider));
+            assert!(
+                (cost - expected).abs() < 1e-9,
+                "dim channel {provider} should bill list ÷ (1600/99): expected {expected}, got {cost}"
+            );
+        }
+
+        // The USD-priced international endpoint is deliberately excluded and
+        // falls through to the plain list price.
+        let intl = display_cost(&stepfun_record("dim", "step-plan-intl"));
+        let list = 1_000.0 / 1e6 * 7.0 + 500.0 / 1e6 * 20.0 + 2_000.0 / 1e6 * 0.35;
+        assert!(
+            (intl - list).abs() < 1e-9,
+            "step-plan-intl should keep the unamortized list price: expected {list}, got {intl}"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
     #[test]
     fn project_pricing_toml_keeps_ainaba_segments_and_models() {
         let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
@@ -2245,6 +2449,18 @@ mod tests {
         );
         assert!(cfg.model.iter().any(|m| m.name == "gpt-5.4"));
         assert!(cfg.model.iter().any(|m| m.name == "gpt-5.5"));
+        assert!(
+            (cfg.special.stepfun_plan_divisor - 1600.0 / 99.0).abs() < 1e-9,
+            "pricing.toml should amortize the ¥99 / ¥1600 StepPlan"
+        );
+        let stepfun_model = cfg
+            .model
+            .iter()
+            .find(|m| m.name == "step-5-preview")
+            .expect("pricing.toml should price step-5-preview");
+        assert_eq!(stepfun_model.input_cny, Some(7.0));
+        assert_eq!(stepfun_model.cache_read_cny, Some(0.35));
+        assert_eq!(stepfun_model.output_cny, Some(20.0));
         assert_eq!(
             cfg.special
                 .ollama_cloud_model_multipliers
@@ -2820,6 +3036,32 @@ mod tests {
     }
 
     #[test]
+    fn project_pricing_toml_has_grok_4_7_official_usd_rates() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        let base = cfg
+            .model
+            .iter()
+            .find(|m| m.name == "grok-4.7" && m.tier_threshold.is_none())
+            .expect("grok-4.7 base tier");
+        assert_eq!(base.input, 2.00);
+        assert_eq!(base.output, 6.00);
+        assert_eq!(base.cache_read, 0.50);
+        assert_eq!(base.cache_write, 0.0);
+
+        let high = cfg
+            .model
+            .iter()
+            .find(|m| m.name == "grok-4.7" && m.tier_threshold == Some(200000))
+            .expect("grok-4.7 200K tier");
+        assert_eq!(high.input, 4.00);
+        assert_eq!(high.output, 12.00);
+        assert_eq!(high.cache_read, 1.00);
+        assert_eq!(high.cache_write, 0.0);
+    }
+
+    #[test]
     fn grok_46_yai_router_uses_official_usd_fixed_rate_and_ainaba_divisor() {
         let _guard = pricing_test_guard();
         let prev_env = std::env::var("PRICING_CONFIG").ok();
@@ -3131,6 +3373,98 @@ mod tests {
             offpeak_cost
         );
 
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_cost_multiplies_list_price_by_entitlement_rate() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+        // pricing.toml now carries platform *list* prices only; these are the
+        // rates the account's entitlement payload reports, recorded from the
+        // moment each was first seen.
+        use crate::dim_entitlement::{RateSegment, build_table};
+        let segment = |effective_from: &str, rate: f64, windows: Vec<_>| RateSegment {
+            effective_from: effective_from.to_string(),
+            rate,
+            windows,
+        };
+        set_dim_entitlement_rates(build_table(&[
+            (
+                "deepseek-v4.1-flash",
+                vec![segment("2026-09-18T18:00:00+08:00", 0.65, vec![])],
+            ),
+            (
+                "glm-5.3",
+                vec![segment(
+                    "2026-01-01T00:00:00+08:00",
+                    0.7,
+                    vec![crate::dim_entitlement::RateWindow {
+                        start: "20:00".to_string(),
+                        end: "08:00".to_string(),
+                        rate: 0.5,
+                    }],
+                )],
+            ),
+        ]));
+
+        let dim_record = |model: &str, time: &str| {
+            let mut record = make_record("dim", "dim", model, 0, 0.0);
+            record.input_tokens = 1_000_000;
+            record.output_tokens = 0;
+            record.cache_read_tokens = 0;
+            record.cache_write_tokens = 0;
+            record.total_tokens = 1_000_000;
+            record.time = time.to_string();
+            record
+        };
+
+        // Before the platform's 0.65 cut: DeepSeek list price, nothing applied.
+        let before = display_cost(&dim_record("deepseek-v4.1-flash", "2026-09-17T12:00:00Z"));
+        assert!(
+            (before - 0.890909).abs() < 1e-9,
+            "pre-discount dim cost: expected list price, got {before}"
+        );
+        // After it: 1M input at 0.890909 × 0.65 (Monday, CST 20:00 = off peak).
+        let after = display_cost(&dim_record("deepseek-v4.1-flash", "2026-09-21T12:00:00Z"));
+        assert!(
+            (after - 0.890909 * 0.65).abs() < 1e-9,
+            "discounted dim cost: expected {}, got {after}",
+            0.890909 * 0.65
+        );
+        // The price card claims 忙时 runs Mon–Fri, but the platform doubles it on
+        // weekends too (daily-stats base_amount_minor for 2026-08-23 / 09-05 /
+        // 09-12 / 09-13 only closes that way), so a Sunday morning in the window
+        // bills peak rates with the discount on top — weekday and weekend agree.
+        let weekend_peak_hour =
+            display_cost(&dim_record("deepseek-v4.1-flash", "2026-09-20T02:00:00Z"));
+        let weekday_peak_hour =
+            display_cost(&dim_record("deepseek-v4.1-flash", "2026-09-21T02:00:00Z"));
+        assert!(
+            (weekday_peak_hour - 1.781818 * 0.65).abs() < 1e-9,
+            "忙时 cost: expected {}, got {weekday_peak_hour}",
+            1.781818 * 0.65
+        );
+        assert!(
+            (weekend_peak_hour - weekday_peak_hour).abs() < 1e-12,
+            "weekend must bill 忙时 like weekdays: {weekend_peak_hour} vs {weekday_peak_hour}"
+        );
+        // glm-5.3: list 5.345455 × 0.7 by day, and × 0.5 more inside the
+        // 20:00–08:00 CST 夜间优惠 window — the same totals the previously
+        // hard-coded discounted rates produced.
+        let glm_day = display_cost(&dim_record("glm-5.3", "2026-09-19T03:00:00Z"));
+        assert!(
+            (glm_day - 3.741818).abs() < 1e-6,
+            "glm-5.3 daytime: expected 3.741818, got {glm_day}"
+        );
+        let glm_night = display_cost(&dim_record("glm-5.3", "2026-09-19T13:00:00Z"));
+        assert!(
+            (glm_night - 1.870909).abs() < 1e-6,
+            "glm-5.3 21:00 CST: expected 1.870909, got {glm_night}"
+        );
+
+        set_dim_entitlement_rates(std::collections::HashMap::new());
         restore_pricing_env(prev_env);
     }
 

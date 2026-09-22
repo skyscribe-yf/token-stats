@@ -25,6 +25,7 @@ import type {
   DimAgentQuotaStatus,
   ZcodeQuotaStatus,
   ZaiQuotaStatus,
+  StepFunQuotaStatus,
   ZcodeLimitEntry,
   SubscriptionSettings,
 } from "../../api";
@@ -1172,6 +1173,108 @@ function ZaiCard({
   );
 }
 
+function StepFunCard({
+  status,
+  loading,
+  highlightId,
+}: {
+  status: StepFunQuotaStatus | null;
+  loading: boolean;
+  highlightId: string | null;
+}) {
+  const cardId = "quota-stepfun";
+  const flash = useHighlightFlash(highlightId, cardId);
+  return (
+    <CardShell
+      id={cardId}
+      available={!!status?.available}
+      highlight={flash}
+    >
+      <CardHeader
+        active={!!status?.available}
+        loading={loading}
+        name="StepFun"
+        href="https://platform.stepfun.com/account-overview"
+      />
+      {loading ? (
+        <SkeletonBars />
+      ) : status?.available && status.data ? (
+        <>
+          {status.data.plan && (() => {
+            const plan = status.data!.plan!;
+            const leftPct = plan.credit_left_rate * 100;
+            const day = (sec: number) =>
+              sec > 0 ? new Date(sec * 1000).toLocaleDateString("zh-CN") : "-";
+            return (
+              <div className="pb-1.5 mb-1.5 border-b border-slate-100">
+                <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                  <span>
+                    Step Plan {plan.plan_name} 剩余{" "}
+                    <span className="text-slate-700 font-medium tabular-nums">
+                      {leftPct.toFixed(1)}%
+                    </span>
+                  </span>
+                  <span>
+                    {(plan.credit_residual / 1e6).toFixed(0)}M /{" "}
+                    {(plan.credit_total / 1e6).toFixed(0)}M credit
+                  </span>
+                </div>
+                <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      leftPct < 10
+                        ? "bg-rose-500"
+                        : leftPct < 30
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${Math.min(Math.max(leftPct, 0), 100)}%` }}
+                  />
+                </div>
+                <div className="flex gap-3 mt-1.5 text-[10px] text-slate-500">
+                  <span>月池重置 {day(plan.next_reset_at)}</span>
+                  <span>套餐到期 {day(plan.expired_at)}</span>
+                </div>
+              </div>
+            );
+          })()}
+          {!status.data.plan && status.data.plan_error && (
+            <p className="text-[10px] text-amber-600 mb-1.5">
+              Step Plan 月池未加载：{status.data.plan_error}
+            </p>
+          )}
+          <div className="flex items-baseline gap-1.5 mb-1">
+            <span className="text-lg font-semibold text-slate-800 tabular-nums">
+              ¥{status.data.balance.toFixed(2)}
+            </span>
+            <span className="text-[10px] text-slate-400">
+              credit 余额（{status.data.account_type === "postpaid" ? "后付费" : "预付费"}）
+            </span>
+          </div>
+          <div className="flex items-center gap-3 text-[10px] text-slate-500">
+            <div>
+              累计充值{" "}
+              <span className="text-slate-700 font-medium tabular-nums">
+                ¥{status.data.total_cash_balance.toFixed(2)}
+              </span>
+            </div>
+            <div>
+              累计赠送{" "}
+              <span className="text-slate-700 font-medium tabular-nums">
+                ¥{status.data.total_voucher_balance.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="text-[11px] text-slate-400 italic">
+          {status?.error || "获取失败"}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function CodeBuddyCard({
   status,
   loading,
@@ -1828,6 +1931,13 @@ export const QuotasSection = memo(function QuotasSection({
         {!isQuotaCardHidden(hiddenCards, "quota-zai") && (
           <ZaiCard
             status={quota?.zai ?? null}
+            loading={quotaLoading}
+            highlightId={highlightCardId}
+          />
+        )}
+        {!isQuotaCardHidden(hiddenCards, "quota-stepfun") && (
+          <StepFunCard
+            status={quota?.stepfun ?? null}
             loading={quotaLoading}
             highlightId={highlightCardId}
           />

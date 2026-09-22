@@ -64,6 +64,11 @@ struct CurrentTerm {
     start_at: String,
     #[serde(default)]
     end_at: String,
+    /// JSON **string** holding the account's live billing entitlement
+    /// (`model_access[].rate` / `rate_windows`). Both the CLI and the console
+    /// API carry it; see `crate::dim_entitlement`.
+    #[serde(default)]
+    entitlement_payload_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -257,6 +262,11 @@ fn discover_cli_bin() -> Result<PathBuf, String> {
 }
 
 async fn fetch_via_cli() -> Result<DimAgentQuotaData, String> {
+    parsed_to_card(run_cli_usage().await?)
+}
+
+/// Run `dim usage --json` and parse its payload.
+async fn run_cli_usage() -> Result<CliUsageOutput, String> {
     let bin = discover_cli_bin()?;
     let output = tokio::time::timeout(
         Duration::from_secs(CLI_TIMEOUT_SECS),
@@ -279,9 +289,45 @@ async fn fetch_via_cli() -> Result<DimAgentQuotaData, String> {
         ));
     }
 
-    let parsed: CliUsageOutput = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("failed to parse dim usage --json: {e}"))?;
-    parsed_to_card(parsed)
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse dim usage --json: {e}"))
+}
+
+/// The account's live entitlement payload (a JSON **string**, not an object) —
+/// the source of the per-model billing rates `crate::dim_entitlement` tracks.
+/// The CLI goes first: it refreshes OAuth itself and needs no cookie.
+pub async fn fetch_entitlement_payload(client: &Client) -> Result<String, String> {
+    let cli_error = match run_cli_usage().await {
+        Ok(out) => out
+            .subscription
+            .as_ref()
+            .and_then(|s| s.current_term.as_ref())
+            .and_then(|t| t.entitlement_payload_json.clone())
+            .filter(|payload| !payload.trim().is_empty())
+            .ok_or_else(|| "dim usage returned no entitlement payload".to_string()),
+        Err(e) => Err(e),
+    };
+    match cli_error {
+        Ok(payload) => Ok(payload),
+        Err(cli_error) => {
+            let cookie = std::env::var("DIMAGENT_SESSION_COOKIE")
+                .map_err(|_| format!("{cli_error}; DIMAGENT_SESSION_COOKIE not set"))?;
+            let subscription: ApiEnvelope<SubscriptionPayload> = get_json(
+                client,
+                &format!("{CONSOLE_API_BASE}/me/subscription"),
+                &cookie,
+            )
+            .await
+            .map_err(|e| format!("{cli_error}; console api: {e}"))?;
+            subscription
+                .data
+                .current_term
+                .as_ref()
+                .and_then(|term| term.entitlement_payload_json.clone())
+                .filter(|payload| !payload.trim().is_empty())
+                .ok_or_else(|| format!("{cli_error}; console api: no entitlement payload"))
+        }
+    }
 }
 
 // ─── Console API path (DIMAGENT_SESSION_COOKIE) ──────────────────────────────
@@ -546,6 +592,7 @@ mod tests {
             current_term: Some(CurrentTerm {
                 start_at: "2026-08-22T12:02:10.226Z".into(),
                 end_at: "2026-09-22T12:02:10.226Z".into(),
+                entitlement_payload_json: None,
             }),
             product: Some(Product {
                 name: "Nano套餐".into(),

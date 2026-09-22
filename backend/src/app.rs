@@ -497,9 +497,18 @@ impl AppState {
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(refresh_interval));
+            // DimAgent bills at list price × an entitlement `rate` the platform
+            // changes without notice and never timestamps, so the payload is
+            // re-read on its own slow TTL and each new rate is recorded from the
+            // moment it is first seen (see `dim_entitlement`).
+            let mut rates_seen_at: Option<Instant> = None;
             loop {
                 interval.tick().await;
                 state.refresh_records().await;
+                rates_seen_at =
+                    crate::dim_entitlement::refresh_if_due(&state.quota_fetcher, rates_seen_at)
+                        .await
+                        .or(rates_seen_at);
             }
         })
     }

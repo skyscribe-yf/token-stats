@@ -20,6 +20,7 @@ mod ollama_proxy;
 mod opencode;
 mod pi;
 mod qoder;
+mod stepfun_proxy;
 mod zcode;
 
 use crate::config;
@@ -51,6 +52,7 @@ pub(crate) use ollama_proxy::{
 pub use opencode::OpenCodeSource;
 pub use pi::PiSource;
 pub use qoder::{QoderCliSource, QoderDesktopSource};
+pub use stepfun_proxy::StepfunProxySource;
 pub use zcode::ZcodeSource;
 
 /// Trait for a data source that produces `TokenRecord` batches.
@@ -372,6 +374,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
             Box::new(GrokCliSource),
             Box::new(CcProxySource),
             Box::new(OllamaProxySource),
+            Box::new(StepfunProxySource),
             Box::new(WorkbuddySource),
             Box::new(CommandCodeSource),
             Box::new(ZcodeSource),

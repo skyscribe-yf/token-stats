@@ -114,6 +114,16 @@ fenno_divisor = 101.841
 # 默认：$1,950 × 6.7894 / 50 = 264.7866
 grok_divisor = 264.7866
 
+# ── StepFun StepPlan 编码套餐（source=stepfun-proxy / dim 的 step-plan、stepfun 通道）──
+# 套餐 ¥99 提供 ¥1600 的 API 额度，额度按 StepFun 官方列表价扣减
+# （step-5-preview：输入 7 / 缓存命中 0.35 / 输出 20 元每 1M token）。
+# 所以实付 = 列表价 × (99 / 1600) = 列表价 ÷ stepfun_plan_divisor
+#          = 输入 0.433125 / 缓存命中 0.021656 / 输出 1.2375 元每 1M token。
+# 列表价登记在下面的 [[model]] step-5-preview（CNY，不经汇率换算），
+# 折扣只体现在这个倍率上——换套餐时只改这里。
+# 注意：step-plan-intl（api.stepfun.ai）是美元计价的另一套端点，不走该倍率。
+stepfun_plan_divisor = 16.16161616161616
+
 # ── ZCode / BigModel GLM Coding Plan 计费（source=zcode, provider=bigmodel）──
 # 官方积分公式（docs.bigmodel.cn/cn/coding-plan/overview）：
 #   积分 =（输入 × Input系数 + 缓存命中 × Cached系数 + 输出 × Output系数）/ 10000
@@ -580,6 +590,23 @@ input = 4.00
 output = 12.00
 cache_read = 1.00
 
+# Official Grok 4.7 list price (USD / 1M). Same as Grok 4.6: $2 / $6 / $0.50
+# below 200K prompt tokens, doubled above. cache_write omitted — xAI does
+# not publish a separate cache-write price.
+# https://docs.x.ai/developers/models
+[[model]]
+name = "grok-4.7"
+input = 2.00
+output = 6.00
+cache_read = 0.50
+
+[[model]]
+name = "grok-4.7"
+tier_threshold = 200000
+input = 4.00
+output = 12.00
+cache_read = 1.00
+
 # DeepSeek 模型价格（CNY per 1_000_000 tokens）
 # DeepSeek 官方按人民币定价，直接产出 CNY，不经过 USD→CNY 汇率换算。
 # 官方定价：v4-pro input=3, cache_read=0.025, output=6
@@ -598,6 +625,13 @@ name = "deepseek-v4-flash"
 input_cny = 1.0
 output_cny = 2.0
 cache_read_cny = 0.02
+cache_write_cny = 0.0
+
+[[model]]
+name = "step-5-preview"
+input_cny = 7.0
+output_cny = 20.0
+cache_read_cny = 0.35
 cache_write_cny = 0.0
 
 [[model]]
@@ -663,11 +697,15 @@ peak_cache_write_cny = 0.0
 [[dim_model]]
 name = "deepseek-v4.1-flash"
 # v4.1 flash 正式名（2026-09-10 平台去掉 "-expires-on-0910" 后缀，费率同时
-# 下调）。按平台价目卡计费：基础 140 / 550 / 2.7 积分/M，高峰（CST
-# 09:00–12:00 / 14:00–18:00）2× = 280 / 1100 / 5.4，即 UTC 01–04 / 06–10。
-# 日账验证：2026-09-10（CST）按此费率 + 既有各模型费率，与 daily-stats 的
-# quota_consumed 完全闭合（误差 <0.01%）。注意与临时名不同：临时名实际计费
-# 走 vision-exp 费率（102.73973 等），正式名则按价目卡原价。
+# 下调）。按平台价目卡**目录原价**计费：基础 140 / 550 / 2.7 积分/M，忙时
+# （CST 09:00–12:00 / 14:00–18:00）2× = 280 / 1100 / 5.4，即 UTC 01–04 / 06–10。
+# 注意：价目卡的 time_periods 写着 week_days [1,2,3,4,5]，但**计费引擎周末照样
+# 翻倍**——2026-08-23(日)、09-05(六)、09-12(六)、09-13(日) 四天 daily-stats 的
+# base_amount_minor 只在周末翻倍时才闭合（误差 <0.16%，按平日价则差 -3%~-30%），
+# 所以这里**不要**设 peak_weekdays_only。
+# 2026-09-18 18:00 CST 起平台对该模型施加 entitlement rate 0.65（价目卡显示的
+# 91 / 357.5 / 1.755 就是折后价），该折扣由 `dim_entitlement` 按记录时刻乘上，
+# 不在这里登记——否则历史会被追溯改写。
 # 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode
 input_cny = 0.890909
 output_cny = 3.500000
@@ -681,17 +719,14 @@ peak_cache_write_cny = 0.0
 
 [[dim_model]]
 name = "glm-5.3"
-# 平台对 glm-5.3 有全时段 7 折（entitlement rate=0.7），夜间 20:00–08:00
-# （CST，= UTC 12:00–24:00）再打 5 折。基础价已含 7 折，peak 价 = 7折×5折。
-input_cny = 3.741818
-output_cny = 13.096364
-cache_read_cny = 0.810727
+# 平台**目录原价**：840 / 2940 / 182 积分/M（价目卡）。账号 entitlement 的全时段
+# 7 折（rate=0.7）与夜间 20:00–08:00 CST 再 5 折（rate_windows rate=0.5）不再写死
+# 在这里——由 `dim_entitlement` 读 Dim 侧 payload 并按记录时刻相乘（0.7 / 0.35），
+# 与旧值等价，但折扣变化时不会被追溯到历史改写。
+input_cny = 5.345455
+output_cny = 18.709091
+cache_read_cny = 1.158182
 cache_write_cny = 0.0
-peak_hours_utc = [[12, 24]]
-peak_input_cny = 1.870909
-peak_output_cny = 6.548182
-peak_cache_read_cny = 0.405364
-peak_cache_write_cny = 0.0
 
 [[dim_model]]
 name = "glm-5.3-flash"

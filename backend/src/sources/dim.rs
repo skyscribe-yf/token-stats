@@ -41,10 +41,11 @@
 //! `~/.dimcode/v2/dimcode.sqlite` `usage_run_stats` table (per-run
 //! aggregates). We read that table read-only, **excluding** the
 //! `dimcode-api-oauth` provider (already covered by the API, would
-//! double-count) and every channel that has its own per-request meter —
-//! workbuddy (`dim-agent` source), grok-build-proxy (grok proxy's log),
-//! ollama-cloud-proxy (`ollama-proxy` source) and cc-proxy (`cc-proxy`
-//! source) — and map each remaining third-party provider id to the
+//! double-count), every channel named in the constants below (each has its
+//! own per-request meter), and — generically, so new CPA upstreams are covered
+//! without editing this file — any channel whose `baseUrl` points at the shared
+//! CLIProxyAPI loopback (see [`cpa_loopback_addrs`]), whose upstreams all have
+//! usage plugins. Remaining third-party provider ids are mapped to the
 //! dashboard's canonical provider name (e.g. `custom-ollama-cloud-042036d3` →
 //! `ollama-cloud`, which vendor_merge.toml merges into the `ollama` group
 //! and pricing.rs bills with the empirical subscription rate).
@@ -54,7 +55,7 @@ use super::OLLAMA_CLOUD_RUN_PROVIDER;
 use crate::models::TokenRecord;
 use chrono::TimeZone;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -96,6 +97,58 @@ const OLLAMA_CLOUD_PROXY_PROVIDER: &str = "ollama-cloud-proxy";
 /// local supplement to avoid double-counting the same requests (the proxy IS
 /// the transport, so every request it sees is logged there).
 const CC_PROXY_PROVIDER: &str = "cc-proxy";
+
+/// Loopback `host:port` of the shared CLIProxyAPI instance
+/// (`~/workbuddy-proxy/config.yaml`, `CPA_LOOPBACK_ADDRS` overrides). Every
+/// upstream served by that instance has a token-stats usage plugin
+/// (`workbuddy` → `dim-agent`, `ollama-cloud` → `ollama-proxy`,
+/// `stepfun` → `stepfun-proxy`), so a Dim channel pointed *at the proxy* has
+/// its calls metered per-request there — keeping Dim's per-run row as well
+/// would count them twice. Channels aimed anywhere else (e.g. Dim's own
+/// `step-plan` / `stepfun` providers, which talk to StepFun directly) are kept,
+/// because nothing else records those calls.
+fn cpa_loopback_addrs() -> Vec<String> {
+    std::env::var("CPA_LOOPBACK_ADDRS")
+        .unwrap_or_else(|_| "127.0.0.1:8317,localhost:8317,[::1]:8317".to_string())
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Provider ids whose configured `baseUrl` points at the CLIProxyAPI instance.
+fn cpa_metered_providers(conn: &rusqlite::Connection) -> HashSet<String> {
+    let addrs = cpa_loopback_addrs();
+    let mut ids = HashSet::new();
+    let Ok(mut stmt) = conn.prepare("SELECT providerId, baseUrl FROM providers WHERE baseUrl IS NOT NULL")
+    else {
+        return ids;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return ids;
+    };
+    for row in rows.flatten() {
+        if let Some(authority) = url_authority(&row.1) {
+            if addrs.iter().any(|addr| addr == &authority) {
+                ids.insert(row.0);
+            }
+        }
+    }
+    ids
+}
+
+/// `host:port` of a URL, lowercased and without the default-port-less forms
+/// (`http://127.0.0.1:8317/v1` → `127.0.0.1:8317`). None when unparseable.
+fn url_authority(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r)?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    Some(authority.to_lowercase())
+}
 
 /// Map a local `usage_run_stats.providerId` to the dashboard's canonical
 /// provider name. Unknown ids fall back to the raw id (lowercased) so new
@@ -286,11 +339,12 @@ impl DimSource {
 
     /// Read third-party provider usage from the local dimcode SQLite
     /// (`usage_run_stats`), excluding Dim's own OAuth channel (covered by
-    /// the console API) and every channel with its own per-request meter:
-    /// workbuddy (`dim-agent` source), grok-build-proxy (grok proxy log),
-    /// ollama-cloud-proxy (`ollama-proxy` source) and cc-proxy (`cc-proxy`
-    /// source). Returns an empty vec when the DB is missing or unreadable
-    /// (graceful degradation).
+    /// the console API), the named channels with their own per-request meter
+    /// (workbuddy → `dim-agent`, grok-build-proxy → grok proxy log,
+    /// ollama-cloud-proxy → `ollama-proxy`, cc-proxy → `cc-proxy`), and any
+    /// channel aimed at the CPA loopback — see [`cpa_loopback_addrs`], which
+    /// covers every future CPA upstream without touching this list. Returns an
+    /// empty vec when the DB is missing or unreadable (graceful degradation).
     fn load_local_supplement() -> Vec<TokenRecord> {
         let path = Self::local_db_path();
         if !path.exists() {
@@ -307,6 +361,7 @@ impl DimSource {
             }
         };
         let provider_names = local_provider_names(&conn);
+        let cpa_channels = cpa_metered_providers(&conn);
         let sql = "SELECT providerId, modelId, startedAt, endedAt, createdAt,
                           inputTokens, outputTokens,
                           cacheReadTokens, cacheWriteTokens, cost
@@ -365,6 +420,12 @@ impl DimSource {
                         cache_write_tokens,
                         cost_json,
                     ) = row;
+                    // Calls that went *through* CLIProxyAPI are metered
+                    // per-request by its usage plugins, so this channel's
+                    // per-run row would count them a second time.
+                    if cpa_channels.contains(&provider_id) {
+                        continue;
+                    }
                     if let Some(rec) = local_row_to_record(
                         &provider_id,
                         &model_id,
@@ -698,6 +759,22 @@ fn item_to_record(item: &LogItem) -> Option<TokenRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpa_channel_detection_matches_loopback_authority_only() {
+        // The shared CLIProxyAPI instance (per-request metered by its plugins).
+        assert_eq!(
+            url_authority("http://127.0.0.1:8317/v1").as_deref(),
+            Some("127.0.0.1:8317")
+        );
+        // StepFun reached directly by Dim — must stay in the supplement.
+        assert_eq!(
+            url_authority("https://api.stepfun.com/step_plan/v1").as_deref(),
+            Some("api.stepfun.com")
+        );
+        assert_eq!(url_authority(""), None);
+        assert_eq!(url_authority("localhost:8317"), None);
+    }
 
     fn sample_item() -> LogItem {
         serde_json::from_str(

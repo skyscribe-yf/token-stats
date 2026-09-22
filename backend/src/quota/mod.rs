@@ -13,6 +13,7 @@ pub mod kimi;
 pub mod meituan;
 pub mod ollama;
 pub mod opencode;
+pub mod stepfun;
 pub mod types;
 pub mod xiaomi_mimo;
 pub mod zai;
@@ -21,7 +22,7 @@ pub mod zcode;
 pub use types::{
     CodeBuddyQuotaStatus, CommandCodeQuotaStatus, DimAgentQuotaStatus, FennoQuotaStatus,
     GrokQuotaStatus, KimiQuotaStatus, MeituanQuotaStatus, OllamaQuotaStatus, OpenCodeQuotaStatus,
-    QuotaResponse, XiaomiMiMoQuotaStatus, ZaiQuotaStatus, ZcodeQuotaStatus,
+    QuotaResponse, StepFunQuotaStatus, XiaomiMiMoQuotaStatus, ZaiQuotaStatus, ZcodeQuotaStatus,
 };
 
 use serde::de;
@@ -100,6 +101,7 @@ pub struct QuotaFetcher {
     pub client: reqwest::Client,
     pub fenno_auth: fenno::FennoAuthManager,
     pub fenno_ex_auth: fenno::FennoAuthManager,
+    pub stepfun_auth: stepfun::StepFunAuthManager,
 }
 
 impl QuotaFetcher {
@@ -108,6 +110,7 @@ impl QuotaFetcher {
         Self {
             fenno_auth: fenno::FennoAuthManager::new(client.clone()),
             fenno_ex_auth: fenno::FennoAuthManager::new_ex(client.clone()),
+            stepfun_auth: stepfun::StepFunAuthManager::new(client.clone()),
             client,
         }
     }
@@ -189,6 +192,13 @@ impl QuotaFetcher {
         dimagent::fetch_dimagent_quota(&self.client).await
     }
 
+    /// Fetch the Dim account's live entitlement payload — the JSON string
+    /// carrying per-model billing `rate` / `rate_windows` that
+    /// `crate::dim_entitlement` turns into cost discounts.
+    pub async fn fetch_dimagent_entitlement(&self) -> Result<String, String> {
+        dimagent::fetch_entitlement_payload(&self.client).await
+    }
+
     /// Fetch ZCode (BigModel GLM coding plan) quota plus local usage.
     /// `zcode_records` are the caller's `source="zcode"` snapshot.
     pub async fn fetch_zcode_quota(
@@ -201,6 +211,11 @@ impl QuotaFetcher {
     /// Fetch ZAI Router balance and usage (`ZAI_API_KEY`).
     pub async fn fetch_zai_quota(&self) -> ZaiQuotaStatus {
         zai::fetch_zai_quota(&self.client).await
+    }
+
+    /// Fetch StepFun credit account balance (`STEPFUN_API_KEY`).
+    pub async fn fetch_stepfun_quota(&self) -> StepFunQuotaStatus {
+        stepfun::fetch_stepfun_quota(&self.client, &self.stepfun_auth).await
     }
 }
 
