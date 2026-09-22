@@ -129,9 +129,11 @@ stepfun_plan_divisor = 16.16161616161616
 #   积分 =（输入 × Input系数 + 缓存命中 × Cached系数 + 输出 × Output系数）/ 10000
 #   GLM-5.3-Flash: 2.3 / 0.56 / 8；GLM-5.3: 6.9 / 1.7 / 24
 # 高峰时段（周一至周五 14:00–18:00 CST）按 1× 消耗，其余时段按 50% 抵扣；
-# 夜间畅用活动（2026-09-03 ~ 09-20，每日 23:00–09:00 CST，ZCode 端）消耗为 0，
-# 且仅限 Flash（官方活动为 GLM-5.3-Flash × ZCode 专属，zcode_night_free_models）；
-# GLM-5.3 夜间不在活动范围，照常按高峰/波谷因子扣积分。
+# 夜间畅用活动（2026-09-03 ~ 10-07，官方把结束日从 09-20 延到 10-07；每日 23:00–09:00 CST，
+# ZCode 端）消耗为 0，且仅限 Flash（官方活动为 GLM-5.3-Flash × ZCode 专属，
+# zcode_night_free_models）；GLM-5.3 夜间不在活动范围，照常按高峰/波谷因子扣积分。
+# 注意：实际免扣在 09-21 断档一天（09-20 结束、09-22 恢复），但官方公告口径是 9/3~10/7
+# 连续，且该日无 flash 记录 → 刻意按单段连续窗口建模，不要再为这一天加空档。
 # 注意：活动自 2026-09-13 06:15 CST 起才实际生效——此前用的旧版 ZCode 客户端
 # 不享受免扣，服务端照常扣积分，该时刻之前落在窗口内的记录按正常波谷 0.5× 计费
 # （zcode_night_free_effective_from）。
@@ -149,7 +151,7 @@ zcode_off_peak_factor = 0.5
 zcode_night_free_hours_cst = [[23, 24], [0, 9]]
 zcode_night_free_models = ["glm-5.3-flash"]
 zcode_night_free_from = "2026-09-03"
-zcode_night_free_until = "2026-09-20"
+zcode_night_free_until = "2026-10-07"
 zcode_night_free_effective_from = "2026-09-13T06:15:00+08:00"
 
 # ── ZAI (api.zairouter.com) 计费 ───────────────────────────────────────────
