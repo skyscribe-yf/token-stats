@@ -1,10 +1,28 @@
 # 文档目录说明（docs/）
 
-本目录保存项目的部署文档与历史设计/计划档案。**当前有效的文档**只有
-`ecs-deployment.md`（ECS 公网暴露）；其余均为历史记录，不再维护，
+本目录保存项目的**代理参考文档**（`agents/`）、部署文档与历史设计/计划档案。
+`agents/` 与 `ecs-deployment.md` 是当前有效、随代码维护的；其余均为历史记录，不再维护，
 仅作追溯用途，内容不代表当前代码状态。
 
 ## 当前有效
+
+### `agents/` —— AGENTS.md 拆出的参考文档
+
+根目录 [AGENTS.md](../AGENTS.md) 是**索引 + 不变式**（每次都会注入代理上下文），
+篇幅大的逐项参考放在这里（按需阅读）。何时必读哪一份，以 AGENTS.md 开头的
+「参考文档路由」表为准。
+
+| 文件 | 内容 |
+|------|------|
+| `agents/data-sources.md` | 19 个数据源的完整行为说明、4 个 loopback 代理/CLIProxyAPI 插件架构、CPA 模型命名空间与 dim 侧踩坑史 |
+| `agents/pricing.md` | `pricing.toml` 全部计费分支、分段汇率/折扣、实测费率与对账口径 |
+| `agents/quota-cards.md` | 每张配额卡的端点与认证细节、DimAgent console API 逆向结论 |
+| `agents/environment-variables.md` | 全部环境变量的默认值与覆盖项 |
+| `agents/pitfalls.md` | 编号陷阱 1–21（共 20 条；编号被提交信息与代码注释引用，不要重排） |
+
+> 新增数据源、计费分支或陷阱时，请同时更新 AGENTS.md 里的简版索引与本目录的详版。
+
+### 其他
 
 | 文件 | 用途 |
 |------|------|

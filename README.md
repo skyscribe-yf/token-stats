@@ -104,6 +104,15 @@ cd backend && ./target/release/token-stats-backend
 Meituan、CodeBuddy）通过各自官方接口抓取，需要相应环境变量凭据，未配置时对应卡片显示不可用。
 CodeBuddy cookie 约 30 天过期：过期后卡片显示 401 错误（不再整卡消失），执行
 `./scripts/refresh-codebuddy-cookies.sh` 重新提取并热更新。
+DimAgent 会话 cookie 同样约 30 天过期，但失效**不会报错**——Dim 自有 OAuth 通道只由
+console API 逐请求计量，本地 dimcode 库又按设计排除该通道防双计，于是这类流量
+（如 `deepseek-v4.1-flash`）两个源都不再出现、历史仍在但新数据全丢。执行
+`./scripts/refresh-dimagent-cookie.sh` 从 Chrome 重新提取（脚本会先实测接口返回 200
+才写回），重启后按 watermark 自动补齐缺口。两个刷新脚本（含 StepFun 会话轮换）都已
+挂在 `deploy.sh` 的 source 凭据文件之前，`./deploy.sh` 与
+`./scripts/deploy-dashboard.sh` 两条入口都会自动刷新，分别可用
+`SKIP_CODEBUDDY_COOKIE_REFRESH=1` / `SKIP_STEPFUN_TOKEN_REFRESH=1` /
+`SKIP_DIMAGENT_COOKIE_REFRESH=1` 跳过（Chrome/keyring 不可用时会告警并沿用旧值）。
 
 ## 主要 API
 
@@ -144,7 +153,10 @@ token-stats/
 ├── scripts/               # 部署/刷新/汇率更新/数据修复脚本
 │                          #   （含 sync-ollama-models.sh：同步 Ollama 模型目录到 CPA；
 │                          #     dim-repair-session-models.mjs：修复改前缀后的会话选择；
-│                          #     refresh-codebuddy-cookies.sh：cookie 过期后刷新 CodeBuddy 卡）
+│                          #     refresh-codebuddy-cookies.sh：cookie 过期后刷新 CodeBuddy 卡；
+│                          #     refresh-stepfun-token.sh：轮换 StepFun 控制台会话；
+│                          #     extract-dimagent-cookie.sh + refresh-dimagent-cookie.sh：
+│                          #       刷新 dim 数据源的 DimAgent 会话 cookie）
 ├── docs/                  # 部署与设计文档
 ├── setup.sh               # 自动安装
 ├── deploy.sh              # 蓝绿零停机部署

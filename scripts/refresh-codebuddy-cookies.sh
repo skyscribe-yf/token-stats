@@ -15,14 +15,19 @@
 # Usage:
 #   ./scripts/refresh-codebuddy-cookies.sh            # do everything
 #   ./scripts/refresh-codebuddy-cookies.sh --dry-run  # extract + report only
+#   ./scripts/refresh-codebuddy-cookies.sh --env-only # steps 1-2, leave systemd alone
+#     (for deploys: deploy.sh injects the env file into the new instance itself)
 #
 # Requires sudo for steps 3-4. Cookie values are never printed (lengths only).
 set -euo pipefail
 
-DRY_RUN=false
-if [ "${1:-}" = "--dry-run" ]; then
-    DRY_RUN=true
-fi
+SKIP_SYSTEMD=false
+case "${1:-}" in
+    --dry-run)  SKIP_SYSTEMD=true ;;
+    --env-only) SKIP_SYSTEMD=true ;;
+    "")         ;;
+    *)          echo "Usage: $0 [--dry-run|--env-only]" >&2; exit 2 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${TOKEN_STATS_DEPLOY_ENV:-$HOME/.config/token-stats/deploy-env.sh}"
@@ -53,6 +58,9 @@ for name in names:
     m = re.search(rf"export {name}='([^']*)'", text)
     if not m:
         sys.exit(f"ERROR: {name} missing from extraction output")
+    if not m.group(1):
+        # An empty cookie would blank a working entry and break the card.
+        sys.exit(f"ERROR: {name} extracted empty")
     values[name] = m.group(1)
 
 print("→ Extracted:")
@@ -73,15 +81,21 @@ if env_path.exists():
     env_path.write_text(env_text)
     print(f"→ Updated {env_path}")
 else:
-    print(f"⚠️  {env_path} not found — skipping in-place update", file=sys.stderr)
+    # A missing file means nothing would be refreshed — fail loudly rather than
+    # letting a deploy proceed with whatever env the caller happens to have.
+    sys.exit(f"ERROR: {env_path} not found (create it or set TOKEN_STATS_DEPLOY_ENV)")
 
 cookies_path.write_text(
     "".join(f"export {name}='{values[name]}'\n" for name in names)
 )
 PY
 
-if [ "$DRY_RUN" = true ]; then
-    echo "→ Dry run: skipping systemd injection/restart."
+if [ "$SKIP_SYSTEMD" = true ]; then
+    if [ "${1:-}" = "--env-only" ]; then
+        echo "→ Deploy mode: new instance gets the cookies from $ENV_FILE via deploy.sh."
+    else
+        echo "→ Dry run: skipping systemd injection/restart."
+    fi
     exit 0
 fi
 

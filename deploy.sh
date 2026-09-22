@@ -25,8 +25,70 @@ NGINX_CONF_DST="/etc/nginx/sites-available/token-stats"
 # this script self-sufficient either way; already-set values win so an explicit
 # one-off override still works.
 DEPLOY_ENV_FILE="${TOKEN_STATS_DEPLOY_ENV:-$HOME/.config/token-stats/deploy-env.sh}"
+
+# ── 0a-pre. Refresh the CodeBuddy cookies from Chrome ──────────────────
+# Those two cookies lapse every ~30 days of browser inactivity; once stale the
+# card returns 401 and a deploy would faithfully re-inject the dead values.
+# Extract fresh ones into $DEPLOY_ENV_FILE first, then let the source below pick
+# them up. Best effort — Chrome/keyring may be unavailable (headless or remote
+# deploy), which must not fail the deploy. SKIP_CODEBUDDY_COOKIE_REFRESH=1 to opt out.
+if [ "${SKIP_CODEBUDDY_COOKIE_REFRESH:-}" = "1" ]; then
+    echo "→ Skipping CodeBuddy cookie refresh (SKIP_CODEBUDDY_COOKIE_REFRESH=1)"
+elif TOKEN_STATS_DEPLOY_ENV="$DEPLOY_ENV_FILE" \
+        "$PROJECT_DIR/scripts/refresh-codebuddy-cookies.sh" --env-only; then
+    echo "🔑 Refreshed CodeBuddy cookies from Chrome"
+    # The refresher just wrote the browser's live cookies into $DEPLOY_ENV_FILE.
+    # A copy already exported in this shell is by definition staler — ~/.bash_env
+    # exports both, and scripts/deploy-dashboard.sh sources the file before
+    # exec'ing us — but the "explicit override" re-application below would let it
+    # win, silently re-injecting dead cookies. That is how the 2026-09-20 deploy
+    # shipped a 2026-09-05-expired cookie into token-stats@3001 while
+    # $DEPLOY_ENV_FILE held a valid one. Drop them so the file's fresh value wins.
+    unset CODEBUDDY_SESSION_COOKIE CODEBUDDY_SESSION_COOKIE_2
+else
+    echo "⚠️  CodeBuddy cookie refresh failed (Chrome/keyring unavailable?) — using existing $DEPLOY_ENV_FILE values"
+fi
+
+# ── 0a-pre2. Refresh the StepFun console session from Chrome ────────────
+# Oasis-Token's access JWT lapses in ~30 minutes. Re-injecting the pair stored
+# in deploy-env.sh hides the Step Plan pool (401, plan=null) even though the
+# credit-balance half of the card still works. Refresh rotates access+refresh
+# and writes both deploy-env.sh and stepfun-auth.json. Best effort, same as
+# CodeBuddy. SKIP_STEPFUN_TOKEN_REFRESH=1 to opt out.
+if [ "${SKIP_STEPFUN_TOKEN_REFRESH:-}" = "1" ]; then
+    echo "→ Skipping StepFun token refresh (SKIP_STEPFUN_TOKEN_REFRESH=1)"
+elif TOKEN_STATS_DEPLOY_ENV="$DEPLOY_ENV_FILE" \
+        "$PROJECT_DIR/scripts/refresh-stepfun-token.sh" --env-only; then
+    echo "🔑 Refreshed StepFun Oasis session from Chrome"
+    # Same override trap as CodeBuddy: a shell-exported copy is staler than the
+    # file just rewritten above, and the re-application below would put it back.
+    unset STEPFUN_OASIS_TOKEN STEPFUN_OASIS_WEBID
+else
+    echo "⚠️  StepFun token refresh failed (Chrome/keyring unavailable?) — using existing $DEPLOY_ENV_FILE values"
+fi
+
+# ── 0a-pre3. Refresh the DimAgent console session from Chrome ───────────
+# The dimagent.cn `session` cookie lapses ~30 days after the last browser login.
+# A dead cookie is worse than a broken card: Dim bills its own OAuth channel
+# through the console API, and the local dimcode supplement excludes that
+# provider on purpose, so every Dim-OAuth call (deepseek-v4.1-flash and friends)
+# falls into a hole — present in neither source, with only a graceful-degradation
+# 401 to show for it. Refresh + live-verify before the source below picks it up.
+# Best effort, as above. SKIP_DIMAGENT_COOKIE_REFRESH=1 to opt out.
+if [ "${SKIP_DIMAGENT_COOKIE_REFRESH:-}" = "1" ]; then
+    echo "→ Skipping DimAgent cookie refresh (SKIP_DIMAGENT_COOKIE_REFRESH=1)"
+elif TOKEN_STATS_DEPLOY_ENV="$DEPLOY_ENV_FILE" \
+        "$PROJECT_DIR/scripts/refresh-dimagent-cookie.sh" --env-only; then
+    echo "🔑 Refreshed DimAgent console cookie from Chrome"
+    # Same override trap as CodeBuddy: a shell-exported copy is staler than the
+    # file just rewritten above, and the re-application below would put it back.
+    unset DIMAGENT_SESSION_COOKIE
+else
+    echo "⚠️  DimAgent cookie refresh failed (Chrome/keyring unavailable?) — using existing $DEPLOY_ENV_FILE values"
+fi
+
 if [ -f "$DEPLOY_ENV_FILE" ]; then
-    _env_overrides="$(env | grep -E '^(CODEBUDDY_|COMMANDCODE_|DIMAGENT_|OPENCODE_GO_|OLLAMA_AUTH_|MEITUAN_|FENNO_|KIMI_|YAI_|ZAI_|XIAOMI_MIMO_|XUNFEI_|GROK_|DIM_|CCSWITCH_|USE_CC_SWITCH)' || true)"
+    _env_overrides="$(env | grep -E '^(CODEBUDDY_|COMMANDCODE_|DIMAGENT_|OPENCODE_GO_|OLLAMA_AUTH_|MEITUAN_|FENNO_|KIMI_|YAI_|ZAI_|STEPFUN_|XIAOMI_MIMO_|XUNFEI_|GROK_|DIM_|CCSWITCH_|USE_CC_SWITCH)' || true)"
     set -a
     # shellcheck disable=SC1090
     . "$DEPLOY_ENV_FILE"
@@ -119,6 +181,26 @@ inject_env_dropin() {
 clear_env_dropins() {
     local service_instance=$1
     sudo rm -rf "/etc/systemd/system/${service_instance}.service.d"
+}
+
+# Warn — never fail — when the CodeBuddy cookies about to be shipped do not
+# authenticate. Turns a silent "card 401s weeks later" into a deploy-time
+# message; a dead cookie must not block a deploy.
+warn_if_codebuddy_cookies_dead() {
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
+        -X POST "https://www.codebuddy.cn/billing/meter/get-user-resource-summary" \
+        -H "Cookie: session=$CODEBUDDY_SESSION_COOKIE; session_2=$CODEBUDDY_SESSION_COOKIE_2" \
+        -H 'Content-Type: application/json' \
+        -H 'Origin: https://www.codebuddy.cn' \
+        -H 'Referer: https://www.codebuddy.cn/profile/plans-usage' \
+        -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36' \
+        -d '{"resourceType":1}' 2>/dev/null) || code="000"
+    if [ "$code" != "200" ]; then
+        echo "⚠️  CodeBuddy cookies return HTTP $code (expected 200) — the card will 401."
+        echo "    Re-login at https://www.codebuddy.cn/ in Chrome, or unset the stale"
+        echo "    CODEBUDDY_* exports in ~/.bash_env, then redeploy."
+    fi
 }
 
 # Find a non-systemd token-stats-backend process listening on a given port.
@@ -319,6 +401,27 @@ else
     echo "⚠️  ZAI_API_KEY not set"
 fi
 
+# StepFun (platform.stepfun.com) — credit balance card on /api/quota.
+# Same key the CPA `stepfun` upstream uses (~/.bash_env).
+if [ -n "${STEPFUN_API_KEY:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "STEPFUN_API_KEY" "$STEPFUN_API_KEY"
+    echo "✅ Injected STEPFUN_API_KEY"
+else
+    echo "⚠️  STEPFUN_API_KEY not set"
+fi
+
+# StepFun Step Plan pool (console RPC). Both values come from a logged-in
+# platform.stepfun.com Chrome session: ./scripts/extract-stepfun-token.sh
+# The JWT lasts ~30 minutes; the running backend renews it into
+# ~/.config/token-stats/stepfun-auth.json, which outranks these env values.
+if [ -n "${STEPFUN_OASIS_TOKEN:-}" ] && [ -n "${STEPFUN_OASIS_WEBID:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "STEPFUN_OASIS_TOKEN" "$STEPFUN_OASIS_TOKEN"
+    inject_env_dropin "$NEW_INSTANCE" "STEPFUN_OASIS_WEBID" "$STEPFUN_OASIS_WEBID"
+    echo "✅ Injected STEPFUN_OASIS_TOKEN/WEBID"
+else
+    echo "⚠️  STEPFUN_OASIS_TOKEN/WEBID not set (Step Plan pool hidden)"
+fi
+
 if [ -n "${XIAOMI_MIMO_SERVICE_TOKEN:-}" ]; then
     inject_env_dropin "$NEW_INSTANCE" "XIAOMI_MIMO_SERVICE_TOKEN" "$XIAOMI_MIMO_SERVICE_TOKEN"
     echo "✅ Injected XIAOMI_MIMO_SERVICE_TOKEN"
@@ -341,6 +444,7 @@ else
 fi
 
 if [ -n "${CODEBUDDY_SESSION_COOKIE:-}" ] && [ -n "${CODEBUDDY_SESSION_COOKIE_2:-}" ]; then
+    warn_if_codebuddy_cookies_dead
     inject_env_dropin "$NEW_INSTANCE" "CODEBUDDY_SESSION_COOKIE" "$CODEBUDDY_SESSION_COOKIE"
     inject_env_dropin "$NEW_INSTANCE" "CODEBUDDY_SESSION_COOKIE_2" "$CODEBUDDY_SESSION_COOKIE_2"
     echo "✅ Injected CodeBuddy cookies"
