@@ -180,13 +180,13 @@ impl CommandCodeSource {
                 let (date, time) = super::parse_iso_timestamp(ts_str);
 
                 records.push(TokenRecord {
-                    date,
+                    date: date.into(),
                     time,
-                    api_key_prefix: "N/A".to_string(),
-                    provider,
+                    api_key_prefix: "N/A".into(),
+                    provider: provider.into(),
                     original_provider: None,
-                    model,
-                    source: "commandcode".to_string(),
+                    model: model.into(),
+                    source: "commandcode".into(),
                     input_tokens,
                     output_tokens,
                     cache_read_tokens,

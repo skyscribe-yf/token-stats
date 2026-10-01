@@ -2,6 +2,7 @@ use crate::models::*;
 use crate::pricing;
 use crate::time::TimeBound;
 use chrono::{DateTime, Duration, FixedOffset, Timelike, Utc};
+use compact_str::CompactString;
 use std::collections::{HashMap, HashSet};
 
 // ── Shared accumulation helper ───────────────────────────────────────────────
@@ -56,7 +57,7 @@ fn local_date_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Stri
             return local_dt.format("%Y-%m-%d").to_string();
         }
     }
-    record.date.clone()
+    record.date.to_string()
 }
 
 fn parse_csv_filter(s: Option<&str>) -> Vec<&str> {
@@ -296,9 +297,9 @@ pub fn paginate_requests(
             DetailedRequest {
                 date: local_date,
                 time: r.time.clone(),
-                provider: r.provider.clone(),
-                model: r.model.clone(),
-                source: r.source.clone(),
+                provider: r.provider.to_string(),
+                model: r.model.to_string(),
+                source: r.source.to_string(),
                 input_tokens: r.input_tokens,
                 output_tokens: r.output_tokens,
                 cache_read_tokens: r.cache_read_tokens,
@@ -985,13 +986,15 @@ pub fn compute_tps_analysis(
         intervals: Vec<(f64, f64)>,
     }
     let mut minute_buckets: HashMap<
-        (String, String),
+        (CompactString, CompactString),
         HashMap<DateTime<FixedOffset>, MinuteBucket>,
     > = HashMap::new();
-    let mut all_models: HashSet<String> = HashSet::new();
+    let mut all_models: HashSet<CompactString> = HashSet::new();
 
     for r in &filtered {
-        let model_key = format!("{}/{}", r.provider, r.model);
+        // Inline-sized for the vast majority of `provider/model` keys, which
+        // matters because this loop runs over every filtered record.
+        let model_key = compact_str::format_compact!("{}/{}", r.provider, r.model);
         all_models.insert(model_key.clone());
 
         if !model_set.is_empty() && !model_set.contains(model_key.as_str()) {
@@ -1118,8 +1121,8 @@ pub fn compute_tps_analysis(
             }
 
             TpsModelSeries {
-                model,
-                provider,
+                model: model.into(),
+                provider: provider.into(),
                 data_points,
             }
         })
@@ -1127,7 +1130,7 @@ pub fn compute_tps_analysis(
 
     models.sort_by(|a, b| a.model.cmp(&b.model));
 
-    let mut available_models: Vec<String> = all_models.into_iter().collect();
+    let mut available_models: Vec<String> = all_models.into_iter().map(String::from).collect();
     available_models.sort();
 
     TpsAnalysis {
@@ -1149,13 +1152,13 @@ mod tests {
         total_tokens: i64,
     ) -> TokenRecord {
         TokenRecord {
-            date: time[..10].to_string(),
+            date: time[..10].into(),
             time: time.to_string(),
-            api_key_prefix: "test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: source.to_string(),
+            model: model.into(),
+            source: source.into(),
             input_tokens: total_tokens / 2,
             output_tokens: total_tokens / 2,
             cache_read_tokens: 0,
@@ -1339,13 +1342,13 @@ mod tests {
         tps: f64,
     ) -> TokenRecord {
         TokenRecord {
-            date: time[..10].to_string(),
+            date: time[..10].into(),
             time: time.to_string(),
-            api_key_prefix: "test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: "pi".to_string(),
+            model: model.into(),
+            source: "pi".into(),
             input_tokens: 1000,
             output_tokens,
             cache_read_tokens: 0,

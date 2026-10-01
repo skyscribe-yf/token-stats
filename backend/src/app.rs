@@ -140,9 +140,19 @@ impl AppState {
         // Must run before `load_all()` — see the helper's doc comment.
         store.purge_zcode_account_plan_opencode_go();
 
+        // ── OpenCode reasoning fold-in migration ─────────────────────────
+        // OpenCode bills reasoning tokens at the output rate, but the parser
+        // used to discard `tokens.reasoning`, so every persisted OpenCode row
+        // under-reports output. Folding it in changes the fingerprint and would
+        // otherwise duplicate the history under new keys, so drop the old rows
+        // and let the full source re-parse below rebuild them. Guarded on the
+        // source DB still being able to reproduce them (sessions may have been
+        // pruned since). Must run before `load_all()` — see the helper.
+        store.migrate_opencode_reasoning_output(crate::sources::opencode_readable_row_count());
+
         // Restore history from the durable store, then ingest whatever the
         // session logs contain that isn't persisted yet.
-        let db_records = store.load_all();
+        let mut db_records = store.load_all();
         // Filtering with a growing set also dedups internal duplicates that
         // INSERT OR IGNORE would previously have dropped before the second
         // full reload.
@@ -234,6 +244,10 @@ impl AppState {
             .into_iter()
             .filter(|r| seen.insert(r.fingerprint()))
             .collect();
+        // `RecordTable::new` rebuilds a fingerprint set from the merged records
+        // later on, so this startup-only set has no further use; releasing it
+        // now keeps it from overlapping with that one.
+        drop(seen);
         let ingested = store.insert_batch(&new_from_sources);
         // Newly ingested exclusive cmd rows can pair with older inclusive
         // twins that were already in the store. Only worth scanning for when
@@ -245,56 +259,47 @@ impl AppState {
         // twins left by the incremental pre-scan skip.
         store.collapse_unknown_codex_twins();
 
-        // Build memory from the rows we already have instead of re-reading
-        // the whole DB a second time; apply the same in-memory twin-drop the
+        // Build memory from the rows we already have instead of re-reading the
+        // whole DB a second time; apply the same in-memory twin-drop the
         // refresh path uses and the load_all ORDER BY for identical shape.
-        let mut records: Vec<TokenRecord> = db_records
-            .into_iter()
-            .filter(|r| {
-                // Drop the legacy per-run dim rows the migration purge just
-                // removed from the store so memory and DB stay in sync.
-                !(dim_migrated && r.source == "dim" && !dim_keep.contains(&r.fingerprint()))
-            })
-            .filter(|r| {
-                // Drop the legacy grok-build dim rows the migration purge
-                // just removed from the store so memory and DB stay in sync.
-                !(dim_grok_migrated && r.source == "dim" && r.provider == "grok-build")
-            })
-            .filter(|r| {
-                // Drop the legacy workbuddy dim rows the migration purge
-                // just removed from the store so memory and DB stay in sync.
-                !(dim_workbuddy_migrated && r.source == "dim" && r.provider == "workbuddy")
-            })
-            .filter(|r| {
-                // Drop the dim cc-proxy run rows the migration purge just
-                // removed from the store so memory and DB stay in sync.
-                !(dim_cc_proxy_migrated
+        //
+        // The migration drops are applied with `retain` rather than
+        // `into_iter().filter().collect()` so the surviving records stay in the
+        // buffer they were parsed into — collecting would hold a second full
+        // ~180 MB buffer alongside `db_records` for the length of the assembly.
+        db_records.reserve(new_from_sources.len());
+        db_records.retain(|r| {
+            // Drop the legacy rows each migration purge just removed from the
+            // store so memory and DB stay in sync.
+            !(dim_migrated && r.source == "dim" && !dim_keep.contains(&r.fingerprint()))
+                // Legacy grok-build dim rows.
+                && !(dim_grok_migrated
+                    && r.source == "dim"
+                    && r.provider == "grok-build")
+                // Legacy workbuddy dim rows.
+                && !(dim_workbuddy_migrated
+                    && r.source == "dim"
+                    && r.provider == "workbuddy")
+                // Dim cc-proxy run rows: the cc-proxy source meters them.
+                && !(dim_cc_proxy_migrated
                     && r.source == "dim"
                     && r.original_provider.as_deref() == Some("cc-proxy"))
-            })
-            .filter(|r| {
-                // Drop the per-run Ollama Cloud rows the proxy supersedes, so
-                // memory and DB stay in sync with the purge above.
-                !(ollama_run_purged && crate::sources::ollama_run_record_superseded(r))
-            })
-            .filter(|r| {
-                // Drop the mislabeled zcode anthropic rows the migration
-                // purge just removed from the store so memory and DB stay
-                // in sync.
-                !(zcode_anthropic_purged
+                // Per-run Ollama Cloud rows the proxy supersedes.
+                && !(ollama_run_purged && crate::sources::ollama_run_record_superseded(r))
+                // Mislabeled zcode anthropic rows.
+                && !(zcode_anthropic_purged
                     && r.source == "zcode"
                     && r.provider == "anthropic")
-            })
-            .filter(|r| {
-                // Drop the zcode commandcode rows the migration purge just
-                // removed from the store: the cc-proxy source already meters
-                // those calls, so memory and DB stay in sync.
-                !(zcode_commandcode_purged
+                // zcode commandcode rows: the cc-proxy source meters them.
+                && !(zcode_commandcode_purged
                     && r.source == "zcode"
                     && r.provider == "commandcode")
-            })
-            .chain(new_from_sources)
-            .collect();
+        });
+        // `dim_keep` only existed to drive the retain above.
+        drop(dim_keep);
+        db_records.extend(new_from_sources);
+        let mut records = db_records;
+
         if has_cc {
             drop_commandcode_inclusive_twins(&mut records);
         }
@@ -732,13 +737,13 @@ mod tests {
 
     fn rec(source: &str, provider: &str, model: &str, time: &str) -> TokenRecord {
         TokenRecord {
-            date: time[..10].to_string(),
+            date: time[..10].into(),
             time: time.to_string(),
-            api_key_prefix: "N/A".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "N/A".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: source.to_string(),
+            model: model.into(),
+            source: source.into(),
             input_tokens: 20,
             output_tokens: 10,
             cache_read_tokens: 80,

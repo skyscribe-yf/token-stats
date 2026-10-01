@@ -13,7 +13,7 @@
 | [`docs/agents/pricing.md`](docs/agents/pricing.md) | `pricing.toml` 全部计费分支、分段汇率/折扣、实测费率与对账口径 | 改 `backend/src/pricing.rs`、`dim_entitlement.rs` 或编辑 `pricing.toml` |
 | [`docs/agents/quota-cards.md`](docs/agents/quota-cards.md) | 每张配额卡的端点、认证细节、DimAgent console API 逆向结论 | 改 `backend/src/quota/*.rs` 或某张卡显示异常/凭据失效 |
 | [`docs/agents/environment-variables.md`](docs/agents/environment-variables.md) | 全部环境变量（默认值 + 覆盖项 + 与插件共用的读取点） | 查某个变量的默认值、给 systemd 注入凭据 |
-| [`docs/agents/pitfalls.md`](docs/agents/pitfalls.md) | 编号陷阱 1–22（共 21 条，历史上跳过 20；本文件末尾按主题给出该读哪几条） | 见下方「按主题的陷阱编号」 |
+| [`docs/agents/pitfalls.md`](docs/agents/pitfalls.md) | 编号陷阱 1–25（共 24 条，历史上跳过 20；本文件末尾按主题给出该读哪几条） | 见下方「按主题的陷阱编号」 |
 | [`docs/ecs-deployment.md`](docs/ecs-deployment.md) | 经 ECS + SSH 反向隧道暴露公网 | 只在做公网暴露相关改动时 |
 
 ---
@@ -54,7 +54,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 1 | `pi` | `~/.pi/token-logs/usage.jsonl` | JSONL；另扫描 Taskplane runtime `events-exit.json` / `exit-summary.json` |
 | 2 | `codex` | `~/.codex/sessions/*/rollout-*.jsonl` | 增量解析**必须**读 `session_meta`/`turn_context`，否则堆出 `model=unknown` 双份（陷阱 12） |
 | 3 | `claude-code` | `~/.claude/projects/*/*.jsonl` | Anthropic 缓存语义，无需减法 |
-| 4 | `opencode` | `~/.local/share/opencode/opencode.db` | SQLite 只读 |
+| 4 | `opencode` | `~/.local/share/opencode/opencode.db` | SQLite 只读；**2.x 把消息搬到 `session_message`（旧 `message` 表冻结不再写入）**，两处都要读，且 JSON 形状不同（见详版） |
 | 5 | `kimi-cli` | `~/.kimi/sessions/*/wire.jsonl` | JSONL |
 | 6 | `kimi-code` | `~/.kimi-code*/sessions/*/*/agents/*/wire.jsonl` | 自动发现多个 home（`KIMI_CODE_HOME` 可锁定） |
 | 7 | `qoder-cli` | `~/.qoder/logs/sessions/<slug>/<session>/segments/*.jsonl` | 国际版 CLI；只取 `type=model.response.completed` 并按 `request_id` 去重；OpenAI 式 input **含**缓存需减 |
@@ -119,7 +119,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | Xiaomi MiMo | `XIAOMI_MIMO_SERVICE_TOKEN` + `XIAOMI_MIMO_USER_ID` | `quota/xiaomi_mimo.rs` |
 | Command Code | `~/.commandcode/auth.json` 的 `apiKey`（回退 `COMMANDCODE_SESSION_TOKEN`） | `quota/commandcode.rs` |
 | CodeBuddy 套餐 | `CODEBUDDY_SESSION_COOKIE` + `_2`（**两者必需**，易过期） | `quota/codebuddy.rs` |
-| Ollama Cloud | `OLLAMA_AUTH_COOKIE` | `quota/ollama.rs` |
+| Ollama Cloud | `OLLAMA_API_KEY`（主，同上上游 key）/ `OLLAMA_AUTH_COOKIE`（抓 `/settings` 网页端**重置时间** + 回退路径）；**「本周」用量由本地 `ollama-proxy` 计量，重置时间以网页端为准**（API 只给百分比；weekly 是日历对齐窗口，本地推算会漂移，见 [`docs/agents/quota-cards.md`](docs/agents/quota-cards.md)） | `quota/ollama.rs` |
 | Meituan LongCat | `MEITUAN_AUTH_COOKIE` | `quota/meituan.rs` |
 | Fenno / EX | `FENNO_AUTH_TOKEN` + `FENNO_REFRESH_TOKEN`（自动轮换持久化） | `quota/fenno.rs` |
 | Grok | 由 `grok-cli` 记录推算 | `quota/grok.rs` |
@@ -298,6 +298,13 @@ providers = ["openai", "ainaiba", "xai"]
 4. **增量解析** — `DataSource::data_files()` 报告源文件，mtime+size 未变则跳过；一次性跨源
    规范化仍每次执行（只作用于新记录，开销小）。
 5. **单一定价入口** — `pricing::display_cost()` 统一输出 CNY；`cost` 字段保留原始币种。
+6. **内存画像依赖三样东西**（详见 [`pitfalls.md`](docs/agents/pitfalls.md) 第 24 条）—
+   `#[global_allocator] mimalloc`（`main.rs`）、单元里的 `MALLOC_ARENA_MAX=2`、以及
+   `TokenRecord` 的 `date`/`api_key_prefix`/`provider`/`model`/`source` 用 `CompactString`
+   （≤22 字节内联，只有 `time` 留 `String`）。三者共同把 762k 条记录的常驻从 1109 MB 压到
+   300 MB；把字段改回 `String` 或去掉分配器覆盖都会**静默**涨 3 倍以上（不是泄漏，
+   是 glibc arena 只借不还）。改 `TokenRecord` 字段类型必须同步 `store.rs` 的
+   `params![...]`（`.as_str()`）与 `row_to_record`（走 `text_col` 的 `ValueRef` 直读）。
 
 ### 数据持久化（SQLite）
 
@@ -343,7 +350,7 @@ providers = ["openai", "ainaiba", "xai"]
 | 列表价 ÷ divisor | Command Code（`cc:` 前缀） | `commandcode_divisor`；部分模型有峰谷价 + `peak_weekdays_only` |
 | credits × 单价 | `codebuddy`、`dim-agent` | `codebuddy_cny_per_credit` + `codebuddy_credit_segments` 分段 |
 | API 原价 ÷ 倍率 | `kimi` | `kimi_subscription_multiplier`（设置抽屉可调） |
-| cost ÷ divisor | `opencode` | `opencode_divisor` + `opencode_model_segments` |
+| cost ÷ divisor | `opencode` | `opencode_divisor` + `opencode_model_segments`；**2.x 记录 cost=0 → 改走 token 价**，免费模型须登记 0 价 |
 | 目录原价 × entitlement rate | `dim` | `[[dim_model]]` 只登记**原价**，折扣走 `dim_entitlement.rs` 的 rate/rate_windows |
 | 平台倍率 ÷ 分段 divisor | Ainaba | `ainaba_platform_rate` / `ainaba_segments` |
 | 免费 | `qoder` | `[special] qoder_free` → ¥0（不是 N/A） |
@@ -442,6 +449,11 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
   然后 `./scripts/reload-pricing.sh`（等价 `curl -X POST /token-stats/api/pricing/reload`）。
 - 注意分段语义：`effective_from` 按记录时间生效；实时展示（配额卡）永远用最新段。
   **改基准值会追溯改写全部历史**，换套餐务必加分段。
+- **dim 源的费率必须用平台账本复核**（它不存原始 cost，写错不报错、只静默偏）：
+  `./scripts/verify-dim-billing.py [--model X] [--interval hourly|--both]`。
+  账本支持 `interval=hourly`，所以**当天就能验**，不必等隔日结算。
+  **公开价目卡（`/api/public/website/plans?line=dimcode`）的字段顺序不保证等于结算口径**——
+  `mimo-v2.6-flash` 09-28 前是反的、09-29 起才与价目卡一致（见 pricing.md）。
 
 ### "样式"
 - Tailwind v4；自定义主题色在 `index.css` 的 `@theme` 中（`--color-primary-*`）。
@@ -453,19 +465,20 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 
 ## 陷阱与注意事项
 
-全部编号陷阱（1–22，共 21 条；编号被提交信息和代码注释引用，故保持不重排）见
+全部编号陷阱（1–25，共 24 条；编号被提交信息和代码注释引用，故保持不重排）见
 [`docs/agents/pitfalls.md`](docs/agents/pitfalls.md)。按主题该先读哪几条：
 
 | 你在动 | 必读陷阱 |
 |--------|----------|
 | 前端构建 / nginx / base path | 1、2 |
-| 任何源库读取（SQLite） | 3 |
+| 任何源库读取（SQLite） | 3、23 |
 | `sources/dim.rs`、双计防护 | 4、15、19、22 |
 | CPA 插件 / `.so` / dim 凭据 | 13、14 |
 | 聚合 / 请求明细 / 零 token 记录 | 5、7、8 |
-| 定价 / `pricing.toml` | 6、11、18、21（+ [`pricing.md`](docs/agents/pricing.md)） |
+| 定价 / `pricing.toml` | 6、11、18、21、25（+ [`pricing.md`](docs/agents/pricing.md)） |
 | 部署 / systemd / 凭据注入 | 9、16、17、22 |
 | `vendor_merge` 与历史数据 | 10、12 |
+| `TokenRecord` 字段类型 / 分配器 / 常驻内存 | 24 |
 
 ---
 

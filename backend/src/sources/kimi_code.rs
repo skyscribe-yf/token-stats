@@ -256,13 +256,13 @@ impl KimiCodeSource {
                 };
 
                 records.push(TokenRecord {
-                    date,
+                    date: date.into(),
                     time,
-                    api_key_prefix: "N/A".to_string(),
-                    provider,
+                    api_key_prefix: "N/A".into(),
+                    provider: provider.into(),
                     original_provider: None,
-                    model: super::normalize_model_name(model),
-                    source: "kimi-code".to_string(),
+                    model: super::normalize_model_name(model).into(),
+                    source: "kimi-code".into(),
                     input_tokens: input_other,
                     output_tokens: output,
                     cache_read_tokens: cache_read,

@@ -118,7 +118,8 @@ if [ "${TOKEN_STATS_ALLOW_MISSING_CREDS:-}" != "1" ]; then
         "DIMAGENT_SESSION_COOKIE:dim data source + DimAgent card" \
         "YAI_API_KEY:Ainaiba/XAI balance" \
         "ZAI_API_KEY:ZAI card" \
-        "OLLAMA_AUTH_COOKIE:Ollama Cloud" \
+        "OLLAMA_API_KEY:Ollama Cloud card (plan/limits)" \
+        "OLLAMA_AUTH_COOKIE:Ollama Cloud card (cookie fallback)" \
         "FENNO_AUTH_TOKEN:Fenno card" \
         "MEITUAN_AUTH_COOKIE:Meituan LongCat" \
         "XIAOMI_MIMO_SERVICE_TOKEN:Xiaomi MiMo"
@@ -452,9 +453,16 @@ else
     echo "⚠️  CodeBuddy cookies not set (run scripts/extract-codebuddy-cookies.sh)"
 fi
 
+if [ -n "${OLLAMA_API_KEY:-}" ]; then
+    inject_env_dropin "$NEW_INSTANCE" "OLLAMA_API_KEY" "$OLLAMA_API_KEY"
+    echo "✅ Injected OLLAMA_API_KEY (Ollama Cloud card)"
+else
+    echo "⚠️  OLLAMA_API_KEY not set"
+fi
+
 if [ -n "${OLLAMA_AUTH_COOKIE:-}" ]; then
     inject_env_dropin "$NEW_INSTANCE" "OLLAMA_AUTH_COOKIE" "$OLLAMA_AUTH_COOKIE"
-    echo "✅ Injected OLLAMA_AUTH_COOKIE"
+    echo "✅ Injected OLLAMA_AUTH_COOKIE (fallback)"
 else
     echo "⚠️  OLLAMA_AUTH_COOKIE not set"
 fi

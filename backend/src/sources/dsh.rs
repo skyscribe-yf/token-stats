@@ -193,13 +193,13 @@ fn parse_session_file(path: &Path) -> Result<Vec<TokenRecord>, Box<dyn std::erro
             + usage.cache_read_tokens
             + usage.cache_write_tokens;
         records.push(TokenRecord {
-            date: utc.format("%Y-%m-%d").to_string(),
+            date: compact_str::format_compact!("{}", utc.format("%Y-%m-%d")),
             time: utc.to_rfc3339(),
-            api_key_prefix: session_id.clone(),
-            provider,
+            api_key_prefix: session_id.as_str().into(),
+            provider: provider.into(),
             original_provider: None,
-            model,
-            source: "dsh".to_string(),
+            model: model.into(),
+            source: "dsh".into(),
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cache_read_tokens: usage.cache_read_tokens,

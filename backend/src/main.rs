@@ -28,6 +28,17 @@ use flexi_logger::{
     Cleanup, Criterion, FileSpec, LogSpecification, Naming, WriteMode,
 };
 
+/// Route every heap allocation through mimalloc instead of glibc malloc.
+///
+/// The dashboard keeps ~760k `TokenRecord`s alive, which is millions of small
+/// `String` allocations. glibc spreads those across one arena per thread
+/// (44 arenas observed) and can only trim the top of the *main* arena, so the
+/// startup high-water mark stays resident forever: RSS sat at 1.1 GB while the
+/// live data is ~300 MB. mimalloc tracks pages per size class and decommits
+/// whole segments once they drain, so the peak is handed back.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Token Stats Backend — AI token usage dashboard API.
 #[derive(Parser, Debug)]
 #[command(name = "token-stats-backend", version)]

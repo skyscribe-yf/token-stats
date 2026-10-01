@@ -9,6 +9,7 @@
 |------|------|------|
 | `PORT` | `3000` | 后端端口 |
 | `RUST_LOG` | - | 日志级别（`info`、`debug`、`trace`） |
+| `MALLOC_ARENA_MAX` | 单元里固定为 `2` | **不是本程序读取的变量**，glibc malloc 自己读的。Rust 分配已由 `#[global_allocator]` 交给 mimalloc，这条管的是仍走 libc 的部分（bundled SQLite 等）：默认按线程开到 8×nproc 个 arena 且只借不还，实测吃出 655 MB。删掉它会让常驻内存明显回涨，见 [`pitfalls.md`](pitfalls.md) 第 24 条 |
 | `REFRESH_INTERVAL_SECS` | `30` | 数据刷新间隔 |
 | `TOKEN_STATS_DB_PATH` | `~/.config/token-stats/token-stats.db` | 专用 SQLite 持久化库 |
 | `PRICING_CONFIG` | 二进制旁 `pricing.toml` | 定价配置路径 |
@@ -53,7 +54,9 @@
 | `OPENCODE_GO_WORKSPACE_ID(_EX)` | 未设置 | OpenCode Go 工作区 ID（配额卡必需） |
 | `OPENCODE_GO_AUTH_COOKIE(_EX)` | 未设置 | OpenCode Go `auth` cookie（配额卡必需） |
 | `XIAOMI_MIMO_SERVICE_TOKEN` / `XIAOMI_MIMO_USER_ID` | 未设置 | 小米 MiMo 配额卡凭据 |
-| `OLLAMA_AUTH_COOKIE` | 未设置 | Ollama cloud 会话 cookie |
+| `OLLAMA_API_KEY` | 未设置 | Ollama Cloud 配额卡**主**凭据（与 CPA `ollama-cloud` 上游同一 key）；走 `POST /api/me` + `GET /api/usage` |
+| `OLLAMA_AUTH_COOKIE` | 未设置 | Ollama Cloud 会话 cookie：主路径用它抓 `/settings` 网页端的重置时间；`OLLAMA_API_KEY` 缺失/失败时还是整个卡片的 HTML 回退凭据 |
+| `OLLAMA_WINDOW_STATE_PATH` | `~/.config/token-stats/ollama-window.json` | Ollama session/weekly 用量窗口的网格相位（网页时间不可用时的重置时间兜底预测，可删，删后下一轮从本地计量重新 bootstrap） |
 | `MEITUAN_AUTH_COOKIE` | 未设置 | 美团 LongCat `passport_token_key` |
 | `FENNO_AUTH_TOKEN` | 未设置 | Fenno 初始访问 JWT（仅引导） |
 | `FENNO_REFRESH_TOKEN` | 未设置 | Fenno 初始刷新 token（轮换后自动持久化） |

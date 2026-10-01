@@ -792,15 +792,17 @@ function OllamaCard({
   const cardId = "quota-ollama";
   const flash = useHighlightFlash(highlightId, cardId);
   const data = status?.data;
-  // Use the nearest reset time for the cycle countdown
   const sessionEntry = data?.usage_entries?.find(
     (e) => e.usage_type === "Session"
   );
   const weeklyEntry = data?.usage_entries?.find(
     (e) => e.usage_type === "Weekly"
   );
+  // The weekly window is the card's "cycle" (the 5h session reset has its own
+  // countdown on the session bar); fall back to the session when the plan has
+  // no weekly window.
   const cycleCountdown = buildCycleCountdown(
-    sessionEntry?.reset_time ?? weeklyEntry?.reset_time ?? null
+    weeklyEntry?.reset_time ?? sessionEntry?.reset_time ?? null
   );
 
   return (
@@ -854,13 +856,15 @@ function OllamaCard({
                 </a>
               )}
             </div>
-            {data.estimated_tokens_used != null && data.estimated_cost_cny != null && (
+            {data.weekly_tokens != null && data.weekly_cost_cny != null && (
               <div className="flex items-center gap-2">
                 <span className="text-slate-400">
-                  本周 {formatNumber(data.estimated_tokens_used)}
+                  本周 {formatNumber(data.weekly_tokens)}
+                  {data.weekly_calls != null &&
+                    ` · ${formatNumber(data.weekly_calls)} 次`}
                 </span>
                 <span className="text-slate-700 font-medium">
-                  ≈¥{data.estimated_cost_cny.toFixed(2)}
+                  ≈¥{data.weekly_cost_cny.toFixed(2)}
                 </span>
               </div>
             )}

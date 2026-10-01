@@ -112,13 +112,13 @@ pub fn apply_vendor_merge(records: &mut [TokenRecord], merge_map: &HashMap<Strin
 
     let mut merged_count = 0usize;
     for record in records.iter_mut() {
-        if let Some(target) = merge_map.get(&record.provider) {
+        if let Some(target) = merge_map.get(record.provider.as_str()) {
             // Preserve the original provider name for pricing logic
             // (e.g. "kimi-coding" needs different pricing than raw "kimi")
             if record.original_provider.is_none() {
-                record.original_provider = Some(record.provider.clone());
+                record.original_provider = Some(record.provider.to_string());
             }
-            record.provider = target.clone();
+            record.provider = target.as_str().into();
             merged_count += 1;
         }
     }
@@ -285,13 +285,13 @@ providers = ["freemodel", "FreeModel"]
 
     fn test_record(provider: &str) -> TokenRecord {
         TokenRecord {
-            date: "2026-05-17".to_string(),
+            date: "2026-05-17".into(),
             time: "2026-05-17T00:00:00Z".to_string(),
-            api_key_prefix: "test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: "test-model".to_string(),
-            source: "test".to_string(),
+            model: "test-model".into(),
+            source: "test".into(),
             input_tokens: 100,
             output_tokens: 50,
             cache_read_tokens: 0,

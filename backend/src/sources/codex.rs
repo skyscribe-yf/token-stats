@@ -270,13 +270,13 @@ impl CodexSource {
                     let (date, time) = super::parse_iso_timestamp(ts_str);
 
                     records.push(TokenRecord {
-                        date,
+                        date: date.into(),
                         time,
-                        api_key_prefix: "N/A".to_string(),
-                        provider: session_provider.clone(),
+                        api_key_prefix: "N/A".into(),
+                        provider: session_provider.as_str().into(),
                         original_provider: None,
-                        model: session_model.clone(),
-                        source: "codex".to_string(),
+                        model: session_model.as_str().into(),
+                        source: "codex".into(),
                         input_tokens: effective_input,
                         output_tokens: total_output_tokens,
                         cache_read_tokens: cached_input_tokens,

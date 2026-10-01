@@ -27,6 +27,28 @@
   `/responses` + `stream:true`，比对 `response.created`/`response.completed`
   里的 `model` 字段与请求模型；计费口径用 `/dashboard/live` 的
   `daily_usage.ModelUsage.<model>.CreditUsed` 前后差值验证。
+- **GPT-6.1 Sol（2026-09-30 发布）**：OpenAI 官方标准价 input $2 / cached input $0.10
+  （输入价 5%）/ cache_write = input × 1.25 = $2.50 / output $10；长上下文档（>272K 输入）
+  input 与 cache ×2、output ×1.5 → $4 / $0.20 / $5 / $15。走**通用** `[[model]]` +
+  Yairouter 平台固定汇率 7.0 ÷ ainaba divisor（当前 21.538461538，等价于 官方 USD × 0.325）
+  ——与 gpt-5.6-sol 同一条路径，**不要**加 `[[yairouter_model]]` 覆盖。2026-10-01 受控探针
+  （`/v1/chat/completions`，逐次核对 `/dashboard/live` 的 `ModelUsage.gpt-6.1-sol` 增量）：
+  base 档 (3514×$2 + 5×$10)/1M × 7 = 0.049546；cache 命中档（3840 cached ×$0.10 + 517
+  未缓存 + 5 out）0.071624，均与账本分毫不差。
+- **GPT-5.6 Sol 官方降价（2026-08-22，Yairouter/Fenno 同步）**：短上下文
+  5/30/0.5/6.25 → **4/20/0.4/5**，长上下文 10/45/1/12.5 → **8/30/0.8/10**（IT之家
+  08-22 12:01 CST 报道；官方页现标注为促销价 “available at least through
+  November 21, 2026”）。pricing.toml 以 `effective_from = "2026-08-22T00:00:00+08:00"`
+  加段、**基准段保留降价前价格**（08-22 全天无 Sol 流量，cutoff 取 00:00 CST 不触及任何
+  记录）。同日账本增量核算与 4/0.4/20 × factor(7) 完全一致；促销到期后需再加分段。
+- **Yairouter `gpt-5.6-terra` / `gpt-5.6-luna` 实测价与 `[[yairouter_model]]` 覆盖不符
+  （2026-10-01 受控探针，尚未处理）**：两者实测都按 **input $2 / cached $0.2 / output $12**
+  计费（luna：467 未缓存 + 3840 cached + 5 out → 0.024668 = (467×2 + 3840×0.2 + 5×12)/1M × 7；
+  terra：(4307×2 + 5×12)/1M × 7 = 0.060718，两次独立探针一致；当日 luna 账本桶整体也精确
+  落在 2/12）。而覆盖表里 terra = 2.5/15、luna = 1/6/0.1（08-17 起）。terra 与官方 07-31
+  降价后的 2/12 相同；luna 则比官方 0.2/1.2 贵 10×，形似平台把 luna 按 terra 价计。
+  **改前需确认生效时间**（无历史账本可回溯，只能确认 10-01 当天）；cache_write 与长上下文
+  档位未实测。
 - **Command Code**：`cc:` 前缀模型为 Command Code 列表价（部分模型带 `peak_hours_utc`
   峰谷价，DeepSeek 2026-08-16 起实施）；实际成本 = 列表价 / `commandcode_divisor` → CNY。
   **2026-09-09 新增 `deepseek-v4.1-flash`**（CLI v1.53.0，v4-flash 同价，Go 计划页确认）：
@@ -47,6 +69,12 @@
   （默认 20，设置抽屉可调、持久化）：`成本 = (input×in + cache_read×cr + output×out) / 1M / 倍率`。
 - **OpenCode**：原始 cost / `opencode_divisor`（6.0）；`opencode_model_segments` 可按模型+
   时间覆盖 divisor（如 deepseek-v4 2026-08-18 起 divisor=3）。
+  **OpenCode 2.x 起不再记录 per-message cost（恒为 0）**，这类记录改走「按 token ×
+  `[[model]]` 价 ÷ divisor」的派生分支（`opencode` 已加入 pricing.rs 分支 6 的 source 列表）。
+  因此 2.x 用到的免费模型（`space-bunny-free` / `ox-alpha-free` / `nemotron-3-ultra-free` /
+  `mimo-v2.5-free`）必须显式登记 0 价，否则会掉进末尾的 `-1`（前端 N/A）而不是 ¥0。
+  注意 `output_tokens` **已含 reasoning**（OpenCode 按输出价计 reasoning，见
+  [`data-sources.md`](./data-sources.md) 的 opencode 条目），所以这里不能再额外加一次。
 - **Dim（console API 源）**：不存储原始 cost，`display_cost()` 走"衍生源"分支——按
   pricing.toml **`[[dim_model]]` 平台目录原价**（Lite 套餐 ¥70/11000 积分换算 CNY，如
   vision-exp input=0.653798 / output=3.922790 / cache_read=0.043587 元每 1M），
@@ -60,7 +88,58 @@
   <0.01%）——两个名字都保留在 `[[dim_model]]` 中（旧名仅供历史记录，最后
   一条 2026-09-09T23:14Z），改名漏配会让该模型成本显示 0.00/N/A；seed-2.0-mini 按
   价目卡（0.174346 / 1.743458 / 0.034869，无高峰）；glm-5.3-flash 无折扣按接口价
-  （0.477273 / 1.590909 / 0.095455）；无价格模型的记录显示 N/A。
+  （0.477273 / 1.590909 / 0.095455）；**`mimo-v2.6-flash`（2026-09-28 上线）的结算口径被平台
+  改过一次，因此 `[[dim_model]]` 里有两段，两段都别删**：
+  - **2026-09-29 起**（`effective_from = "2026-09-29T00:00:00+08:00"`）= 价目卡口径
+    input 140 / output 280 / cache_read 2.8 积分/M
+    （0.890909 / 1.781818 / 0.017818 CNY/M，无忙时、无 cache 写入）；
+  - **2026-09-28 及以前**（基线段）= input 140 / output **2.8** / cache_read **280**
+    （0.890909 / 0.017818 / 1.781818）——当时账本实收就是这样，与价目卡字段顺序**相反**。
+  - **`mimo-v2.6-pro`（2026-10-01 上线）** = 价目卡 6 个套餐一致写 input 435 / output 870 /
+    cache_read 3.6 积分/M（**2.768182 / 5.536364 / 0.022909 CNY/M**），且字段顺序与结算
+    口径一致（与 flash 那个反序的坑不同，照抄即可）。无忙时窗口、entitlement rate **1.0**
+    （`model_access[]` 里该模型无 `rate`，`base == final` 印证）。对账见下方"整桶对账"。
+
+  **`mimo-v2.6-pro` 的整桶对账**（`/api/user/daily-stats`，`interval=hourly`）：10-01 14:00
+  CST 桶混了 deepseek-v4.1-flash，用它已验证的原价扣掉再解 mimo。前提是先在本地记录里
+  找到与账本 token 口径**逐项精确相等**的前缀 = 前 311 条（prompt 594226 + cache 28232064
+  = 账本 28826290、completion 206539、cache 28232064），其中 deepseek 306 条、mimo 5 条。
+  按目录原价加总 286429.589 vs `base_amount_minor` 286432 → **0.999992x**；按 entitlement
+  （deepseek ×0.65、mimo ×1.0）加总 193473.325 vs `final_amount_minor` 193477 → **0.999981x**。
+  ⚠️ **别拿 `request_count`（当时 316）做前缀匹配**——它把尚未落账的在途请求也算进去了，
+  照它算会对不上（`verify-dim-billing.py` 的前缀法在这个桶会误报）。以 token 口径为准。
+
+  **`[[special.dim_offpeak_windows]]` = 平台全站闲时窗口**：节假日平台把**整个模型目录**
+  按闲时计费，所以这不是某个模型的 `peak_hours_utc`，而是覆盖全 `dim` 源的开关——窗口内
+  所有记录按基础价，`peak_*` 双倍一律不生效（`pricing.rs::in_offpeak_window` →
+  `compute_cny(force_off_peak)`；`verify-dim-billing.py` 已同步）。
+  当前一条：**2026 国庆** `from = "2026-09-30T11:21:00+08:00"` / `to = "2026-10-08"`。
+  - 法定假期是 10-01~10-07（国办发明电〔2025〕7 号），但平台**提前到 09-30 中午**切换：
+    09-30 11:00 CST 桶里 deepseek 的 228 条记录**前 62 条按忙时 2×、之后按闲时 1×**，
+    逐条累加只有「11:20:54 之后 / 11:21:43 之前切换」这一个解（残差 1.9 毫积分 / 0.0007%，
+    下一个候选解残差跳到 481）；12:00 起的桶 `base_amount_minor` 全部按闲时闭合，
+    `final/base` 恒为 0.65。cutoff 取整到分钟。
+  - 被改写的历史只有 **09-30 11:21–12:00** 这一段（12:00 以后本来就不忙）；09-30 之前
+    不能提前——09-20 同时段账本确实按忙时收的。
+  - **`to` 故意写死**（不留空）：留空会让窗口一直生效，之后每个忙时段少算一半且不报错。
+    若平台延长假期就改这个 `to`，改完跑一次 `verify-dim-billing.py --interval hourly`；
+    10-08 恢复后同样跑一次，确认桶回到 2×。**讯飞的节假日走
+    `[special.xunfei_off_peak] holidays`（按日期），与这个无关。**
+
+  两段各自对账（`/api/user/daily-stats`）：① 09-28 CST 整天 21 次 / input 66334 +
+  output 18381 + cache 1008960 → 291.847 积分 = `final_amount_minor` 291847
+  （`base == final` ⇒ entitlement rate 1.0，该模型 `model_access` 里无 rate/rate_windows），
+  按②的费率算只有 17.259（0.059×）；② 09-29 CST 07:00 小时桶 52 次 / input 105415 +
+  output 25986 + cache 3346432 → 31.404 积分 = 31403（1.0000x），按①的费率算是
+  951.832（**30.3×**）——即平台当天换了口径。切换时刻只能定位到流量空档
+  **09-28 20:32 CST → 09-29 07:27 CST** 之间（窗口内无任何请求），故 cutoff 取
+  09-29 00:00 CST。**改这段前先跑 `./scripts/verify-dim-billing.py`**：它按
+  `interval=daily|hourly` 拿账本逐桶核对，**当天即可验证**（不必等隔日结算），也能顺带
+  发现 dim 源漏记录（账本次数 > 本地记录数）。复核要点：cookie 用
+  `~/.config/token-stats/deploy-env.sh` 的 `DIMAGENT_SESSION_COOKIE`（shell 里那份可能已过期），
+  且平台 `prompt_tokens` **含 cache**，对应我们已减去 cache 的 `input_tokens`。
+  无价格模型的记录显示 N/A
+  （`display_cost` 返回 -1，聚合时直接被剔除——**平台新增模型后忘登记就会这样静默漏计**）。
 - **Dim 折扣走 entitlement rate（`src/dim_entitlement.rs`）**：平台实收 = **目录原价 ×
   账号 entitlement 的 `rate`**，所以 `[[dim_model]]` 只登记**原价**——折扣不再写死
   （glm-5.3 曾因而已从 840/2940/182 的 7 折价改回原价，夜间再 5 折也改由窗口给出）。

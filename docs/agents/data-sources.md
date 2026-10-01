@@ -11,7 +11,7 @@
 | 1 | `pi` | `~/.pi/token-logs/usage.jsonl` | JSONL；另扫描 Taskplane runtime `events-exit.json` / `exit-summary.json`（可用 `TASKPLANE_PROJECTS_DIR` 覆盖项目根） |
 | 2 | `codex` | `~/.codex/sessions/*/rollout-*.jsonl` | JSONL，直接来自 Codex CLI |
 | 3 | `claude-code` | `~/.claude/projects/*/*.jsonl` | JSONL，直接来自 Claude Code CLI |
-| 4 | `opencode` | `~/.local/share/opencode/opencode.db` | SQLite，直接来自 OpenCode CLI |
+| 4 | `opencode` | `~/.local/share/opencode/opencode.db` | SQLite，直接来自 OpenCode CLI。**1.x 与 2.x 双形态**（2026-09-26 起本机为 v2.0.18）：逐条消息 2.x 存在 **`session_message`**（配 `session_v2`），1.x 存在 `message`（配 `session`）；2.x 迁移会把 1.x 历史复制进新表，旧表**保留但不再写入**（本机停在 `2026-09-26T12:57:31Z`，194 行）。读法：`session_message WHERE type='assistant'` 为主 + `message WHERE id NOT IN (SELECT id FROM session_message)` 取残行（本机 10 行＝升级前最后一个 session）；整表都读会重复 184 行。**JSON 形状差异**：role 在 2.x 是行的 `type` 列（不在 JSON 内）、模型在 2.x 是 `data.model.{providerID,id,variant}`（1.x 是顶层 `modelID`/`providerID`）、2.x **没有 `tokens.total`**（= input+output+reasoning+cache.read+cache.write，1.x 实测恒等于该和）、2.x **不再记 cost**（原生行恒 0）。`providerID='opencode'` 归一成 `opencode-go`。**reasoning 是独立且按输出价计费的 token 类**，不是 output 的子集：1.x 的 `cost` 实测满足 `input×$0.14 + (output+reasoning)×$0.28 + cache_read×$0.0028` 每 1M（deepseek-v4-flash，逐行精确闭合），且有 46 行 `output < reasoning`；解析器把 reasoning 并入 `output_tokens`，早期少算的行由启动迁移 `migrate_opencode_reasoning_output` 在 `load_all()` **之前**删旧指纹行、全量重解析回灌（**带闸门**：仅当 `opencode_readable_row_count()` ≥ 已持久化行数才删，源库被清理时保留历史并在下次启动重试——与陷阱 11 的「store 只增不删」一致，不同于其它无条件 purge） |
 | 5 | `kimi-cli` | `~/.kimi/sessions/*/wire.jsonl` | JSONL（`KIMI_SESSIONS_PATH` 可覆盖目录） |
 | 6 | `kimi-code` | `~/.kimi-code*/sessions/*/*/agents/*/wire.jsonl` | JSONL（`KIMI_CODE_HOME` 可覆盖根目录） |
 | 7 | `qoder-cli` | `~/.qoder/logs/sessions/<project-slug>/<session-id>/segments/*.jsonl` | JSONL，国际版 `qoder`/`qodercli` CLI（v1.0.14）；只取 `type=model.response.completed` 事件并按 `request_id` 去重；OpenAI 式 `input_tokens` **含**缓存命中，解析时减去归一为 Anthropic 语义；provider 取日志的 `data.provider`，缺失时回落模型别名表（`qfmodel`/`qmodel_latest`/`efficient`/`auto`/`qmodel_38max`→`qoder`）（`QODER_SESSIONS_PATH` 可覆盖）。旧实现读 `~/.qoder/projects/*/*.jsonl`，新版 CLI 已不往那里写 `usage` → 恒 0 条 |
@@ -183,6 +183,19 @@ CPA（`http://127.0.0.1:8317/v1`）且拉到同一份 37 个模型目录，属�
 用 `ollama/*` 与 `wb/*` 前缀区分通道；`ollama-cloud-proxy` 与旧的直连
 `custom-ollama-cloud-042036d3`（`https://ollama.com/v1`）均已 `dim provider remove`。
 新增/切换模型后必须 `dim model refresh workbuddy`。
+
+**平台新增计费模型 → 必须同步登记 `pricing.toml` 的 `[[dim_model]]`**：dim 源能逐请求
+拿到平台上的**任意**新模型（`item.model_name` 原样写入记录，`provider` 恒为 `"dim"`），
+但 `display_cost()` 只认 `[[dim_model]]` 里的名字。漏登记时该模型的成本返回 `-1`
+（前端 N/A、聚合直接剔除），**token 与调用次数还在、费用却凭空消失**——不报错，
+只会让当日账单对不上。2026-09-28 的 `mimo-v2.6-flash` 就是这么漏了 9 次调用。
+登记时**先**照抄价目卡 `GET https://dimagent.cn/api/public/website/plans?line=dimcode`
+的 Lite 套餐（8102）`models[]` 三个字段，× 70/11000 换算 CNY，然后**必须**用
+`/api/user/daily-stats` 的 `base_amount_minor`（原价）/`final_amount_minor`（实扣）
+当天对账（见 [`pricing.md`](./pricing.md)）。⚠️ **价目卡的字段顺序不保证等于结算口径**：
+`mimo-v2.6-flash` 的价目卡 6 个套餐一致地写 `input 140 / output 280 / cache_read 2.8`，
+但账本实收是 `140 / 2.8 / 280`（output 与 cache_read 摆反）。所以新模型要按**整天**
+对账（不是半天快照）再定稿；对不上时以账本为准，并把结论写进 `pricing.toml` 注释。
 
 **踩坑：直连 ollama provider 会被「重新加回来」**（2026-09-12 复现）。上一条记录后
 `custom-ollama-cloud-042036d3` 又被 `dim provider add` 重建了一次

@@ -156,8 +156,16 @@ impl QuotaFetcher {
     }
 
     /// Fetch Ollama cloud subscription/quota info.
-    pub async fn fetch_ollama_quota(&self) -> OllamaQuotaStatus {
-        ollama::fetch_ollama_quota(&self.client).await
+    ///
+    /// `records` is the caller's `source="ollama-proxy"` snapshot: the API
+    /// reports usage fractions without reset timestamps, so the fetcher dates
+    /// the session/weekly windows and totals the weekly spend from the local
+    /// per-request meter.
+    pub async fn fetch_ollama_quota(
+        &self,
+        records: &[crate::models::TokenRecord],
+    ) -> OllamaQuotaStatus {
+        ollama::fetch_ollama_quota(&self.client, records).await
     }
 
     /// Fetch Meituan LongCat token pack quota info.

@@ -296,13 +296,13 @@ impl ZcodeSource {
                     };
 
                     records.push(TokenRecord {
-                        date,
+                        date: date.into(),
                         time,
-                        api_key_prefix: "N/A".to_string(),
-                        provider,
+                        api_key_prefix: "N/A".into(),
+                        provider: provider.into(),
                         original_provider: None,
-                        model: model_id,
-                        source: "zcode".to_string(),
+                        model: model_id.into(),
+                        source: "zcode".into(),
                         input_tokens: effective_input,
                         output_tokens: effective_output,
                         cache_read_tokens: cache_read,

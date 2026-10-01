@@ -695,13 +695,13 @@ fn local_row_to_record(
         .unwrap_or(0.0);
 
     Some(TokenRecord {
-        date,
+        date: date.into(),
         time,
-        api_key_prefix: "N/A".to_string(),
-        provider,
+        api_key_prefix: "N/A".into(),
+        provider: provider.into(),
         original_provider,
-        model: model_id.to_string(),
-        source: "dim".to_string(),
+        model: model_id.into(),
+        source: "dim".into(),
         input_tokens: effective_input,
         output_tokens,
         cache_read_tokens: cache_read,
@@ -736,13 +736,13 @@ fn item_to_record(item: &LogItem) -> Option<TokenRecord> {
     let (date, time) = super::parse_iso_timestamp(&dt.to_rfc3339());
 
     Some(TokenRecord {
-        date,
+        date: date.into(),
         time,
-        api_key_prefix: "N/A".to_string(),
-        provider: "dim".to_string(),
+        api_key_prefix: "N/A".into(),
+        provider: "dim".into(),
         original_provider: Some("dim".to_string()),
-        model: item.model_name.clone(),
-        source: "dim".to_string(),
+        model: item.model_name.as_str().into(),
+        source: "dim".into(),
         input_tokens: effective_input,
         output_tokens: output,
         cache_read_tokens: cache_read,

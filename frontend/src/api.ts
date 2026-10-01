@@ -433,8 +433,12 @@ export interface OllamaQuotaData {
   usage_entries: OllamaUsageEntry[];
   has_annual_option: boolean;
   has_max_upgrade: boolean;
-  estimated_tokens_used: number | null;
-  estimated_cost_cny: number | null;
+  /** Actual tokens metered in the live weekly window (ollama-proxy source). */
+  weekly_tokens: number | null;
+  /** Subscription cost (CNY) of those records. */
+  weekly_cost_cny: number | null;
+  /** Requests metered in the live weekly window. */
+  weekly_calls: number | null;
 }
 
 export interface OllamaQuotaStatus {

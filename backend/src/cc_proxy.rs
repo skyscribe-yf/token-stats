@@ -25,6 +25,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, SecondsFormat, Utc};
+use compact_str::CompactString;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{io::Write, net::SocketAddr, path::PathBuf};
@@ -735,13 +736,13 @@ fn record_usage(
     let model = crate::sources::normalize_model_name(&model);
 
     Some(crate::models::TokenRecord {
-        date: recorded_at.format("%Y-%m-%d").to_string(),
+        date: compact_str::format_compact!("{}", recorded_at.format("%Y-%m-%d")),
         time: recorded_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        api_key_prefix: String::new(),
-        provider: "commandcode".to_string(),
+        api_key_prefix: CompactString::default(),
+        provider: "commandcode".into(),
         original_provider: None,
-        model,
-        source: CC_SOURCE.to_string(),
+        model: model.into(),
+        source: CC_SOURCE.into(),
         input_tokens: uncached_input,
         output_tokens,
         cache_read_tokens: cache_read,

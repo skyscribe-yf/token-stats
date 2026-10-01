@@ -276,8 +276,8 @@ const RENDERERS = {
         (d.usage_entries || []).forEach(e =>
             rows.push(pctBarRow(e.usage_type, e.percentage, null, e.reset_time)));
         if (d.renews_on) rows.push({kind: 'text', label: '续期日', value: d.renews_on});
-        if (d.estimated_cost_cny != null)
-            rows.push({kind: 'text', label: '本周估算', value: fmtMoney(d.estimated_cost_cny)});
+        if (d.weekly_cost_cny != null)
+            rows.push({kind: 'text', label: '本周实际', value: fmtMoney(d.weekly_cost_cny)});
         return rows;
     },
 

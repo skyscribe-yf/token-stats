@@ -203,13 +203,13 @@ function buildQuotaChips(
         pct: entry.percentage,
       });
     }
-    if (o.estimated_cost_cny != null) {
+    if (o.weekly_cost_cny != null) {
       chips.push({
         id: "ollama-cost",
         cardId: "quota-ollama",
         vendor: "Ollama",
         scope: "成本",
-        display: `¥${o.estimated_cost_cny.toFixed(2)}`,
+        display: `¥${o.weekly_cost_cny.toFixed(2)}`,
         pct: null,
       });
     }

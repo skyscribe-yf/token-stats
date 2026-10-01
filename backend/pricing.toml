@@ -264,6 +264,7 @@ effective_from = "2026-06-18"
 peak_hours = [8, 22]
 # 中国法定节假日（UTC+8 日期，格式 YYYY-MM-DD）
 # 需每年根据国务院公告更新（通常在前一年 11-12 月发布）
+# 注：这只影响讯飞的波谷系数。DimAgent 的国庆闲时走下面的 dim_offpeak_windows。
 holidays = [
     # 2026 年元旦
     "2026-01-01", "2026-01-02", "2026-01-03",
@@ -298,7 +299,13 @@ output = 45.00
 cache_read = 1.00
 cache_write = 10.00
 
-# GPT-5.6：短上下文官方价格；cache_write = input × 1.25
+# GPT-5.6 Sol：基准段 = 降价前官方价（cache_write = input × 1.25）。
+# 2026-08-22 OpenAI 官方降价（IT之家当日报道；短上下文 input $5→$4 / output $30→$20 /
+# cache_read $0.5→$0.4 / cache_write $6.25→$5；长上下文 input $10→$8 / output $45→$30）。
+# 公告发布于 2026-08-22 12:01 CST，实际生效时刻未精确到点；该日全天无 Sol 流量
+# （08-21 与 08-23 有记录，08-22 为 0），故 cutoff 取 08-22 00:00 CST。
+# 官方页将当前价标注为促销价（"available at least through November 21, 2026"），
+# 促销结束后再加分段即可。Yairouter 账本（2026-10-01）与 4/0.4/20 × factor(7) 完全一致。
 [[model]]
 name = "gpt-5.6-sol"
 input = 5.00
@@ -313,6 +320,23 @@ input = 10.00
 output = 45.00
 cache_read = 1.00
 cache_write = 12.50
+
+[[model]]
+name = "gpt-5.6-sol"
+effective_from = "2026-08-22T00:00:00+08:00"
+input = 4.00
+output = 20.00
+cache_read = 0.40
+cache_write = 5.00
+
+[[model]]
+name = "gpt-5.6-sol"
+effective_from = "2026-08-22T00:00:00+08:00"
+tier_threshold = 272000
+input = 8.00
+output = 30.00
+cache_read = 0.80
+cache_write = 10.00
 
 [[model]]
 name = "gpt-5.6-terra"
@@ -443,6 +467,31 @@ input = 20.00
 output = 75.00
 cache_read = 2.00
 cache_write = 25.00
+
+# GPT-6.1 Sol：OpenAI 官方标准价（2026-09-30 开发者日发布）
+# 来源：https://developers.openai.com/api/docs/models/gpt-6.1-sol
+# input $2 / cached input $0.10（= 输入价 5%）/ cache writes = input × 1.25 = $2.50 / output $10
+# 长上下文档（total input > 272K）：input 与 cache ×2、output ×1.5（整请求计）
+#   → input $4 / cache_read $0.20 / cache_write $5 / output $15
+# 计费路径与 gpt-5.6-sol 相同：Yairouter/Ainaba 在通用价目上走平台固定汇率
+# （ainaba_platform_rate = 7.0）÷ ainaba 分段 divisor（当前 21.538461538），
+# 即 官方 USD × 7 / divisor；无需 [[yairouter_model]] 覆盖。
+# 平台账本核对（2026-10-01，/dashboard/live）：ModelUsage.gpt-6.1-sol.CreditUsed
+# = (28054×$2 + 135×$10)/1M × factor(7) = 0.402206，分毫不差。
+[[model]]
+name = "gpt-6.1-sol"
+input = 2.00
+output = 10.00
+cache_read = 0.10
+cache_write = 2.50
+
+[[model]]
+name = "gpt-6.1-sol"
+tier_threshold = 272000
+input = 4.00
+output = 15.00
+cache_read = 0.20
+cache_write = 5.00
 
 [[model]]
 name = "gpt-5.4"
@@ -650,6 +699,65 @@ output_cny = 0.0
 cache_read_cny = 0.0
 cache_write_cny = 0.0
 
+# OpenCode 2.x 免费模型。2.x 起不再记录每条消息的 cost，因此这些记录改走
+# 按 token 计算（pricing.rs 分支 6）；显式登记 0 价，成本显示 ¥0 而不是 N/A。
+# 依据：opencode.db 里这些模型的 cost 恒为 0（含 1.x 时代迁移过来的记录）。
+[[model]]
+name = "space-bunny-free"
+input_cny = 0.0
+output_cny = 0.0
+cache_read_cny = 0.0
+cache_write_cny = 0.0
+
+[[model]]
+name = "ox-alpha-free"
+input_cny = 0.0
+output_cny = 0.0
+cache_read_cny = 0.0
+cache_write_cny = 0.0
+
+[[model]]
+name = "nemotron-3-ultra-free"
+input_cny = 0.0
+output_cny = 0.0
+cache_read_cny = 0.0
+cache_write_cny = 0.0
+
+[[model]]
+name = "mimo-v2.5-free"
+input_cny = 0.0
+output_cny = 0.0
+cache_read_cny = 0.0
+cache_write_cny = 0.0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DimAgent 平台全站闲时窗口（仅 source="dim" 生效）
+#
+# 节假日平台把**整个模型目录**按闲时计费，因此这不是某个模型的 peak_hours_utc，
+# 而是一条覆盖全表的开关：窗口内所有 `dim` 记录一律按基础价，`peak_*` 双倍不生效。
+#
+# ── 2026 国庆（10-01 至 10-07 共 7 天，国办发明电〔2025〕7 号）──────────────
+# 平台提前到 **09-30 11:21 CST** 切换，账本实测（不是公告口径）：
+#   2026-09-30 11:00 CST 小时桶里 deepseek-v4.1-flash 的 228 条记录**前 62 条
+#   按忙时 2×、之后按闲时 1×**。逐条累加只有「11:20:54 之后 / 11:21:43 之前切换」
+#   这一个解，残差 1.9 毫积分（0.0007%）；下一个候选解残差就跳到 481 毫积分。
+#   同桶的 12:00 / 13:00 / 14:00 及 10-01 各桶 `base_amount_minor` 全部按闲时
+#   闭合（比值 0.99997~1.00004），`final/base` 恒为 entitlement 0.65。
+#   ⇒ cutoff 取 **2026-09-30T11:21:00+08:00**（落在两条记录之间的空档里，
+#     取整到分钟，与 mimo-v2.6-flash 那次「cutoff 取流量空档内的整点」同一手法）。
+#   ⚠️ 09-30 11:21–12:00 这一段落在 busy 窗口内，是**唯一**被这次切换改写的
+#     历史记录；12:00 以后本来就不忙，无差异。
+#
+# `to = "2026-10-08"` = 国庆法定假期（10-01~10-07）结束、次日起恢复忙时双倍。
+# **故意写死这个上界**：留空会让窗口一直生效，之后每个忙时段都少算一半且
+# 不报错。若平台延长假期（历史上可能），改这个 `to` 即可，然后跑
+# `./scripts/verify-dim-billing.py --interval hourly` 确认对应桶仍是 1×；
+# 恢复后同样跑一次，确认 10-08 之后的桶回到 2×。
+# ═══════════════════════════════════════════════════════════════════════════
+[[special.dim_offpeak_windows]]
+from = "2026-09-30T11:21:00+08:00"
+to = "2026-10-08"
+
 # ═══════════════════════════════════════════════════════════════════════════
 # DimAgent 平台积分价（CNY per 1_000_000 tokens，仅 source="dim" 生效）
 # 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode（Lite 套餐）
@@ -747,6 +855,84 @@ name = "seed-2.0-mini"
 input_cny = 0.174346
 output_cny = 1.743458
 cache_read_cny = 0.034869
+cache_write_cny = 0.0
+
+[[dim_model]]
+name = "mimo-v2.6-flash"
+# ⚠️ 平台在 2026-09-29 改了 `mimo-v2.6-flash` 的**结算口径**，所以这个模型有**两段**费率，
+# 都以平台账本逐毫对账过，**两段都不能删**（删掉任一段都会让那段历史成本偏 16.9 倍）。
+#   ① 2026-09-28 及以前：input 140 / output **2.8** / cache_read **280** 积分/M
+#      （当时账本实收就是这样，与公开价目卡字段顺序相反）
+#   ② 2026-09-29 起（本段）：input 140 / output 280 / cache_read 2.8 积分/M
+#      = `GET https://dimagent.cn/api/public/website/plans?line=dimcode` 6 个套餐
+#        一致显示的价目卡口径（也等于 aihubmix 上游目录快照 catalogVersion
+#        2026-09-25 的 0.155/0.31/0.0031 USD/M 统一乘 903.23 积分/USD）
+# 对账（`/api/user/daily-stats`，`interval=daily` / `interval=hourly`）：
+#   ① 2026-09-28 CST 整天 21 次 / input 66334 + output 18381 + cache 1008960
+#      → 291.847 积分 = `final_amount_minor` 291847（残差 0.027 毫积分，平台按
+#        请求取整到毫积分）；按本段费率算只有 17.259 积分（0.059×）
+#   ② 2026-09-29 CST 07:00 小时桶 52 次 / input 105415 + output 25986 + cache 3346432
+#      → 31.404 积分 = `final_amount_minor` 31403（1.0000x）；按①的费率算会是
+#        951.832 积分（30.3×）——即平台当天确实改了口径
+#   两段 `base_amount_minor == final_amount_minor` ⇒ entitlement rate 1.0
+#   （该模型 `model_access` 里无 rate/rate_windows，dim_entitlement 回落 1.0）。
+# 无 time_periods（无忙时双倍），无 cache 写入字段；换算仍为 × 70/11000
+# （1 积分 = ¥0.006363636）。
+# 切换时刻只能定位到流量空档 **09-28 20:32 CST → 09-29 07:27 CST** 之间（该窗口内
+# 没有任何请求），故 cutoff 取 09-29 00:00 CST；改这段前先跑
+# `./scripts/verify-dim-billing.py`（含小时桶，当天即可验证，不必等隔日结算）。
+input_cny = 0.890909
+output_cny = 0.017818
+cache_read_cny = 1.781818
+cache_write_cny = 0.0
+
+[[dim_model]]
+name = "mimo-v2.6-flash"
+effective_from = "2026-09-29T00:00:00+08:00"
+input_cny = 0.890909
+output_cny = 1.781818
+cache_read_cny = 0.017818
+cache_write_cny = 0.0
+
+[[dim_model]]
+name = "mimo-v2.6-pro"
+# 2026-10-01 上线。价目卡 6 个套餐（8101/8102/08_25/8103/8104/8104_copy）一致地写
+# input 435 / output 870 / cache_read 3.6 积分/M，**且 6 个字段顺序与结算口径一致**
+# ——与 `mimo-v2.6-flash` 那个反序的坑不同，这里照抄价目卡即可（仍已对账，见下）。
+# 换算 × 70/11000（见本节开头；1 积分 = ¥0.006363636）：
+#   435 → 2.768182、870 → 5.536364、3.6 → 0.022909 CNY/M。
+# 无 `windows` / `time_periods` ⇒ 不设 `peak_hours_utc`（价目卡与账本都没有忙时双倍）。
+# entitlement rate = **1.0**：`dim usage --json` 的 `model_access[]` 里该模型只有
+# `{"model":"mimo-v2.6-pro","route_pool":"open beta"}`，**无 rate / rate_windows**
+# ⇒ dim_entitlement 回落 1.0，与账本 `base == final` 一致。
+#
+# 对账（`/api/user/daily-stats`，`interval=hourly`）——2026-10-01 14:00 CST 小时桶：
+# 该桶混了两个模型，故用同桶里费率已验证的 deepseek-v4.1-flash 扣掉它的部分再解 mimo。
+# 关键前提：先在本地记录里找到与账本 token 口径**完全吻合**的前缀，再逐项对账
+# （账本 `prompt_tokens` 含 cache，对应我们已减去 cache 的 `input_tokens`）：
+#   本地前 311 条 = deepseek 306 条（in 551151 / out 204762 / cache 28077440）
+#                  + mimo     5 条（in  43075 / out   1777 / cache  154624）
+#   该前缀的 token 与账本桶**逐项精确相等**（prompt 28826290 = 594226 + 28232064、
+#   completion 206539、cache 28232064）→ 这 311 条就是账本实际计费的请求集合。
+#   注意 `request_count` 是 316（比 token 口径多 5），**别拿 316 做前缀匹配**，
+#   那是尚未落账的在途请求，照它算会对不上（verify-dim-billing.py 的前缀法在这里
+#   会误报 1.7845x）。
+#   按目录原价累加：deepseek 265589.328 + mimo 20840.261 = **286429.589** 毫积分
+#     vs 账本 `base_amount_minor` 286432 → **0.999992x**（残差 2.4 毫积分）
+#   按 entitlement 折后：deepseek ×0.65 = 172633.063 + mimo ×1.0 = 20840.261
+#     = **193473.325** 毫积分 vs 账本 `final_amount_minor` 193477 → **0.999981x**
+#   base 与 final 双双闭合 ⇒ mimo 既是目录原价、又没有折扣、也没有忙时双倍。
+# ⚠️ 顺带发现（**与本条无关，未改动**，留待单独处理）：同桶 deepseek-v4.1-flash 在
+# CST 14:00 这个"忙时"桶里账本只按**非忙时**价计费，而本表给它配了
+# `peak_hours_utc = [[1,4],[6,10]]`（含 UTC 06–10）。逐桶复核显示平台并不一致：
+# 09-12/13/15/24 的 14–18 点确实按忙时 2× 收，09-20、09-30 的同样时段却不翻倍。
+# 即忙时规则被平台改过/按周波动，而本表的 peak 窗口是 09-10 的单日结论——
+# 定价已静默偏差，**不要**在改 mimo 这条时顺手改它（会重写历史）。
+# 来源：GET https://dimagent.cn/api/public/website/plans?line=dimcode
+# 改这段前先跑 `./scripts/verify-dim-billing.py --interval hourly`（当天即可验证）。
+input_cny = 2.768182
+output_cny = 5.536364
+cache_read_cny = 0.022909
 cache_write_cny = 0.0
 
 # ═══════════════════════════════════════════════════════════════════════════

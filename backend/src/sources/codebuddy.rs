@@ -200,13 +200,13 @@ impl CodeBuddySource {
                     .to_string();
 
                 records.push(TokenRecord {
-                    date,
+                    date: date.into(),
                     time,
-                    api_key_prefix: "N/A".to_string(),
-                    provider: "codebuddy".to_string(),
+                    api_key_prefix: "N/A".into(),
+                    provider: "codebuddy".into(),
                     original_provider: None,
-                    model,
-                    source: "codebuddy".to_string(),
+                    model: model.into(),
+                    source: "codebuddy".into(),
                     input_tokens,
                     output_tokens,
                     cache_read_tokens,

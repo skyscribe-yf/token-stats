@@ -169,4 +169,61 @@
     `MAX_PAGES=400`），指纹去重保证不双计。**不要**用 `sudo` 整体跑刷新脚本 ——
     Chrome 解密要走用户自己的 D-Bus/GNOME Keyring，提权后取不到密钥，让脚本内部的
     sudo 自己提示即可。
+23. **OpenCode 2.x 换了表，读 `message` 的代码会静默停更**（2026-09-27 排障）——
+    OpenCode 2.x 把逐条消息从 `message`（配 `session`）搬到 **`session_message`**
+    （配 `session_v2`），旧表**保留但不再写入**，于是症状是「opencode 数据停在升级那天，
+    不报错」，与陷阱 22 同类。2.x 的 `data` JSON 也同时改形：role 变成行上的 **`type` 列**
+    （不在 JSON 里了）、模型藏在 **`data.model.{providerID,id}`**（不再是顶层
+    `modelID`/`providerID`）、**没有 `tokens.total`**（要自己加），而且**不再记录
+    per-message `cost`**（实测 2.x 原生行 cost 恒为 0）。所以只把 SQL 换成
+    `session_message` 仍然全废：`role != "assistant"` 会把每一行判掉，model 变 unknown，
+    total 变 0。
+    双计口径：2.x 迁移会把 1.x 历史**复制**进 `session_message`（实测 194 行里 184 行
+    两边同 id、token 一致但 JSON 文本不同），所以 `message` 只能取
+    `WHERE id NOT IN (SELECT id FROM session_message)` 的残行（实测正是升级前最后一个
+    session 的 10 行）；整表都读会靠指纹去重兜底，但别指望它。
+    计费口径：**2.x 行 cost=0 会掉进 `display_cost()` 最后的 `-1`（N/A）分支**——
+    `opencode` 原本不在「按 token 计算」那批 source 里，必须加进去；同时给免费模型
+    （`space-bunny-free` 等）显式登记 0 价，否则显示 N/A 而不是 ¥0。
+    见 `sources/opencode.rs` 顶部对照表与 `migrate_opencode_reasoning_output`。
+24. **后端常驻内存靠 mimalloc + `CompactString` + `MALLOC_ARENA_MAX` 三样撑着，动其中任一样都会静默涨回去**（2026-09-28 优化）——
+    症状不是泄漏：`VmRSS == VmHWM`，跨 30s 刷新周期完全平稳，但数值只有实际数据的 3.7 倍。
+    旧实测 RSS **1135 MB**，而 762k 条记录真实需要 ~300 MB（`TokenRecord` 248 B × 762k =
+    180 MB 缓冲 + 全表字符串实测 53.8 MB）。三个成因，缺一不可地叠在一起：
+    ① glibc 按线程建 arena，实测 **44 个 64MB 对齐的 arena 堆共 655 MB**（nproc=16 →
+    上限 8×16）；glibc 只能 trim **主** arena 顶部，非主 arena 必须整块全空才 `munmap`，
+    而启动期的记录散落在各 arena 里，每个都剩几个活对象 → 谁都还不掉；
+    ② 8 个 `String` 字段 = 每条记录 7 次独立 malloc（全表 ~5.3M 次），glibc 最小 chunk 32 B，
+    12 字节的有效数据吃 32 字节，还让 `fingerprint()`/`sort_by` 每次比较都追指针；
+    ③ 启动时 `store.load_all()` 的 762k Vec 与 `load_all_sources()` 的**全量重解析**同时存活，
+    `load_sources_impl` 的 `extend` 又向 180 MB 逐级 doubling，每步 realloc 都弃置一份前缀副本。
+    对策（三处都要留着）：`main.rs` 的 `#[global_allocator] mimalloc::MiMalloc`；
+    `nginx/token-stats*.service` 的 `Environment="MALLOC_ARENA_MAX=2"`（管的是走 libc 的
+    bundled SQLite 等，mimalloc 接管不了）；`TokenRecord` 的
+    `date`/`api_key_prefix`/`provider`/`model`/`source` 用 `CompactString`（≤22 字节内联、零分配），
+    只有 `time`（RFC3339 ≥24 字节）留 `String`。另外 `load_sources_impl` 先分源装入各自
+    Vec 再按总数 `with_capacity` 一次摊平；`AppState::new` 末尾用 `retain` **原地**过滤，
+    不要退回 `into_iter().filter().collect()`（那会在 `db_records` 还活着时再要一个 180 MB 缓冲）。
+    实测效果：峰值 1135 → **671 MB**，稳态 1109 → **300 MB**，且临时分配消退后 RSS 会回落
+    （mimalloc 会 decommit 整段，505 MB 用后自动掉回 300 MB）。
+    改 `TokenRecord` 字段类型时 `store.rs` 有两处必须跟着改：`insert_batch` 的 `params![...]`
+    要 `.as_str()`（`CompactString` 没实现 `ToSql`），`row_to_record` 走 `text_col()`
+    （`ValueRef` 直读；用 `row.get::<String>()` 会在启动时白建 ~5M 个中间 String）。
+    复测口径：`PORT=3999 TOKEN_STATS_DB_PATH=<库副本> ./target/release/token-stats-backend`，
+    采样 `/proc/PID/status` 的 `VmRSS`/`VmHWM`；正确性用两个实例对比
+    `/api/store/info` 的 `memory_records` 与 `/api/stats` 的 `by_vendor`/`by_model`/`by_source`
+    （差异应只剩最新那一条实时记录）。
+25. **Dim 对账别拿 `request_count` 当"账本计了前 N 条"**（2026-10-01 排障）——
+    `verify-dim-billing.py` 的前缀匹配用 `by_key[key][:counted]`（`counted =
+    request_count`），但账本的 `request_count` 把**尚未落账的在途请求**也算进去了，
+    于是"前 N 条"里混进本地有、账本 token 还没计的记录。2026-10-01 14:00 CST 桶
+    账本 316 次 / 本地 323 条，前缀法直接报 1.7845×；按**token 口径**找精确吻合的
+    前缀（prompt 含 cache = 我们已减过的 `input_tokens` + `cache_read_tokens`）
+    得到的却是前 **311** 条，用它对账 base/final 双双闭合到 0.99999。
+    **调参（cutoff、费率、忙时窗口）一律以 token 口径的前缀为准**，别信 request_count。
+    同一个桶还暴露了 `peak_hours_utc` 会因**平台全站活动**整体失效：2026 国庆平台把
+    整个目录按闲时计费（见 `pricing.md` 的 `dim_offpeak_windows`），所以
+    "某个桶不翻倍"**不能**直接推断 `peak_hours_utc` 配错了——09-30 11:00 桶是
+    11:21 之前按 2×、之后按 1×（切换点在桶中间，逐条解出来的），而 09-20 同时段
+    确实按忙时收。判据是**同一时段跨日期对比**，不是单桶。
 

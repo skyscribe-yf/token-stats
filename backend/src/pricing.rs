@@ -185,6 +185,21 @@ pub struct SpecialPricing {
     /// If `None`, no off-peak discount is applied (always full price).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xunfei_off_peak: Option<XunfeiOffPeakConfig>,
+    /// DimAgent platform-wide off-peak windows, e.g. the National Day holiday.
+    ///
+    /// Unlike the per-model `peak_hours_utc` (which only suppresses the busy-hour
+    /// multiplier for models that publish one), these windows force **every** `dim`
+    /// record inside the range to be billed at base rates. The platform announced
+    /// that the whole catalogue bills at 闲时 rates for the duration of the holiday,
+    /// so `deepseek-v4.1-flash` stops doubling inside `peak_hours_utc` and any
+    /// future model with a peak window is covered too.
+    ///
+    /// Ranges are half-open `[from, to)` in RFC3339 (or bare `YYYY-MM-DD`, which is
+    /// read as 00:00 China Standard Time). Records outside every window keep the
+    /// normal per-model peak behaviour, so a past holiday never rewrites history
+    /// and an unfinished one only affects the days it actually covers.
+    #[serde(default)]
+    pub dim_offpeak_windows: Vec<DimOffpeakWindow>,
     /// ZCode BigModel GLM Coding Plan: CNY price per 积分 (credit).
     /// 0 = disabled (zcode records fall through to model-price pricing).
     /// 实付分摊口径（2026-09-12）：3 个月实付 ¥188.04 = 13 周 × 10000 积分 =
@@ -206,8 +221,8 @@ pub struct SpecialPricing {
     #[serde(default = "default_zcode_off_peak_factor")]
     pub zcode_off_peak_factor: f64,
     /// 夜间畅用活动 free window (UTC+8 hours, [start,end)): during the promo
-    /// (2026-09-03 ~ 09-20) GLM-5.3-Flash on ZCode consumes 0 credits
-    /// between 23:00 and 09:00 daily. Empty = no free window.
+    /// (`zcode_night_free_from..until`) GLM-5.3-Flash on ZCode consumes 0
+    /// credits between 23:00 and 09:00 daily. Empty = no free window.
     #[serde(default = "default_zcode_night_free_hours")]
     pub zcode_night_free_hours_cst: Vec<[u32; 2]>,
     /// Free window date bounds (inclusive, "YYYY-MM-DD", UTC+8). Both must be
@@ -344,6 +359,19 @@ pub struct XunfeiOffPeakConfig {
     /// (typically in November/December for the following year).
     #[serde(default)]
     pub holidays: Vec<String>,
+}
+
+/// A platform-wide off-peak window for the DimAgent source (`source == "dim"`).
+///
+/// Half-open `[from, to)`. `YYYY-MM-DD` is read as 00:00 China Standard Time so a
+/// whole-holiday entry can be written without an explicit offset; RFC3339 pins the
+/// instant for the sub-day cutoffs the platform actually announces (see
+/// `pricing.toml` for the measured National Day switchover).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DimOffpeakWindow {
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -496,6 +524,7 @@ impl Default for PricingConfig {
                 grok_divisor: default_grok_divisor(),
                 stepfun_plan_divisor: default_stepfun_plan_divisor(),
                 xunfei_off_peak: None,
+                dim_offpeak_windows: Vec::new(),
                 zcode_cny_per_credit: 0.0,
                 zcode_credit_rates: HashMap::new(),
                 zcode_peak_hours_cst: default_zcode_peak_hours(),
@@ -794,6 +823,7 @@ impl ModelPrice {
 
     /// Compute cost in CNY directly from CNY-denominated tier rates.
     /// Missing CNY fields are treated as 0.0 (e.g. DeepSeek has no cache_write).
+    /// `force_off_peak` bills the record at base rates even inside a peak window.
     fn compute_cny(
         &self,
         input_tokens: i64,
@@ -801,12 +831,17 @@ impl ModelPrice {
         cache_read_tokens: i64,
         cache_write_tokens: i64,
         record_time: &str,
+        force_off_peak: bool,
     ) -> f64 {
         let rt = DateTime::parse_from_rfc3339(record_time).ok();
         let seg = self.select_segment(rt.clone());
         let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
         let tier = seg.select_tier(total_input);
-        let peak = seg.is_peak_hour(rt.as_ref());
+        // `force_off_peak` suppresses the busy-hour multiplier wholesale (DimAgent
+        // holidays bill the whole catalogue at 闲时 rates). Without it the peak
+        // window still applies, so an unfinished holiday only affects the records
+        // it actually covers.
+        let peak = !force_off_peak && seg.is_peak_hour(rt.as_ref());
         let (input, output, cache_read, cache_write) = if peak {
             (
                 tier.peak_input_cny.or(tier.input_cny),
@@ -843,6 +878,35 @@ fn parse_rate_effective_from(s: &str) -> Option<DateTime<FixedOffset>> {
         .ok()
         .and_then(|d| d.and_hms_opt(0, 0, 0))
         .map(|naive| naive.and_local_timezone(east8).single().unwrap())
+}
+
+/// Same accepted formats as [`parse_rate_effective_from`]: RFC3339 verbatim, or a
+/// bare `YYYY-MM-DD` read as midnight China Standard Time. Used for the bounds of
+/// [`DimOffpeakWindow`], which are calendar-day-ish instants rather than model
+/// price cutoffs.
+fn parse_cst_or_rfc3339(s: &str) -> Option<DateTime<FixedOffset>> {
+    parse_rate_effective_from(s)
+}
+
+/// Whether a forced platform-wide off-peak window covers this record.
+///
+/// Checked before `TimeSegment::is_peak_hour` so a DimAgent holiday (the whole
+/// catalogue billed at 闲时 rates) suppresses the per-model busy-hour multiplier.
+/// A window with no `to` is open-ended, so a holiday still in progress keeps
+/// covering new records without touching anything after it.
+pub(super) fn in_offpeak_window(
+    windows: &[DimOffpeakWindow],
+    record_time: Option<&DateTime<FixedOffset>>,
+) -> bool {
+    let Some(record_time) = record_time else {
+        return false;
+    };
+    windows.iter().any(|w| {
+        let from = parse_cst_or_rfc3339(&w.from);
+        let until = w.to.as_deref().and_then(parse_cst_or_rfc3339);
+        from.is_some_and(|from| *record_time >= from)
+            && until.is_none_or(|until| *record_time < until)
+    })
 }
 
 /// One resolved rate segment with rate-derived divisor snapshots.
@@ -1196,7 +1260,7 @@ fn resolve_model_price<'a>(
     }
 
     // Exact match first
-    if let Some(p) = state.model_map.get(model) {
+    if let Some(p) = state.model_map.get(model.as_str()) {
         return Some(p);
     }
 
@@ -1566,7 +1630,7 @@ fn compute_zai_cost(state: &PricingState, record: &TokenRecord) -> Option<f64> {
         )
     } else {
         let normalized = TokenRecord {
-            model: bare.clone(),
+            model: bare.as_str().into(),
             ..record.clone()
         };
         resolve_model_price(state, &normalized)?
@@ -1723,10 +1787,10 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
 ///   credits = (input×2.3 + cache_read×0.56 + output×8) / 10000  (GLM-5.3-Flash)
 ///   credits = (input×6.9 + cache_read×1.7 + output×24) / 10000  (GLM-5.3)
 /// Peak hours (Mon–Fri 14:00–18:00 UTC+8) consume 1×; all other times 0.5×.
-/// During the Flash×ZCode night promo (2026-09-03..09-20, 23:00–09:00 CST,
-/// ZCode client) credits are 0 — but only for the models whitelisted in
-/// `zcode_night_free_models` (the official promo is GLM-5.3-Flash-only;
-/// GLM-5.3 bills normally at night), and only from
+/// During the Flash×ZCode night promo (`zcode_night_free_from..=until`,
+/// inclusive, 23:00–09:00 CST, ZCode client) credits are 0 — but only for the
+/// models whitelisted in `zcode_night_free_models` (the official promo is
+/// GLM-5.3-Flash-only; GLM-5.3 bills normally at night), and only from
 /// `zcode_night_free_effective_from` onwards: the old ZCode client build did
 /// not enjoy the promo server-side, so records in the window before that
 /// instant (2026-09-13 06:15 CST) bill at the normal peak/off-peak factor.
@@ -1747,7 +1811,7 @@ fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> 
         return None;
     }
     let model_key = record.model.to_lowercase();
-    let rates = special.zcode_credit_rates.get(&model_key)?;
+    let rates = special.zcode_credit_rates.get(model_key.as_str())?;
     let rt = DateTime::parse_from_rfc3339(&record.time).ok()?;
     let cst = rt.with_timezone(&FixedOffset::east_opt(8 * 3600)?);
     let hour = cst.hour();
@@ -1995,6 +2059,7 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
                     record.cache_read_tokens,
                     record.cache_write_tokens,
                     &record.time,
+                    false,
                 )
             } else {
                 mp.compute_usd(
@@ -2161,6 +2226,7 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
                     record.cache_read_tokens,
                     record.cache_write_tokens,
                     &record.time,
+                    false,
                 );
             }
             let usd = mp.compute_usd(
@@ -2181,6 +2247,9 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //    USD by default; CNY-priced models (e.g. DeepSeek 官方) skip conversion.
     //    DimAgent (source == "dim") uses the platform's own credit-based table
     //    (`dim_model`) converted to CNY, with peak-hour double pricing.
+    //    OpenCode appears here only for cost-less records: OpenCode 2.x stopped
+    //    recording a per-message `cost`, so those fall back to token rates
+    //    (1.x records kept their API cost and returned in branch 3 above).
     if record.source == "codex"
         || record.source == "claude-code"
         || record.source == "kimi-code"
@@ -2188,6 +2257,7 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         || record.source == "zcode"
         || record.source == "dsh"
         || record.source == "dim"
+        || record.source == "opencode"
     {
         // ZCode BigModel GLM Coding Plan records (provider=bigmodel) are billed
         // by subscription credits (积分), not model list prices. When the plan
@@ -2203,11 +2273,17 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         // rates (`dim_model`), not the upstream API list price that
         // `model`/`vendor_merge` would resolve to.
         let dim_price = if record.source == "dim" {
-            state.dim_model_map.get(&record.model)
+            state.dim_model_map.get(record.model.as_str())
         } else {
             None
         };
         let dim_list_priced = dim_price.is_some();
+        // Platform-wide holiday windows (e.g. National Day) bill the whole dim
+        // catalogue at 闲时 rates, so they suppress the per-model peak multiplier.
+        let dim_offpeak = record.source == "dim"
+            && DateTime::parse_from_rfc3339(&record.time)
+                .ok()
+                .is_some_and(|rt| in_offpeak_window(&cfg.special.dim_offpeak_windows, Some(&rt)));
         if let Some(mp) = dim_price.or_else(|| resolve_model_price(&state, record)) {
             let base_rate = if is_yairouter_billed(record) {
                 cfg.special.ainaba_platform_rate
@@ -2221,6 +2297,7 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
                     record.cache_read_tokens,
                     record.cache_write_tokens,
                     &record.time,
+                    dim_offpeak,
                 )
             } else {
                 mp.compute_usd(
@@ -2326,13 +2403,13 @@ mod tests {
         cost: f64,
     ) -> TokenRecord {
         TokenRecord {
-            date: "2026-05-22".to_string(),
+            date: "2026-05-22".into(),
             time: "2026-05-22T00:00:00Z".to_string(),
-            api_key_prefix: "test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: source.to_string(),
+            model: model.into(),
+            source: source.into(),
             input_tokens: total_tokens / 2,
             output_tokens: total_tokens / 2,
             cache_read_tokens: 0,
@@ -2643,7 +2720,7 @@ cache_write_cny = 0.0
         bare.time = "2026-09-15T03:00:00Z".to_string();
         bare.output_tokens = 1000;
         let mut prefixed = bare.clone();
-        prefixed.model = "anthropic/claude-fable-5-1".to_string();
+        prefixed.model = "anthropic/claude-fable-5-1".into();
 
         let a = compute_zai_cost(&state, &bare).unwrap();
         let b = compute_zai_cost(&state, &prefixed).unwrap();
@@ -2685,7 +2762,7 @@ cache_write_cny = 0.0
         state_cell().write().unwrap().reload(config);
 
         let mut record = make_record("codebuddy", "codebuddy", "gpt-5.6-luna", 100, 3000.0);
-        record.date = "2026-08-29".to_string();
+        record.date = "2026-08-29".into();
         record.time = "2026-08-29T04:44:13.879Z".to_string();
         // 3000 credits × ¥0.0175 (pre-upgrade baseline, no segments configured)
         // = ¥52.5, regardless of FX segments.
@@ -2842,6 +2919,81 @@ cache_write_cny = 0.0
                 "missing or incorrect {name} tier {tier_threshold:?}"
             );
         }
+    }
+
+    /// GPT-6.1 Sol (announced 2026-09-30): official standard rates from
+    /// developers.openai.com/api/docs/models/gpt-6.1-sol — base input $2 /
+    /// cached input $0.10 (5% of input) / cache writes (1.25× input) $2.50 /
+    /// output $10; >272K input doubles input & cache rates and takes output
+    /// ×1.5 for the whole request.
+    #[test]
+    fn project_pricing_toml_has_gpt_6_1_sol_base_and_long_context_tiers() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        let expected = [
+            ("gpt-6.1-sol", None, 2.0, 10.0, 0.10, 2.50),
+            ("gpt-6.1-sol", Some(272_000), 4.0, 15.0, 0.20, 5.00),
+        ];
+
+        for (name, tier_threshold, input, output, cache_read, cache_write) in expected {
+            assert!(
+                cfg.model.iter().any(|model| {
+                    model.name == name
+                        && model.tier_threshold == tier_threshold
+                        && (model.input - input).abs() < f64::EPSILON
+                        && (model.output - output).abs() < f64::EPSILON
+                        && (model.cache_read - cache_read).abs() < f64::EPSILON
+                        && (model.cache_write - cache_write).abs() < f64::EPSILON
+                }),
+                "missing or incorrect {name} tier {tier_threshold:?}"
+            );
+        }
+
+        // Yairouter charges the official list price for 6.1-sol: the generic
+        // table plus the platform rate/divisor is the only pricing path, so no
+        // provider-scoped override may shadow it.
+        assert!(
+            !cfg.yairouter_model.iter().any(|m| m.name == "gpt-6.1-sol"),
+            "gpt-6.1-sol must not carry a [[yairouter_model]] override"
+        );
+    }
+
+    /// GPT-5.6 Sol official cut on 2026-08-22 (announced 12:01 CST; no Sol
+    /// traffic that day, so the cutoff sits at 00:00 CST). The pre-cut rates
+    /// stay as the baseline and dated entries take over from there.
+    #[test]
+    fn project_pricing_toml_has_gpt_5_6_sol_august_2026_price_cut() {
+        let cfg: PricingConfig = toml::from_str(include_str!("../pricing.toml"))
+            .expect("backend/pricing.toml should parse as PricingConfig");
+
+        let dated: Vec<_> = cfg
+            .model
+            .iter()
+            .filter(|m| {
+                m.name == "gpt-5.6-sol"
+                    && m.effective_from.as_deref() == Some("2026-08-22T00:00:00+08:00")
+            })
+            .collect();
+        assert_eq!(
+            dated.len(),
+            2,
+            "expected base + long-context GPT-5.6 Sol cut segments"
+        );
+        assert!(dated.iter().any(|m| {
+            m.tier_threshold.is_none()
+                && m.input == 4.00
+                && m.output == 20.00
+                && m.cache_read == 0.40
+                && m.cache_write == 5.00
+        }));
+        assert!(dated.iter().any(|m| {
+            m.tier_threshold == Some(272_000)
+                && m.input == 8.00
+                && m.output == 30.00
+                && m.cache_read == 0.80
+                && m.cache_write == 10.00
+        }));
     }
 
     #[test]
@@ -3124,6 +3276,111 @@ cache_write_cny = 0.0
         restore_pricing_env(prev_env);
     }
 
+    /// GPT-6.1 Sol is billed through the same path as gpt-5.6-sol on
+    /// Yairouter: official USD list price × fixed platform rate (7.0) ÷ the
+    /// ainaba divisor in force at the record time. Ledger check 2026-10-01:
+    /// (28054×$2 + 135×$10)/1M × 7 = 0.402206 credits, matching
+    /// `/dashboard/live` `ModelUsage.gpt-6.1-sol.CreditUsed` exactly.
+    #[test]
+    fn yairouter_gpt_6_1_sol_uses_official_usd_fixed_rate_and_ainaba_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        let record = make_timed_record(
+            "codex",
+            "ainaba",
+            "gpt-6.1-sol",
+            "2026-10-01T07:09:56Z",
+            100_000,
+            20_000,
+            40_000,
+            0,
+            0.0,
+        );
+        let cost = display_cost(&record);
+        let usd = 100_000.0 * 2.00 / 1e6 + 20_000.0 * 10.00 / 1e6 + 40_000.0 * 0.10 / 1e6;
+        let expected = usd * 7.0 / 21.538461538;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "yai-router gpt-6.1-sol base tier: expected {expected}, got {cost}"
+        );
+
+        // >272K total input (uncached + cache) selects the long-context tier:
+        // $4 / $15 / $0.20 / $5.00, same fixed-rate / divisor conversion.
+        let long = make_timed_record(
+            "codex",
+            "ainaba",
+            "gpt-6.1-sol",
+            "2026-10-01T07:10:00Z",
+            200_000,
+            20_000,
+            80_000,
+            0,
+            0.0,
+        );
+        let cost = display_cost(&long);
+        let usd = 200_000.0 * 4.00 / 1e6 + 20_000.0 * 15.00 / 1e6 + 80_000.0 * 0.20 / 1e6;
+        let expected = usd * 7.0 / 21.538461538;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "yai-router gpt-6.1-sol long-context tier: expected {expected}, got {cost}"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    /// Yairouter bills the post-2026-08-22 official GPT-5.6 Sol rates
+    /// ($4 / $20 / $0.40; long-context $8 / $30 / $0.80). Check both sides of
+    /// the 00:00 CST cutoff, with the fixed platform rate and divisor applied.
+    #[test]
+    fn yairouter_gpt_5_6_sol_uses_cut_rates_from_august_22() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // 2026-08-22 00:00 CST is 2026-08-21 16:00 UTC.
+        let before = make_timed_record(
+            "codex",
+            "ainaba",
+            "gpt-5.6-sol",
+            "2026-08-21T15:59:59Z",
+            100_000,
+            20_000,
+            40_000,
+            0,
+            0.0,
+        );
+        let usd = 100_000.0 * 5.00 / 1e6 + 20_000.0 * 30.00 / 1e6 + 40_000.0 * 0.50 / 1e6;
+        let expected = usd * 7.0 / 21.538461538;
+        let cost = display_cost(&before);
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "pre-cut gpt-5.6-sol: expected {expected}, got {cost}"
+        );
+
+        let after = make_timed_record(
+            "codex",
+            "ainaba",
+            "gpt-5.6-sol",
+            "2026-08-21T16:00:00Z",
+            100_000,
+            20_000,
+            40_000,
+            0,
+            0.0,
+        );
+        let usd = 100_000.0 * 4.00 / 1e6 + 20_000.0 * 20.00 / 1e6 + 40_000.0 * 0.40 / 1e6;
+        let expected = usd * 7.0 / 21.538461538;
+        let cost = display_cost(&after);
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "post-cut gpt-5.6-sol: expected {expected}, got {cost}"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
     #[test]
     fn dim_grok_build_uses_grok_subscription_divisor() {
         let _guard = pricing_test_guard();
@@ -3160,7 +3417,7 @@ cache_write_cny = 0.0
         // The same record after the provider mapping (grok-build → xai-official)
         // must produce the identical cost.
         let mut mapped = record.clone();
-        mapped.provider = "xai-official".to_string();
+        mapped.provider = "xai-official".into();
         let cost_mapped = display_cost(&mapped);
         assert!(
             (cost_mapped - expected).abs() < 1e-9,
@@ -3198,6 +3455,57 @@ cache_write_cny = 0.0
             expected,
             cost
         );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn opencode_record_without_cost_falls_back_to_model_price_with_divisor() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // OpenCode 2.x stopped recording a per-message `cost`, so those records
+        // are priced from tokens like any other derived source — and still get
+        // the OpenCode Go plan divisor (3.0 for deepseek-v4-flash since 08-18).
+        let mut record = make_record("opencode", "opencode-go", "deepseek-v4-flash", 0, 0.0);
+        record.input_tokens = 50_000;
+        record.output_tokens = 4_000; // already includes reasoning tokens
+        record.cache_read_tokens = 200_000;
+        record.time = "2026-09-01T00:00:00Z".to_string();
+        let cost = display_cost(&record);
+        let expected = (50_000.0 / 1e6 * 1.0 // input_cny
+            + 4_000.0 / 1e6 * 2.0 // output_cny
+            + 200_000.0 / 1e6 * 0.02) // cache_read_cny
+            / 3.0; // opencode_model_segments divisor
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "opencode cost: expected {expected}, got {cost}"
+        );
+        assert!(cost > 0.0, "must actually be priced, not free");
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn opencode_free_model_costs_zero_not_unknown() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // Every OpenCode 2.x record has cost 0, so a free model must resolve to
+        // a real ¥0 rather than the -1 "unknown cost" sentinel (N/A in the UI).
+        let free = make_record("opencode", "opencode-go", "space-bunny-free", 1_000_000, 0.0);
+        assert_eq!(
+            display_cost(&free),
+            0.0,
+            "space-bunny-free is registered as free in pricing.toml"
+        );
+
+        // Models with no entry at all still report unknown, so a missing price
+        // stays visible instead of silently reading as free.
+        let unpriced = make_record("opencode", "opencode-go", "no-such-model", 1_000_000, 0.0);
+        assert_eq!(display_cost(&unpriced), -1.0);
 
         restore_pricing_env(prev_env);
     }
@@ -3274,14 +3582,34 @@ cache_write_cny = 0.0
             "zcode bigmodel promo boundary 06:15 CST should be free"
         );
 
-        // 活动结束后（2026-09-25）夜间不再免费：23:30 CST 属于非高峰 → 0.5×
+        // 活动结束边界取自配置（官方把结束日 09-20 延到 10-07 时，硬编码的测试
+        // 断言会静默变红）：末日 23:30 CST 仍免扣，次日 23:30 CST 恢复 0.5×。
+        let until = get_config()
+            .special
+            .zcode_night_free_until
+            .expect("zcode_night_free_until must be set for the night-free window");
+        let last_day =
+            chrono::NaiveDate::parse_from_str(&until, "%Y-%m-%d").expect("bad until date");
+        let day_after = last_day.succ_opt().expect("promo end date overflow");
+        // 23:30 UTC+8 = 15:30 UTC
+        let night_at = |d: chrono::NaiveDate| format!("{d}T15:30:00Z");
+
+        let mut on_end_date = record.clone();
+        on_end_date.time = night_at(last_day);
+        assert!(
+            (display_cost(&on_end_date) - 0.0).abs() < 1e-9,
+            "zcode bigmodel night on promo end date {} should still be free",
+            until
+        );
+
         let mut after = record.clone();
-        after.time = "2026-09-25T15:30:00Z".to_string();
+        after.time = night_at(day_after);
         let after_cost = display_cost(&after);
         let expected_after = credits * 0.5 * 0.0014464615384615384;
         assert!(
             (after_cost - expected_after).abs() < 1e-9,
-            "zcode bigmodel after promo: expected {}, got {}",
+            "zcode bigmodel after promo ({}): expected {}, got {}",
+            day_after,
             expected_after,
             after_cost
         );
@@ -3374,6 +3702,375 @@ cache_write_cny = 0.0
         );
 
         restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_mimo_v26_flash_priced_from_platform_credits() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // `mimo-v2.6-flash` (2026-09-28 上线) settles at platform credit rates
+        // whose field order is the *reverse* of the public price card
+        // (`plans?line=dimcode` shows input 140 / output 280 / cache_read 2.8 for
+        // all six plans). The ledger is authoritative: cache read is billed at
+        // 280 credits/M (2x input) and output at 2.8 credits/M. Do not
+        // "correct" these to the price card's ordering — that understates cost
+        // by 16.9x.
+        let mut record = make_record("dim", "dim", "mimo-v2.6-flash", 0, 0.0);
+        record.time = "2026-09-28T12:02:15+00:00".to_string();
+        record.input_tokens = 1_000_000;
+        record.output_tokens = 0;
+        record.cache_read_tokens = 0;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 1_000_000;
+        let cost = display_cost(&record);
+        assert!(
+            (cost - 0.890909).abs() < 1e-9,
+            "1M input should bill at the 140-credit list price, got {cost}"
+        );
+
+        // Cache read is the dominant term and is deliberately the *priciest* one.
+        record.input_tokens = 0;
+        record.cache_read_tokens = 1_000_000;
+        let cache_cost = display_cost(&record);
+        assert!(
+            (cache_cost - 1.781818).abs() < 1e-9,
+            "1M cache read should bill at 280 credits (2x input), got {cache_cost}"
+        );
+
+        record.input_tokens = 0;
+        record.cache_read_tokens = 0;
+        record.output_tokens = 1_000_000;
+        let output_cost = display_cost(&record);
+        assert!(
+            (output_cost - 0.017818).abs() < 1e-9,
+            "1M output should bill at 2.8 credits, got {output_cost}"
+        );
+
+        // Full-day reconciliation for 2026-09-28 (CST): the platform's own ledger
+        // (`base_amount_minor` == `final_amount_minor` == 291_847 milli-credits,
+        // rate 1.0) must match the dashboard's per-request sum. The 21 records
+        // are the whole day — the platform's `prompt_tokens` (1_075_294) *includes*
+        // cache, matching our already-decremented `input_tokens` (66_334).
+        let day = [
+            (35_511, 140, 0),
+            (234, 79, 35_456),
+            (559, 177, 35_648),
+            (2_358, 158, 35_456),
+            (3_239, 360, 37_760),
+            (3_571, 145, 40_960),
+            (1_540, 487, 44_480),
+            (1_170, 3_263, 46_016),
+            (3_309, 723, 47_168),
+            (804, 2_191, 50_432),
+            (2_258, 188, 51_200),
+            (235, 2_047, 53_440),
+            (2_318, 153, 53_440),
+            (196, 2_063, 55_744),
+            (2_102, 147, 55_936),
+            (223, 3_390, 57_984),
+            (3_444, 133, 58_176),
+            (199, 1_269, 61_568),
+            (1_370, 148, 61_760),
+            (188, 415, 63_104),
+            (1_506, 705, 63_232),
+        ];
+        let mut dashboard_cny = 0.0;
+        let mut price_card_cny = 0.0;
+        for (i, (input, output, cache)) in day.iter().enumerate() {
+            let mut r = make_record("dim", "dim", "mimo-v2.6-flash", 0, 0.0);
+            r.time = format!("2026-09-28T12:{:02}:{:02}+00:00", i / 60, i % 60);
+            r.input_tokens = *input;
+            r.output_tokens = *output;
+            r.cache_read_tokens = *cache;
+            r.cache_write_tokens = 0;
+            dashboard_cny += display_cost(&r);
+            // What the public price card's literal field order would have
+            // charged: 140 / 280 / 2.8 credits per 1M, i.e. CNY per 1M
+            // 0.890909 / 1.781818 / 0.017818 (same ¥70/11000 conversion).
+            price_card_cny += (*input as f64 * 0.890909
+                + *output as f64 * 1.781_818
+                + *cache as f64 * 0.017_818)
+                / 1_000_000.0;
+        }
+        let platform_cny = 291.847 * 70.0 / 11000.0;
+        let ratio = dashboard_cny / platform_cny;
+        assert!(
+            (ratio - 1.0).abs() < 0.0001,
+            "2026-09-28 dashboard cost ¥{dashboard_cny} vs platform ¥{platform_cny} (ratio {ratio})"
+        );
+        // Wrong-mapping anchors so the gaps are documented in code, not just
+        // prose: these are what someone "fixing" each segment to the other
+        // segment's rates would produce.
+        let wrong_ratio = price_card_cny / platform_cny;
+        assert!(
+            (wrong_ratio - 0.0592).abs() < 0.001,
+            "new-basis ordering should land near 0.059x of the 09-28 ledger, got {wrong_ratio}"
+        );
+
+        // ── 2026-09-29: the platform switched to the price-card ordering.
+        // Same model, same credit unit, ~30x cheaper for cache-heavy traffic.
+        // Ledger bucket 2026-09-29 07:00 CST (`interval=hourly`): 52 requests,
+        // prompt 3_451_847 (includes cache), completion 25_986, cache 3_346_432,
+        // final_amount_minor == base_amount_minor == 31_403.
+        let mut after = make_record("dim", "dim", "mimo-v2.6-flash", 0, 0.0);
+        after.time = "2026-09-29T07:27:41+00:00".to_string();
+        after.input_tokens = 105_415;
+        after.output_tokens = 25_986;
+        after.cache_read_tokens = 3_346_432;
+        after.cache_write_tokens = 0;
+        after.total_tokens = after.input_tokens + after.output_tokens + after.cache_read_tokens;
+        let after_cny = display_cost(&after);
+        let after_platform_cny = 31.403 * 70.0 / 11000.0;
+        let after_ratio = after_cny / after_platform_cny;
+        assert!(
+            (after_ratio - 1.0).abs() < 0.001,
+            "2026-09-29 07:00 CST bucket: dashboard ¥{after_cny} vs platform ¥{after_platform_cny} (ratio {after_ratio})"
+        );
+        // The pre-switch rates would have billed the very same bucket at 30.3x.
+        let stale_cny = (105_415.0 * 0.890909
+            + 25_986.0 * 0.017_818
+            + 3_346_432.0 * 1.781_818)
+            / 1_000_000.0;
+        assert!(
+            (stale_cny / after_platform_cny - 30.31).abs() < 0.05,
+            "stale (pre-09-29) rates should land near 30.3x, got {}",
+            stale_cny / after_platform_cny
+        );
+
+        // Component spot-checks on the new basis: cache read is now the cheap
+        // term and output the expensive one — the reverse of the old basis.
+        after.input_tokens = 0;
+        after.output_tokens = 0;
+        after.cache_read_tokens = 1_000_000;
+        assert!(
+            (display_cost(&after) - 0.017818).abs() < 1e-9,
+            "1M cache read should bill at 2.8 credits from 09-29 on"
+        );
+        after.cache_read_tokens = 0;
+        after.output_tokens = 1_000_000;
+        assert!(
+            (display_cost(&after) - 1.781818).abs() < 1e-9,
+            "1M output should bill at 280 credits from 09-29 on"
+        );
+        after.output_tokens = 0;
+        after.input_tokens = 1_000_000;
+        assert!(
+            (display_cost(&after) - 0.890909).abs() < 1e-9,
+            "1M input is 140 credits on both bases"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_mimo_v26_pro_priced_from_platform_credits() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // `mimo-v2.6-pro` (2026-10-01) settles at the price card's *own* field
+        // order (435 / 870 / 3.6 credits per 1M, identical across all six plans),
+        // unlike `mimo-v2.6-flash` whose settlement order is reversed. Reconciled
+        // against the 2026-10-01 14:00 CST hourly ledger bucket below.
+        let mut record = make_record("dim", "dim", "mimo-v2.6-pro", 0, 0.0);
+        record.time = "2026-10-01T06:38:57+00:00".to_string();
+        record.cache_write_tokens = 0;
+
+        record.input_tokens = 1_000_000;
+        record.output_tokens = 0;
+        record.cache_read_tokens = 0;
+        record.total_tokens = 1_000_000;
+        let cost = display_cost(&record);
+        assert!(
+            (cost - 2.768182).abs() < 1e-6,
+            "1M input should bill at the 435-credit list price, got {cost}"
+        );
+
+        record.input_tokens = 0;
+        record.output_tokens = 1_000_000;
+        let output_cost = display_cost(&record);
+        assert!(
+            (output_cost - 5.536364).abs() < 1e-6,
+            "1M output should bill at 870 credits, got {output_cost}"
+        );
+
+        record.output_tokens = 0;
+        record.cache_read_tokens = 1_000_000;
+        let cache_cost = display_cost(&record);
+        assert!(
+            (cache_cost - 0.022909).abs() < 1e-6,
+            "1M cache read should bill at 3.6 credits, got {cache_cost}"
+        );
+
+        // No `peak_hours_utc`: 06:38–06:44 UTC (14:38–14:44 CST) falls inside the
+        // `[[1,4],[6,10]]` peak band the deepseek entries declare, but this model
+        // has no busy-hour doubling on the price card *or* in the ledger.
+        record.input_tokens = 1_000_000;
+        record.cache_read_tokens = 0;
+        assert!(
+            (display_cost(&record) - 2.768182).abs() < 1e-6,
+            "a 14:38 CST request must not be billed at peak rates"
+        );
+
+        // Entitlement rate 1.0: `model_access[]` carries no rate for this model, so
+        // the reconciliation below closes on `base == final` with no discount.
+        //
+        // Full-bucket reconciliation — 2026-10-01 14:00 CST (`interval=hourly`).
+        // The bucket mixes this model with deepseek-v4.1-flash, so the latter's
+        // verified list price is subtracted to isolate `mimo-v2.6-pro`. The local
+        // prefix whose token totals match the ledger *exactly* is the first 311
+        // records (prompt 594226 + cache 28232064 == ledger 28826290, completion
+        // 206539, cache 28232064). The ledger's `request_count` (316) counts five
+        // in-flight requests that never reached its token counters — prefix
+        // matching on 316 does not reconcile.
+        let deepseek_list_cny =
+            (551_151.0 * 0.890_909 + 204_762.0 * 3.5 + 28_077_440.0 * 0.017_182) / 1_000_000.0;
+        let mut mimo = make_record("dim", "dim", "mimo-v2.6-pro", 0, 0.0);
+        mimo.time = "2026-10-01T06:38:57+00:00".to_string();
+        mimo.input_tokens = 43_075;
+        mimo.output_tokens = 1_777;
+        mimo.cache_read_tokens = 154_624;
+        mimo.cache_write_tokens = 0;
+        let mimo_cny = display_cost(&mimo);
+
+        // `base_amount_minor` = catalog price, no entitlement applied.
+        let base_ratio = (deepseek_list_cny + mimo_cny) / (286_432.0 * 70.0 / 11_000.0 / 1000.0);
+        assert!(
+            (base_ratio - 1.0).abs() < 0.0001,
+            "base_amount_minor: ¥{} vs platform ¥{} (ratio {base_ratio})",
+            deepseek_list_cny + mimo_cny,
+            286_432.0 * 70.0 / 11_000.0 / 1000.0
+        );
+
+        // `final_amount_minor` = after entitlement (deepseek x0.65, this model x1.0).
+        let final_cny = deepseek_list_cny * 0.65 + mimo_cny;
+        let final_ratio = final_cny / (193_477.0 * 70.0 / 11_000.0 / 1000.0);
+        assert!(
+            (final_ratio - 1.0).abs() < 0.0001,
+            "final_amount_minor: ¥{final_cny} vs platform (ratio {final_ratio})"
+        );
+
+        // Anchor: registering the price card's *reversed* field order (as
+        // `mimo-v2.6-flash` required before 09-29) would bill this cache-heavy
+        // bucket 7.35x too high.
+        let swapped_cny = (43_075.0 * 2.768_182 + 1_777.0 * 0.022_909 + 154_624.0 * 5.536_364)
+            / 1_000_000.0;
+        assert!(
+            (swapped_cny / mimo_cny - 7.354).abs() < 0.005,
+            "reversed field order should land near 7.35x, got {}",
+            swapped_cny / mimo_cny
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_national_day_window_forces_offpeak_pricing() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // During the National Day holiday the platform bills the *whole* catalogue
+        // at 闲时 rates, so `deepseek-v4.1-flash` must stop doubling even though
+        // `peak_hours_utc = [[1,4],[6,10]]` still says those hours are busy. This
+        // is a window in `[special]`, not a per-model flag, so models added later
+        // are covered too.
+        let mut record = make_record("dim", "dim", "deepseek-v4.1-flash", 0, 0.0);
+        record.input_tokens = 0;
+        record.output_tokens = 0;
+        record.cache_read_tokens = 1_000_000;
+        record.cache_write_tokens = 0;
+        record.total_tokens = 1_000_000;
+
+        // display_cost() also applies the account's entitlement rate (0.65 for
+        // deepseek-v4.1-flash), so the expected values are list price × 0.65.
+        let entitlement = 0.65;
+        let peak_cache = 0.034_364 * entitlement;
+        let base_cache = 0.017_182 * entitlement;
+
+        // CST 09-30 is inside the UTC [1,4) busy band and before the holiday
+        // window opens: billed at the 2x peak rate (2.7 cache -> 5.4 credits).
+        record.time = "2026-09-30T01:30:00+00:00".to_string();
+        let before = display_cost(&record);
+        assert!(
+            (before - peak_cache).abs() < 1e-6,
+            "just before the window a busy-hour cache read bills at peak, got {before}"
+        );
+
+        // 2026-09-30 11:21 CST is the measured switchover; a request a minute
+        // later in the same busy band bills at the base rate.
+        record.time = "2026-09-30T03:22:00+00:00".to_string();
+        let during = display_cost(&record);
+        assert!(
+            (during - base_cache).abs() < 1e-6,
+            "inside the window the same busy hour bills off-peak, got {during}"
+        );
+
+        // A whole-holiday date bound works too (the window's upper bound is a bare
+        // date = 00:00 CST), so the last day of the holiday is still off-peak.
+        record.time = "2026-10-07T06:00:00+00:00".to_string();
+        let last_day = display_cost(&record);
+        assert!(
+            (last_day - base_cache).abs() < 1e-6,
+            "2026-10-07 is still inside the holiday, got {last_day}"
+        );
+
+        // Past the window the peak multiplier comes back. Without an upper bound
+        // this record would keep billing off-peak forever — silently halving
+        // every busy hour from 10-08 onwards.
+        record.time = "2026-10-08T06:00:00+00:00".to_string();
+        let after = display_cost(&record);
+        assert!(
+            (after - peak_cache).abs() < 1e-6,
+            "after the holiday peak pricing must resume, got {after}"
+        );
+
+        // The window is DimAgent-only: an otherwise identical record from another
+        // source must not be pulled into it.
+        let mut other = make_record("pi", "deepseek", "deepseek-v4.1-flash", 0, 0.0);
+        other.time = "2026-10-01T01:30:00+00:00".to_string();
+        other.input_tokens = 0;
+        other.output_tokens = 0;
+        other.cache_read_tokens = 1_000_000;
+        other.cache_write_tokens = 0;
+        other.total_tokens = 1_000_000;
+        let other_cost = display_cost(&other);
+        assert!(
+            other_cost != during && other_cost > during,
+            "non-dim sources must keep their own pricing, got {other_cost}"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn dim_offpeak_window_bounds_accept_dates_and_rfc3339() {
+        let windows = vec![
+            DimOffpeakWindow {
+                from: "2026-09-30T11:21:00+08:00".to_string(),
+                to: Some("2026-10-08".to_string()),
+            },
+            DimOffpeakWindow {
+                from: "2027-02-15".to_string(),
+                to: None,
+            },
+        ];
+        let at = |s: &str| in_offpeak_window(&windows, DateTime::parse_from_rfc3339(s).ok().as_ref());
+
+        // Half-open [from, to): the switchover instant itself is already off-peak.
+        assert!(at("2026-09-30T03:21:00+00:00"));
+        assert!(!at("2026-09-30T03:20:59+00:00"));
+        // `to` is 00:00 CST on 10-08, so 10-07 is in and 10-08 is out.
+        assert!(at("2026-10-07T15:59:59+00:00"));
+        assert!(!at("2026-10-07T16:00:00+00:00"));
+        // A bare date with no `to` is open-ended (a holiday still in progress).
+        assert!(at("2027-02-15T00:00:00+08:00"));
+        assert!(at("2030-01-01T00:00:00+08:00"));
+        // Outside every window, and an unparseable record time, are not off-peak.
+        assert!(!at("2026-10-10T00:00:00+00:00"));
+        assert!(!in_offpeak_window(&windows, None));
     }
 
     #[test]
@@ -4708,7 +5405,7 @@ peak_cache_write = 0.0
         assert!((display_cost(&record) - expected(0.14, 0.0028, 0.28)).abs() < 1e-12);
 
         // DeepSeek may expose the dated API revision in the model name.
-        record.model = "deepseek-v4-flash-0731".to_string();
+        record.model = "deepseek-v4-flash-0731".into();
         record.time = "2026-08-16T16:00:00Z".to_string();
         assert!((display_cost(&record) - expected(0.22, 0.007, 0.66)).abs() < 1e-12);
 
@@ -5279,13 +5976,13 @@ cache_write = 5.00
         cost: f64,
     ) -> TokenRecord {
         TokenRecord {
-            date: time[..10].to_string(),
+            date: time[..10].into(),
             time: time.to_string(),
-            api_key_prefix: "test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: source.to_string(),
+            model: model.into(),
+            source: source.into(),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: cache_read,

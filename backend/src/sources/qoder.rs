@@ -122,13 +122,13 @@ fn parse_segment_files(
             let (date, time) = parse_timestamp(obj.get("ts").and_then(|t| t.as_str()).unwrap_or(""));
 
             records.push(TokenRecord {
-                date,
+                date: date.into(),
                 time,
-                api_key_prefix: "N/A".to_string(),
-                provider,
+                api_key_prefix: "N/A".into(),
+                provider: provider.into(),
                 original_provider: None,
-                model,
-                source: source.to_string(),
+                model: model.into(),
+                source: source.into(),
                 input_tokens,
                 output_tokens,
                 cache_read_tokens,

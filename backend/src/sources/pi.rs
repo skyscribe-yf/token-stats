@@ -185,7 +185,7 @@ impl PiSource {
             }
             if let Ok(mut record) = serde_json::from_str::<TokenRecord>(line) {
                 if record.source.is_empty() {
-                    record.source = "pi".to_string();
+                    record.source = "pi".into();
                 }
                 records.push(record);
             }
@@ -213,7 +213,7 @@ impl PiSource {
             set.clear();
         }
         for r in records {
-            set.insert((r.date.clone(), r.provider.clone(), r.model.clone()));
+            set.insert((r.date.to_string(), r.provider.to_string(), r.model.to_string()));
         }
         // ~800 distinct triples; cloning is cheaper than holding the lock
         // across the taskplane scan's file I/O.
@@ -361,13 +361,13 @@ impl PiSource {
                     + tokens.cache_write.unwrap_or(0);
 
                 records.push(TokenRecord {
-                    date: batch_date.clone(),
+                    date: batch_date.as_str().into(),
                     time: batch_time.clone(),
-                    api_key_prefix: format!("runtime:{}", batch_name),
-                    provider,
+                    api_key_prefix: format!("runtime:{}", batch_name).into(),
+                    provider: provider.into(),
                     original_provider: None,
-                    model,
-                    source: "pi".to_string(),
+                    model: model.into(),
+                    source: "pi".into(),
                     input_tokens: tokens.input,
                     output_tokens: tokens.output,
                     cache_read_tokens: tokens.cache_read.unwrap_or(0),

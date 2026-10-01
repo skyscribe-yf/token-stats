@@ -266,6 +266,18 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             .collect()
     };
 
+    // Snapshot ollama-proxy records: the Ollama card dates its session/weekly
+    // usage windows and totals the live weekly spend from this per-request
+    // meter (the JSON API reports fractions without reset timestamps).
+    let ollama_records: Vec<crate::models::TokenRecord> = {
+        let records = state.records.read().await;
+        records
+            .iter()
+            .filter(|r| r.source == "ollama-proxy")
+            .cloned()
+            .collect()
+    };
+
     let (
         kimi_result,
         kimi_ex_result,
@@ -293,7 +305,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         fetcher.fetch_commandcode_quota(),
         fetcher.fetch_commandcode_quota_ex(),
         fetcher.fetch_codebuddy_quota(),
-        fetcher.fetch_ollama_quota(),
+        fetcher.fetch_ollama_quota(&ollama_records),
         fetcher.fetch_meituan_quota(),
         fetcher.fetch_fenno_quota(),
         fetcher.fetch_fenno_quota_ex(),
@@ -669,7 +681,7 @@ pub async fn restore_backup(
             let record = if record.source.is_empty() {
                 let inferred = infer_source_from_filename(file_path);
                 TokenRecord {
-                    source: inferred,
+                    source: inferred.into(),
                     ..record
                 }
             } else {

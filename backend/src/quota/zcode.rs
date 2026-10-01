@@ -650,13 +650,13 @@ mod tests {
     fn local_usage_aggregates_today_and_totals() {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let mk = |date: &str, input: i64, output: i64| TokenRecord {
-            date: date.to_string(),
+            date: date.into(),
             time: format!("{date}T00:00:00Z"),
-            api_key_prefix: "N/A".to_string(),
-            provider: "bigmodel".to_string(),
+            api_key_prefix: "N/A".into(),
+            provider: "bigmodel".into(),
             original_provider: None,
-            model: "GLM-5.3-Flash".to_string(),
-            source: "zcode".to_string(),
+            model: "GLM-5.3-Flash".into(),
+            source: "zcode".into(),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,
@@ -682,13 +682,13 @@ mod tests {
     #[test]
     fn local_usage_splits_trial_grant_from_paid_plan() {
         let mk = |provider: &str, input: i64, output: i64| TokenRecord {
-            date: "2026-09-13".to_string(),
+            date: "2026-09-13".into(),
             time: "2026-09-13T01:00:00Z".to_string(),
-            api_key_prefix: "N/A".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "N/A".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: "GLM-5.3-Flash".to_string(),
-            source: "zcode".to_string(),
+            model: "GLM-5.3-Flash".into(),
+            source: "zcode".into(),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: 0,

@@ -7,6 +7,7 @@ use axum::{
     routing::post,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
+use compact_str::CompactString;
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use std::{io::Write, net::SocketAddr, path::PathBuf};
@@ -230,13 +231,13 @@ fn parse_usage_record(
         (response.usage.input_tokens - cache_read_tokens - cache_write_tokens).max(0);
 
     Some(TokenRecord {
-        date: recorded_at.format("%Y-%m-%d").to_string(),
+        date: compact_str::format_compact!("{}", recorded_at.format("%Y-%m-%d")),
         time: recorded_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        api_key_prefix: String::new(),
-        provider: provider.to_string(),
+        api_key_prefix: CompactString::default(),
+        provider: provider.into(),
         original_provider: None,
-        model: canonical_model.to_string(),
-        source: GROK_SOURCE.to_string(),
+        model: canonical_model.into(),
+        source: GROK_SOURCE.into(),
         input_tokens,
         output_tokens: response.usage.output_tokens,
         cache_read_tokens,

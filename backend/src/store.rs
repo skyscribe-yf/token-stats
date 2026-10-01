@@ -16,6 +16,7 @@
 //!   the source logs still contain the records.
 
 use crate::models::TokenRecord;
+use compact_str::CompactString;
 use rusqlite::{Connection, OpenFlags, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -338,8 +339,6 @@ impl TokenStore {
 
     /// Persist a sync watermark. Best-effort: a failure only costs a slower
     /// next cold start, never correctness.
-    /// TODO(WIP): 待接线 — 当前无调用方（编译期 -D warnings 防死代码）。
-    #[allow(dead_code)]
     pub fn set_sync_watermark(&self, key: &str, value: i64) {
         let conn = match self.conn.lock() {
             Ok(c) => c,
@@ -435,15 +434,15 @@ impl TokenStore {
                         let (id, time, provider, model, source, input, output, cache_read) = row;
                         let rec = TokenRecord {
                             time,
-                            provider,
-                            model,
-                            source,
+                            provider: provider.into(),
+                            model: model.into(),
+                            source: source.into(),
                             input_tokens: input,
                             output_tokens: output,
                             cache_read_tokens: cache_read,
                             // Remaining fields are irrelevant for fingerprint().
-                            date: String::new(),
-                            api_key_prefix: String::new(),
+                            date: CompactString::default(),
+                            api_key_prefix: CompactString::default(),
                             original_provider: None,
                             cache_write_tokens: 0,
                             total_tokens: 0,
@@ -645,6 +644,98 @@ impl TokenStore {
             tracing::info!(
                 "Migrated zcode collection: removed {deleted} row(s) at/after {CUTOFF} \
                  mislabeled provider='opencode-go', re-ingesting account-plan GLM as 'bigmodel'"
+            );
+        }
+        deleted
+    }
+
+    /// One-time migration: drop persisted `source='opencode'` rows so they can
+    /// be re-ingested with `output_tokens` including reasoning tokens.
+    ///
+    /// OpenCode bills reasoning at the output rate (the API's own `cost` field
+    /// proves it — see `sources/opencode.rs`), but the parser used to discard
+    /// the `reasoning` field, so every persisted row under-reports output.
+    /// Folding it in changes the fingerprint, so keeping the old rows would
+    /// duplicate the whole OpenCode history under new keys.
+    ///
+    /// Unlike the other purge helpers this one is **guarded**: it deletes only
+    /// when `readable_rows` — what the OpenCode DB can still reproduce —
+    /// covers every row we are about to drop. The dashboard store is meant to
+    /// outlive the source files, so if the original sessions have already been
+    /// cleaned up we keep the (slightly under-reported) history and retry on
+    /// the next start rather than trade real data for a cosmetic fix.
+    ///
+    /// Must run before `load_all()` — see the call site in `AppState::new`.
+    pub fn migrate_opencode_reasoning_output(&self, readable_rows: Option<i64>) -> usize {
+        const WATERMARK: &str = "opencode_reasoning_output_v1";
+        if self.get_sync_watermark(WATERMARK) == Some(1) {
+            return 0; // Already migrated.
+        }
+
+        let existing: i64 = {
+            let conn = match self.conn.lock() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Token store lock poisoned: {}", e);
+                    return 0;
+                }
+            };
+            conn.query_row(
+                "SELECT count(*) FROM token_records WHERE source = 'opencode'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+        };
+
+        if existing == 0 {
+            // Nothing persisted predates the fix; rows land correctly from here on.
+            self.set_sync_watermark(WATERMARK, 1);
+            return 0;
+        }
+
+        match readable_rows {
+            None => {
+                tracing::warn!(
+                    "OpenCode reasoning migration deferred: source DB unreadable, \
+                     keeping {existing} under-reported row(s)"
+                );
+                return 0;
+            }
+            Some(readable) if readable < existing => {
+                tracing::warn!(
+                    "OpenCode reasoning migration skipped: source DB reproduces only \
+                     {readable} of {existing} persisted row(s) (original sessions pruned?) \
+                     — keeping history rather than losing it; will retry next start"
+                );
+                return 0;
+            }
+            Some(_) => {}
+        }
+
+        let deleted = {
+            let conn = match self.conn.lock() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Token store lock poisoned: {}", e);
+                    return 0;
+                }
+            };
+            conn.execute(
+                "DELETE FROM token_records WHERE source = 'opencode'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge pre-reasoning opencode rows: {e}");
+                0
+            })
+        };
+        if deleted > 0 {
+            // After the guard above is released — `set_sync_watermark` locks too.
+            self.set_sync_watermark(WATERMARK, 1);
+            tracing::info!(
+                "Migrated opencode collection: removed {deleted} row(s) whose \
+                 output_tokens omitted reasoning tokens, re-ingesting from the OpenCode DB"
             );
         }
         deleted
@@ -852,12 +943,12 @@ impl TokenStore {
                 INSERT_SQL,
                 params![
                     r.time,
-                    r.date,
-                    r.api_key_prefix,
-                    r.provider,
+                    r.date.as_str(),
+                    r.api_key_prefix.as_str(),
+                    r.provider.as_str(),
                     r.original_provider,
-                    r.model,
-                    r.source,
+                    r.model.as_str(),
+                    r.source.as_str(),
                     r.input_tokens,
                     r.output_tokens,
                     r.cache_read_tokens,
@@ -1005,15 +1096,25 @@ impl PendingBuffer {
     }
 }
 
+/// Read a TEXT column into a `CompactString`.
+///
+/// Goes through `ValueRef` rather than `row.get::<String>()` so the ~5M text
+/// columns `load_all` reads per startup don't each pay for a `String` that is
+/// immediately dropped. The columns are all `NOT NULL`, so a non-text value is
+/// a genuine schema violation and propagates exactly as `row.get` did.
+fn text_col(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<CompactString> {
+    Ok(row.get_ref(idx)?.as_str()?.into())
+}
+
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenRecord> {
     Ok(TokenRecord {
         time: row.get(0)?,
-        date: row.get(1)?,
-        api_key_prefix: row.get(2)?,
-        provider: row.get(3)?,
+        date: text_col(row, 1)?,
+        api_key_prefix: text_col(row, 2)?,
+        provider: text_col(row, 3)?,
         original_provider: row.get(4)?,
-        model: row.get(5)?,
-        source: row.get(6)?,
+        model: text_col(row, 5)?,
+        source: text_col(row, 6)?,
         input_tokens: row.get(7)?,
         output_tokens: row.get(8)?,
         cache_read_tokens: row.get(9)?,
@@ -1031,13 +1132,13 @@ mod tests {
 
     fn fixture(source: &str, provider: &str, model: &str, time: &str, tokens: i64) -> TokenRecord {
         TokenRecord {
-            date: time[..10].to_string(),
+            date: time[..10].into(),
             time: time.to_string(),
-            api_key_prefix: "sk-test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "sk-test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: source.to_string(),
+            model: model.into(),
+            source: source.into(),
             input_tokens: tokens / 2,
             output_tokens: tokens / 2,
             cache_read_tokens: 0,
@@ -1559,13 +1660,13 @@ mod tests {
         let store = TokenStore::open(&path);
         assert_eq!(store.count(), 1);
         let exclusive = TokenRecord {
-            date: "2026-08-23".to_string(),
+            date: "2026-08-23".into(),
             time: "2026-08-23T12:32:48.057Z".to_string(),
-            api_key_prefix: "N/A".to_string(),
-            provider: "commandcode".to_string(),
+            api_key_prefix: "N/A".into(),
+            provider: "commandcode".into(),
             original_provider: None,
-            model: "muse-spark-1.2-contributor".to_string(),
-            source: "commandcode".to_string(),
+            model: "muse-spark-1.2-contributor".into(),
+            source: "commandcode".into(),
             input_tokens: 15600,
             output_tokens: 71,
             cache_read_tokens: 7424,
@@ -1595,7 +1696,7 @@ mod tests {
             110,
         );
         let mut unknown = named.clone();
-        unknown.model = "unknown".to_string();
+        unknown.model = "unknown".into();
         assert_eq!(store.insert_batch(&[named, unknown]), 2);
 
         let reopened = TokenStore::open(&path);
@@ -1791,5 +1892,98 @@ mod tests {
             buf.take_if_due(Duration::from_secs(120), Instant::now())
                 .is_empty()
         );
+    }
+
+    fn opencode_row_count(store: &TokenStore) -> usize {
+        store
+            .load_all()
+            .iter()
+            .filter(|r| r.source == "opencode")
+            .count()
+    }
+
+    fn seed_opencode_rows(store: &TokenStore, n: usize) {
+        let records: Vec<TokenRecord> = (0..n)
+            .map(|i| fixture("opencode", "opencode-go", "space-bunny-free", &format!("2026-09-2{}T01:00:00Z", i % 9), 100 + i as i64))
+            .collect();
+        store.insert_batch(&records);
+    }
+
+    #[test]
+    fn opencode_reasoning_migration_purges_when_source_can_reproduce() {
+        let store = temp_store();
+        seed_opencode_rows(&store, 3);
+        store.insert_batch(&[fixture("codex", "openai", "gpt-5.5", "2026-09-20T01:00:00Z", 300)]);
+
+        // The OpenCode DB reproduces every row → safe to drop and re-ingest.
+        assert_eq!(store.migrate_opencode_reasoning_output(Some(3)), 3);
+        assert_eq!(opencode_row_count(&store), 0, "pre-fix rows are gone");
+        assert_eq!(store.count(), 1, "other sources are untouched");
+
+        // Re-ingesting the same usage under the new fingerprints lands normally.
+        let mut regenerated = fixture(
+            "opencode",
+            "opencode-go",
+            "space-bunny-free",
+            "2026-09-20T01:00:00Z",
+            140,
+        );
+        regenerated.output_tokens = 90; // output + reasoning
+        assert_eq!(store.insert_batch(&[regenerated]), 1);
+        assert_eq!(opencode_row_count(&store), 1);
+    }
+
+    #[test]
+    fn opencode_reasoning_migration_is_one_shot() {
+        let store = temp_store();
+        seed_opencode_rows(&store, 2);
+        assert_eq!(store.migrate_opencode_reasoning_output(Some(99)), 2);
+        assert_eq!(opencode_row_count(&store), 0);
+
+        seed_opencode_rows(&store, 2);
+        assert_eq!(
+            store.migrate_opencode_reasoning_output(Some(99)),
+            0,
+            "watermarked: never purges again"
+        );
+        assert_eq!(opencode_row_count(&store), 2);
+    }
+
+    #[test]
+    fn opencode_reasoning_migration_keeps_history_the_source_cannot_reproduce() {
+        let store = temp_store();
+        seed_opencode_rows(&store, 3);
+
+        // Sessions were pruned since: the DB covers fewer rows than we hold,
+        // so deleting would permanently lose usage.
+        assert_eq!(store.migrate_opencode_reasoning_output(Some(2)), 0);
+        assert_eq!(opencode_row_count(&store), 3, "history survives");
+
+        assert_eq!(store.migrate_opencode_reasoning_output(None), 0);
+        assert_eq!(opencode_row_count(&store), 3, "unreadable DB is not a licence to delete");
+
+        // The guard is not sticky — a later start with an intact DB migrates.
+        assert_eq!(store.migrate_opencode_reasoning_output(Some(3)), 3);
+        assert_eq!(opencode_row_count(&store), 0);
+    }
+
+    #[test]
+    fn opencode_reasoning_migration_marks_empty_store_without_touching_it() {
+        let store = temp_store();
+        store.insert_batch(&[fixture("codex", "openai", "gpt-5.5", "2026-09-20T01:00:00Z", 300)]);
+
+        assert_eq!(store.migrate_opencode_reasoning_output(None), 0);
+        assert_eq!(store.count(), 1);
+
+        // Fresh install: rows arrive with correct numbers, so nothing to redo.
+        store.insert_batch(&[fixture(
+            "opencode",
+            "opencode-go",
+            "space-bunny-free",
+            "2026-09-21T01:00:00Z",
+            100,
+        )]);
+        assert_eq!(store.migrate_opencode_reasoning_output(Some(1)), 0);
+        assert_eq!(opencode_row_count(&store), 1);
     }
 }

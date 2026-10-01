@@ -49,7 +49,7 @@ pub(crate) use ollama_proxy::{
     OLLAMA_CLOUD_RUN_PROVIDER, ollama_run_cutoff, ollama_run_record_superseded,
     ollama_run_time_superseded,
 };
-pub use opencode::OpenCodeSource;
+pub use opencode::{OpenCodeSource, opencode_readable_row_count};
 pub use pi::PiSource;
 pub use qoder::{QoderCliSource, QoderDesktopSource};
 pub use stepfun_proxy::StepfunProxySource;
@@ -358,8 +358,6 @@ pub fn load_all_sources() -> Vec<TokenRecord> {
 }
 
 fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
-    let mut all_records = Vec::new();
-
     let sources: Vec<Box<dyn DataSource>> = {
         let mut v: Vec<Box<dyn DataSource>> = vec![
             Box::new(PiSource),
@@ -405,10 +403,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
         let _ = UNAVAILABLE_SOURCES.set(unavailable.clone());
     }
 
-    for src in &sources {
-        if !src.is_available() {
-            continue;
-        }
+    let load = |src: &dyn DataSource| -> Vec<TokenRecord> {
         let records = if incremental {
             src.load_incremental()
         } else {
@@ -417,8 +412,23 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
         if !records.is_empty() {
             tracing::info!("Loaded {} records from {}", records.len(), src.name());
         }
-        all_records.extend(records);
-    }
+        records
+    };
+
+    // Load each source into its own buffer, then size the flat output exactly.
+    // Extending one `Vec` by doubling towards ~180 MB takes ~25 reallocs, and
+    // every one of them abandons a copy of everything parsed so far — wasted
+    // memcpy plus a scattered freed block per step. Summing the per-source
+    // counts first makes it a single exact allocation.
+    let parts: Vec<Vec<TokenRecord>> = sources
+        .iter()
+        .filter(|src| src.is_available())
+        .map(|src| load(&**src))
+        .collect();
+
+    let total = parts.iter().map(Vec::len).sum::<usize>();
+    let mut all_records = Vec::with_capacity(total);
+    all_records.extend(parts.into_iter().flatten());
 
     tracing::info!("Total records loaded this pass: {}", all_records.len());
 
@@ -461,7 +471,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
 
     // Normalize model names across sources (e.g. claude-opus-4.7 -> claude-opus-4-7)
     for record in all_records.iter_mut() {
-        record.model = normalize_model_name(&record.model);
+        record.model = normalize_model_name(&record.model).into();
     }
 
     // ── Command Code normalization ─────────────────────────────────────
@@ -506,7 +516,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
         if record.provider == "kimi" && record.model == "kimi-for-coding" {
             if let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
                 if record_time.with_timezone(&chrono::Utc) >= kimi_k27_cutoff {
-                    record.model = "kimi-k2.7".to_string();
+                    record.model = "kimi-k2.7".into();
                     kimi_renamed += 1;
                 }
             }
@@ -711,13 +721,13 @@ mod tests {
         // Only pi-origin records are normalized here; native cmd is
         // subtracted in the commandcode parser.
         let mut record = TokenRecord {
-            date: "2026-05-25".to_string(),
+            date: "2026-05-25".into(),
             time: "2026-05-25T12:46:55Z".to_string(),
-            api_key_prefix: "sk-test".to_string(),
-            provider: "commandcode".to_string(),
+            api_key_prefix: "sk-test".into(),
+            provider: "commandcode".into(),
             original_provider: None,
-            model: "deepseek/deepseek-v4-flash".to_string(),
-            source: "pi".to_string(),
+            model: "deepseek/deepseek-v4-flash".into(),
+            source: "pi".into(),
             input_tokens: 21159, // includes cache
             output_tokens: 286,
             cache_read_tokens: 20864, // 20864 cached
@@ -743,13 +753,13 @@ mod tests {
         assert_eq!(record.total_tokens, 295 + 286 + 20864);
         // Native cmd source is NOT normalized (already exclusive)
         let native = TokenRecord {
-            date: "2026-08-18".to_string(),
+            date: "2026-08-18".into(),
             time: "2026-08-18T23:22:28.444Z".to_string(),
-            api_key_prefix: "N/A".to_string(),
-            provider: "commandcode".to_string(),
+            api_key_prefix: "N/A".into(),
+            provider: "commandcode".into(),
             original_provider: None,
-            model: "muse-spark-1.2-contributor".to_string(),
-            source: "commandcode".to_string(),
+            model: "muse-spark-1.2-contributor".into(),
+            source: "commandcode".into(),
             input_tokens: 29710,
             output_tokens: 345,
             cache_read_tokens: 177,
@@ -771,13 +781,13 @@ mod tests {
         );
         // Non-commandcode records unchanged either way
         let normal = TokenRecord {
-            date: "2026-05-25".to_string(),
+            date: "2026-05-25".into(),
             time: "2026-05-25T12:00:00Z".to_string(),
-            api_key_prefix: "sk-test".to_string(),
-            provider: "openai".to_string(),
+            api_key_prefix: "sk-test".into(),
+            provider: "openai".into(),
             original_provider: None,
-            model: "gpt-5.5".to_string(),
-            source: "codex".to_string(),
+            model: "gpt-5.5".into(),
+            source: "codex".into(),
             input_tokens: 10000,
             output_tokens: 5000,
             cache_read_tokens: 2000,
@@ -805,13 +815,13 @@ mod tests {
 
         fn make_record(provider: &str, model: &str, time: &str) -> TokenRecord {
             TokenRecord {
-                date: time[..10].to_string(),
+                date: time[..10].into(),
                 time: time.to_string(),
-                api_key_prefix: "test".to_string(),
-                provider: provider.to_string(),
+                api_key_prefix: "test".into(),
+                provider: provider.into(),
                 original_provider: None,
-                model: model.to_string(),
-                source: "test".to_string(),
+                model: model.into(),
+                source: "test".into(),
                 input_tokens: 100,
                 output_tokens: 50,
                 cache_read_tokens: 0,
@@ -842,7 +852,7 @@ mod tests {
             if record.provider == "kimi" && record.model == "kimi-for-coding" {
                 if let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
                     if record_time.with_timezone(&chrono::Utc) >= cutoff {
-                        record.model = "kimi-k2.7".to_string();
+                        record.model = "kimi-k2.7".into();
                         renamed += 1;
                     }
                 }

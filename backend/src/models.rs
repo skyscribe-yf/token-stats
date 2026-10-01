@@ -1,23 +1,30 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TokenRecord {
-    pub date: String,
+    /// The low-cardinality fields are `CompactString`: values up to 22 bytes
+    /// live inline, so `date`/`api_key_prefix`/`provider`/`source` and most
+    /// model names cost no heap allocation at all. A plain `String` costs one
+    /// malloc per field, which at ~760k records is ~4M allocations of ~12
+    /// bytes — mostly allocator overhead, and pointer-chasing every time
+    /// `fingerprint()` hashes or `sort_by` compares them.
+    pub date: CompactString,
     pub time: String,
     #[serde(rename = "apiKeyPrefix", default)]
-    pub api_key_prefix: String,
-    pub provider: String,
+    pub api_key_prefix: CompactString,
+    pub provider: CompactString,
     /// The provider name before vendor merge was applied.
     /// Used by display_cost() to determine the correct cost formula
     /// (e.g. opencode-go records merged into deepseek still need USD→CNY conversion).
     #[serde(default, skip_serializing)]
     pub original_provider: Option<String>,
-    pub model: String,
+    pub model: CompactString,
     #[serde(default)]
-    pub source: String,
+    pub source: CompactString,
     #[serde(rename = "inputTokens")]
     pub input_tokens: i64,
     #[serde(rename = "outputTokens")]
@@ -364,13 +371,13 @@ impl TokenRecord {
         total_tokens: i64,
     ) -> Self {
         Self {
-            date: time[..10].to_string(),
+            date: time[..10].into(),
             time: time.to_string(),
-            api_key_prefix: "test".to_string(),
-            provider: provider.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
             original_provider: None,
-            model: model.to_string(),
-            source: source.to_string(),
+            model: model.into(),
+            source: source.into(),
             input_tokens: total_tokens / 2,
             output_tokens: total_tokens / 2,
             cache_read_tokens: 0,

@@ -135,13 +135,13 @@ impl KimiCliSource {
                                     let total = input_other + output + cache_read + cache_creation;
 
                                     records.push(TokenRecord {
-                                        date,
+                                        date: date.into(),
                                         time,
-                                        api_key_prefix: "N/A".to_string(),
-                                        provider: "kimi".to_string(),
+                                        api_key_prefix: "N/A".into(),
+                                        provider: "kimi".into(),
                                         original_provider: None,
-                                        model: model.clone(),
-                                        source: "kimi-cli".to_string(),
+                                        model: model.as_str().into(),
+                                        source: "kimi-cli".into(),
                                         input_tokens: input_other,
                                         output_tokens: output,
                                         cache_read_tokens: cache_read,

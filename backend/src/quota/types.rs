@@ -508,12 +508,17 @@ pub struct OllamaQuotaData {
     pub usage_entries: Vec<OllamaUsageEntry>,
     pub has_annual_option: bool,
     pub has_max_upgrade: bool,
-    /// Estimated tokens used this week based on usage percentage and empirical weekly quota.
+    /// Actual tokens metered by the `ollama-proxy` source in the live weekly
+    /// window (input + output + cache read + cache write).
     #[serde(default)]
-    pub estimated_tokens_used: Option<i64>,
-    /// Estimated cost in CNY for this week's usage.
+    pub weekly_tokens: Option<i64>,
+    /// Subscription cost (CNY) of those records, at the dashboard's empirical
+    /// Ollama rate.
     #[serde(default)]
-    pub estimated_cost_cny: Option<f64>,
+    pub weekly_cost_cny: Option<f64>,
+    /// Requests metered in the live weekly window.
+    #[serde(default)]
+    pub weekly_calls: Option<i64>,
 }
 
 /// Ollama quota status for the dashboard.

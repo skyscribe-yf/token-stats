@@ -236,13 +236,13 @@ impl CcSwitchSource {
                     let cost: f64 = total_cost_usd.parse().unwrap_or(0.0);
 
                     records.push(TokenRecord {
-                        date,
+                        date: date.into(),
                         time,
-                        api_key_prefix: "N/A".to_string(),
-                        provider,
+                        api_key_prefix: "N/A".into(),
+                        provider: provider.into(),
                         original_provider: None,
-                        model: request_model,
-                        source,
+                        model: request_model.into(),
+                        source: source.into(),
                         input_tokens: effective_input,
                         output_tokens,
                         cache_read_tokens: effective_cache_read,
