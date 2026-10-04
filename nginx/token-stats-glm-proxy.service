@@ -1,0 +1,21 @@
+[Unit]
+Description=Token Stats GLM Usage Proxy (Paseo glm-acp-agent)
+After=network.target
+
+[Service]
+Type=simple
+User=skyscribe
+WorkingDirectory=/home/skyscribe/srcs/token-stats/backend
+Environment="RUST_LOG=info"
+# Rust allocations go through mimalloc; this only caps glibc's arena count for
+# the bundled SQLite and other C code, which otherwise spreads one arena per
+# thread (8 x nproc) and never returns the high-water mark.
+Environment="MALLOC_ARENA_MAX=2"
+Environment="GLM_PROXY_PORT=3435"
+ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend --glm-proxy-only
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

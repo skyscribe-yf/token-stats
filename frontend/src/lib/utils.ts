@@ -169,6 +169,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   "grok-cli": "#e11d48", // rose-600
   "cc-proxy": "#f472b6", // pink-400 (DimAgent via Command Code)
   zcode: "#818cf8", // indigo-400
+  "glm-acp": "#84cc16", // lime-500 (Paseo glm-acp-agent via loopback GLM proxy)
   dsh: "#22d3ee", // cyan-400
   commandcode: "#f472b6", // pink-400
   dim: "#f97316", // orange-500 - Dim (dimcode)
@@ -250,6 +251,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   "grok-cli": "Grok CLI",
   "cc-proxy": "Dim→CC",
   zcode: "ZCode",
+  // Paseo's glm-acp-agent, metered by the loopback GLM proxy (glm_proxy.rs).
+  "glm-acp": "Paseo→GLM",
   dsh: "DSH",
   commandcode: "Command Code",
   dim: "Dim",

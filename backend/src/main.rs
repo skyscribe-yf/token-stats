@@ -10,6 +10,7 @@ mod app;
 mod cc_proxy;
 mod config;
 mod dim_entitlement;
+mod glm_proxy;
 mod grok_proxy;
 mod models;
 mod pricing;
@@ -54,6 +55,10 @@ struct Args {
     /// Run only the loopback Command Code proxy for DimAgent.
     #[arg(long)]
     cc_proxy_only: bool,
+
+    /// Run only the loopback GLM usage proxy for Paseo's glm-acp-agent.
+    #[arg(long)]
+    glm_proxy_only: bool,
 }
 
 #[cfg(test)]
@@ -76,6 +81,14 @@ mod tests {
             .expect("cc-proxy-only flag should parse");
 
         assert!(args.cc_proxy_only);
+    }
+
+    #[test]
+    fn parses_glm_proxy_only_mode() {
+        let args = Args::try_parse_from(["token-stats-backend", "--glm-proxy-only"])
+            .expect("glm-proxy-only flag should parse");
+
+        assert!(args.glm_proxy_only);
     }
 }
 
@@ -131,6 +144,12 @@ async fn main() {
         cc_proxy::serve()
             .await
             .expect("Command Code proxy stopped unexpectedly");
+        return;
+    }
+    if args.glm_proxy_only {
+        glm_proxy::serve()
+            .await
+            .expect("GLM usage proxy stopped unexpectedly");
         return;
     }
 

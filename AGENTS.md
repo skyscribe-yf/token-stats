@@ -41,8 +41,8 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 - 所有解析后的记录写入专用 SQLite 存储（`TokenStore`）持久化；内存中持有
   `Arc<AppState>` + `RwLock<Vec<TokenRecord>>` 快照，内存是 DB 的超集（见"数据持久化"）。
 - 后端同时提供静态文件服务（`backend/static/`，前端构建产物）。
-- 后端二进制还兼任两个 loopback 用量代理（`grok_proxy.rs` / `cc_proxy.rs`），各以
-  `--grok-proxy-only` / `--cc-proxy-only` 独立运行为 systemd 服务。
+- 后端二进制还兼任三个 loopback 用量代理（`grok_proxy.rs` / `cc_proxy.rs` / `glm_proxy.rs`），各以
+  `--grok-proxy-only` / `--cc-proxy-only` / `--glm-proxy-only` 独立运行为 systemd 服务。
 
 ### 数据源清单（精简）
 
@@ -70,6 +70,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | CPA `workbuddy` 插件写入（DimAgent → 腾讯 CodeBuddy Web API）；`provider=codebuddy` |
 | 18 | `ollama-proxy` | `~/.token-stats/ollama-usage.jsonl` | CPA `ollama-usage` 插件写入（`ollama/` 前缀上游），含 TTFT/TPS |
 | 19 | `stepfun-proxy` | `~/.token-stats/stepfun-usage.jsonl` | CPA `stepfun-usage` 插件写入（`step/` 前缀上游），含 TTFT/TPS |
+| 20 | `glm-acp` | `~/.token-stats/glm-acp-usage.jsonl` | 内置 GLM 回环代理写入——Paseo 的 `glm-acp-agent`（npm）直连 `api.z.ai/api/coding/paas/v4` 且自身不落任何 usage，经 `ACP_GLM_BASE_URL` 指到代理被动抄录；`provider=bigmodel`（成本走 GLM 列表价，非 zcode 积分公式），含 TTFT |
 
 路径大多有 `*_PATH` / `*_LOG_PATH` 环境变量覆盖，逐条见
 [`docs/agents/environment-variables.md`](docs/agents/environment-variables.md)。
@@ -80,6 +81,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 |--------------|------|----------|----------------|
 | `token-stats-grok-proxy.service`（`--grok-proxy-only`） | `127.0.0.1:3434` | Grok CLI；dim 的 `grok-build-proxy` provider | `grok-cli` |
 | `token-stats-cc-proxy.service`（`--cc-proxy-only`） | `127.0.0.1:8787` | DimAgent、ZCode 的 `commandcode` 通道 | `cc-proxy` |
+| `token-stats-glm-proxy.service`（`--glm-proxy-only`） | `127.0.0.1:3435` | Paseo 的 `glm-acp-agent`（`ACP_GLM_BASE_URL` 指入） | `glm-acp` |
 | `token-stats-workbuddy.service`（CLIProxyAPI + `workbuddy.so` / `ollama-usage.so` / `stepfun-usage.so`） | `127.0.0.1:8317` | DimAgent（模型前缀 `wb/`、`ollama/`、`step/`） | `dim-agent` / `ollama-proxy` / `stepfun-proxy` |
 
 **CPA = CLIProxyAPI（`:8317`）**，下文简称 CPA。
@@ -148,7 +150,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 
 | 文件 | 职责 |
 |------|------|
-| `src/main.rs` | CLI 入口（`--grok-proxy-only`、`--cc-proxy-only`、`-l/--log-level`） |
+| `src/main.rs` | CLI 入口（`--grok-proxy-only`、`--cc-proxy-only`、`--glm-proxy-only`、`-l/--log-level`） |
 | `src/app.rs` | `AppState`、`build_router()`、`serve()`（SIGINT/SIGTERM 优雅退出 + 落盘） |
 | `src/models.rs` | `TokenRecord`、`StatsResponse`、`AggregatedStats` 等全部数据结构 |
 | `src/sources/mod.rs` | `DataSource` trait、`load_all_sources()`/`load_changed_sources()`、跨源规范化（去重、模型名归一、vendor merge、Kimi 模型升级） |

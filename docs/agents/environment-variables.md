@@ -27,6 +27,9 @@
 | `GROK_PROXY_PORT` | `3434` | loopback Grok 代理端口 |
 | `CC_PROXY_PORT` | `8787` | loopback Command Code 代理端口（DimAgent 接入） |
 | `CC_PROXY_USAGE_LOG_PATH` | `~/.token-stats/cc-proxy-usage.jsonl` | Command Code 代理用量日志覆盖 |
+| `GLM_PROXY_PORT` | `3435` | loopback GLM 代理端口（Paseo `glm-acp-agent` 接入；agent 侧 `ACP_GLM_BASE_URL` 指向 `http://127.0.0.1:3435/api/coding/paas/v4`，配置在 `~/.paseo/config.json` 的 provider env，非后端变量） |
+| `GLM_PROXY_UPSTREAM_BASE_URL` | `https://api.z.ai` | GLM 代理上游基址（路径原样透传） |
+| `GLM_ACP_USAGE_LOG_PATH` | `~/.token-stats/glm-acp-usage.jsonl` | GLM 代理用量日志覆盖 |
 | `WORKBUDDY_USAGE_LOG_PATH` | `~/.token-stats/workbuddy-usage.jsonl` | WorkBuddy（CodeBuddy Web API）代理用量日志覆盖 |
 | `OLLAMA_PROXY_USAGE_LOG_PATH` | `~/.token-stats/ollama-usage.jsonl` | CPA `ollama-usage` 插件（Ollama Cloud 逐请求）用量日志覆盖；插件与后端读取同一变量 |
 | `STEPFUN_PROXY_USAGE_LOG_PATH` | `~/.token-stats/stepfun-usage.jsonl` | CPA `stepfun-usage` 插件（StepFun Step Plan 逐请求）用量日志覆盖；插件与后端读取同一变量 |

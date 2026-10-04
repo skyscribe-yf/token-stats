@@ -27,6 +27,7 @@
 | 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | JSONL，由 workbuddy CLIProxyAPI 插件（`~/workbuddy-proxy`，systemd 服务 `token-stats-workbuddy.service`）写入——DimAgent 经 Tencent CodeBuddy Web API 的请求；`provider=codebuddy`（成本走 `codebuddy_cny_per_credit` 积分换算，与原生 codebuddy 源同一计费公式），`WORKBUDDY_USAGE_LOG_PATH` 可覆盖 |
 | 18 | `ollama-proxy` | `~/.token-stats/ollama-usage.jsonl` | JSONL，由 `ollama-usage` CLIProxyAPI 插件（`~/workbuddy-proxy/ollama-usage-plugin`，与 workbuddy 同实例）写入——DimAgent 经 CPA `ollama-cloud` 上游（`ollama/` 前缀）的**逐请求**用量，含 TTFT/TPS；`provider=ollama-cloud`（vendor merge 并入 `ollama`，成本走经验费率），`OLLAMA_PROXY_USAGE_LOG_PATH` 可覆盖 |
 | 19 | `stepfun-proxy` | `~/.token-stats/stepfun-usage.jsonl` | JSONL，由 `stepfun-usage` CLIProxyAPI 插件（`~/workbuddy-proxy/stepfun-usage-plugin`，与 workbuddy / ollama 同一个 CPA 实例 :8317）写入——DimAgent 经 CPA `stepfun` 上游（`step/` 前缀，模型 `step-5-preview`）的**逐请求**用量，含 TTFT/TPS；`provider=stepfun`，成本走 StepFun 列表价 ÷ `stepfun_plan_divisor`（见 [`pricing.md`](pricing.md)），`STEPFUN_PROXY_USAGE_LOG_PATH` 可覆盖 |
+| 20 | `glm-acp` | `~/.token-stats/glm-acp-usage.jsonl` | JSONL，由内置 loopback GLM 代理写入（`GLM_ACP_USAGE_LOG_PATH` 可覆盖）——Paseo 的 `glm-acp-agent` 经 `ACP_GLM_BASE_URL` 指入代理（详见「GLM 代理」小节）；`provider=bigmodel`，成本走 GLM 列表价，含 TTFT |
 
 ## 代理与插件说明
 
@@ -62,6 +63,37 @@ xAI 上游，并从 `~/.dimcode/v2/auth.json` 的 `xaiGrokBuild.access` 注入�
 `dim provider add cc-proxy --api-key x --base-url http://127.0.0.1:8787 --adapter openai-compatible`。
 注意：CC 服务端**不会**为代理请求写本地 session jsonl，用量只能靠代理自记；`/alpha/generate`
 要求 `stream:true` + 完整 CLI 头 + UUID threadId，否则返回 400/403。
+
+### GLM 代理（Paseo glm-acp-agent）
+
+**GLM 代理说明**：`token-stats-glm-proxy.service` 用 `--glm-proxy-only` 启动后端二进制，
+监听 `127.0.0.1:${GLM_PROXY_PORT:-3435}`，为 Paseo 的 `glm-acp-agent`（npm 包，ACP agent）
+提供纯透传转发到 `${GLM_PROXY_UPSTREAM_BASE_URL:-https://api.z.ai}`（路径原样透传，
+Authorization 由调用方自带、代理不注入不改写），并从响应流里抄录 usage 追加到
+`~/.token-stats/glm-acp-usage.jsonl`——即 `glm-acp` 数据源。代理透传上游状态/响应体，
+不记录 prompt、完成文本与凭据。
+
+**为什么必须由代理计量**：`glm-acp-agent` 直连 Z.AI OpenAI 兼容编码端点
+（`api.z.ai/api/coding/paas/v4`，GLM Coding Plan PaaS），会话文件
+（`~/.local/state/glm-acp-agent/sessions/*.json`）只存消息不存 usage——Paseo 驱动的
+GLM 流量原本两个计量点都没有。该 agent 每次请求都带
+`stream_options: { include_usage: true }` 且支持 `ACP_GLM_BASE_URL` 环境变量，因此
+Paseo 侧 provider env 里把 base URL 指到代理即可，**npm 包零改动**；OpenAI 语义的
+`prompt_tokens`（含 cached）在代理侧减去 `cached_tokens` 归一为 Anthropic 约定，
+`reasoning_tokens` 是 completion 子集不另计。
+
+**provider 标签与成本口径**：记录 `provider=bigmodel`（GLM 编码套餐厂商，与 zcode 的
+GLM 流量在 vendor 图同组），但成本**不走** zcode 积分公式（该分支按
+`source == "zcode"` 门控），而是落 GLM 列表价——即「零售价值」口径。这把 key 若与
+bigmodel.cn 编码套餐同账户可再改走积分分支；若是 z.ai 国际版的窗口配额套餐（5h/weekly
+prompt window、超量限流不扣费），更接近 `bigmodel-start` 的「套餐内边际成本 0」口径，
+待确认后调整。
+
+**接入步骤**（新机器）：安装 `nginx/token-stats-glm-proxy.service` 并启用；Paseo
+`~/.paseo/config.json` 的 `glm-acp-agent` provider 加
+`"env": {"ACP_GLM_BASE_URL": "http://127.0.0.1:3435/api/coding/paas/v4"}`；重启 Paseo
+daemon 使 provider env 生效。代理挂掉时 agent 直连上游、流量不计量但功能不受损
+（base URL 指向本地端口会连接失败——此时代理是硬依赖，恢复服务即可）。
 
 ### WorkBuddy 代理
 

@@ -13,6 +13,7 @@ mod commandcode;
 mod dim;
 mod dim_agent;
 mod dsh;
+mod glm_acp;
 mod grok_cli;
 mod kimi_cli;
 mod kimi_code;
@@ -40,6 +41,8 @@ pub use commandcode::CommandCodeSource;
 pub use dim::DimSource;
 pub use dim_agent::WorkbuddySource;
 pub use dsh::DshSource;
+pub use glm_acp::GlmAcpSource;
+pub(crate) use glm_acp::glm_acp_usage_log_path;
 pub use grok_cli::GrokCliSource;
 pub(crate) use grok_cli::grok_usage_log_path;
 pub use kimi_cli::KimiCliSource;
@@ -371,6 +374,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
             Box::new(QoderDesktopSource),
             Box::new(GrokCliSource),
             Box::new(CcProxySource),
+            Box::new(GlmAcpSource),
             Box::new(OllamaProxySource),
             Box::new(StepfunProxySource),
             Box::new(WorkbuddySource),
