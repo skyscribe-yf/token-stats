@@ -1217,6 +1217,29 @@ output = 3.20
 cache_read = 0.20
 cache_write = 0.0
 
+# ── GLM API 列表价（Z.AI 官方 USD 价目；glm-acp 的兜底价）─────────
+# glm-acp 流量（source=glm-acp，provider=bigmodel）的主计费路径是官方积分公式，
+# 与 zcode 同一套 zcode_credit_rates / zcode_cny_per_credit 与时间因子（高峰
+# 1.0 / 非高峰 0.5），仅夜间畅用窗口不归零而按 0.25× 扣（见
+# compute_glm_acp_credit_cost），**不是**裸 API 价。本节条目只在积分单价未配置
+# （zcode_cny_per_credit=0）或其它来源携带 GLM 官方大小写模型名落到
+# resolve_model_price 时兜底。费率与上面的 cc:glm-5.3* 相同——那组数值本就是
+# Z.AI 官方列表价（2026-10 核对 z.ai 价目页）。键用小写的线上模型名，
+# resolve_model_price 的大小写无关重试保证 `GLM-5.3-Flash` 也能命中。
+[[model]]
+name = "glm-5.3-flash"
+input = 0.15
+output = 0.50
+cache_read = 0.03
+cache_write = 0.0
+
+[[model]]
+name = "glm-5.3"
+input = 1.40
+output = 4.40
+cache_read = 0.26
+cache_write = 0.0
+
 [[model]]
 name = "cc:minimax-m2.7"
 input = 0.30

@@ -1266,6 +1266,12 @@ fn resolve_model_price<'a>(
 
     let model_lower = model.to_lowercase();
 
+    // Case-insensitive retry: some sources record BigModel's official casing
+    // (`GLM-5.3-Flash`) while the pricing.toml keys are lowercase.
+    if let Some(p) = state.model_map.get(model_lower.as_str()) {
+        return Some(p);
+    }
+
     // OpenAI family — match by model name first, then fallback by provider
     if model_lower.contains("gpt-5.4-mini") {
         return state.model_map.get("gpt-5.4-mini");
@@ -1802,6 +1808,34 @@ fn ollama_cloud_model_multiplier(special: &SpecialPricing, model: &str) -> f64 {
 /// parser subtracts them, Anthropic convention) — matches the "输入 Token" term
 /// in the official formula.
 fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> Option<f64> {
+    compute_plan_credit_cost(special, record, true)
+}
+
+/// glm-acp (Paseo's GLM Coding Plan traffic) shares the official credit
+/// formula, the amortized per-credit price and the same time factors with
+/// ZCode (peak 1.0×, off-peak 0.5× — 实测 the ACP channel enjoys them too).
+/// The only difference: the 夜间畅用 window does not zero the deduction out;
+/// the ACP channel still deducts [`GLM_ACP_NIGHT_CREDIT_FACTOR`] there.
+fn compute_glm_acp_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> Option<f64> {
+    compute_plan_credit_cost(special, record, false)
+}
+
+/// ACP 通道（glm-acp）在夜间畅用窗口内的积分系数。实测服务端同样给 ACP 时间
+/// 因子（非高峰 0.5、高峰 1.0），窗口内不像 zcode 那样归零，而是非高峰 0.5
+/// 的再减半 = 0.25×。
+const GLM_ACP_NIGHT_CREDIT_FACTOR: f64 = 0.25;
+
+/// Official BigModel credit formula shared by the zcode and glm-acp sources.
+///
+/// `night_free` selects the ZCode channel's 夜间畅用 behaviour: inside the
+/// window ZCode deducts 0 credits. glm-acp passes false — same eligibility
+/// rules and the same peak/off-peak factors, but the window bills at
+/// [`GLM_ACP_NIGHT_CREDIT_FACTOR`] instead of zeroing out.
+fn compute_plan_credit_cost(
+    special: &SpecialPricing,
+    record: &TokenRecord,
+    night_free: bool,
+) -> Option<f64> {
     // Weekend Build 体验套餐（provider=bigmodel-start，赠送的 3 亿 token 额度）
     // 不消耗正式套餐积分 → 实际成本 0。
     if record.provider == "bigmodel-start" {
@@ -1816,10 +1850,17 @@ fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> 
     let cst = rt.with_timezone(&FixedOffset::east_opt(8 * 3600)?);
     let hour = cst.hour();
 
-    // 夜间畅用活动：活动日期内每日 23:00–09:00 CST，ZCode 端积分消耗为 0。
-    // 活动仅限白名单模型（zcode_night_free_models，官方为 GLM-5.3-Flash 专属，
-    // GLM-5.3 夜间照常扣积分）；且对旧版客户端不生效（zcode_night_free_effective_from
-    // 之前服务端照常扣积分），窗口内的更早记录跳过免费分支，按正常高峰/波谷因子计费。
+    // 官方积分公式：积分 = (输入×系数 + 缓存×系数 + 输出×系数) / 10000
+    let credits = (record.input_tokens as f64 * rates[0]
+        + record.cache_read_tokens as f64 * rates[1]
+        + record.output_tokens as f64 * rates[2])
+        / 10_000.0;
+
+    // 夜间畅用活动：活动日期内每日 23:00–09:00 CST。zcode 端积分消耗为 0；
+    // ACP 通道（glm-acp）不归零，窗口内按 0.25× 扣。活动仅限白名单模型
+    // （zcode_night_free_models，官方为 GLM-5.3-Flash 专属，GLM-5.3 夜间照常
+    // 按高峰/波谷因子扣积分）；且对旧版客户端不生效
+    // （zcode_night_free_effective_from 之前窗口内的记录照常按高峰/波谷因子计费）。
     if let (Some(from), Some(until)) = (
         special.zcode_night_free_from.as_deref(),
         special.zcode_night_free_until.as_deref(),
@@ -1848,12 +1889,17 @@ fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> 
                 }
             });
             if in_free {
-                return Some(0.0);
+                return Some(if night_free {
+                    0.0
+                } else {
+                    credits * GLM_ACP_NIGHT_CREDIT_FACTOR * special.zcode_cny_per_credit
+                });
             }
         }
     }
 
-    // 高峰（周一至周五 14:00–18:00 CST）按 1×，其余时段按 0.5× 抵扣。
+    // 高峰（周一至周五 14:00–18:00 CST）按 1×，其余时段按 0.5× 抵扣——
+    // zcode 与 glm-acp 同一套时间因子。
     let weekday = cst.weekday();
     let is_weekday = matches!(
         weekday,
@@ -1868,13 +1914,11 @@ fn compute_zcode_credit_cost(special: &SpecialPricing, record: &TokenRecord) -> 
             .zcode_peak_hours_cst
             .iter()
             .any(|[s, e]| *s <= hour && hour < *e);
-    let factor = if peak { 1.0 } else { special.zcode_off_peak_factor };
-
-    // 官方积分公式：积分 = (输入×系数 + 缓存×系数 + 输出×系数) / 10000
-    let credits = (record.input_tokens as f64 * rates[0]
-        + record.cache_read_tokens as f64 * rates[1]
-        + record.output_tokens as f64 * rates[2])
-        / 10_000.0;
+    let factor = if peak {
+        1.0
+    } else {
+        special.zcode_off_peak_factor
+    };
     Some(credits * factor * special.zcode_cny_per_credit)
 }
 
@@ -2258,15 +2302,26 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         || record.source == "dsh"
         || record.source == "dim"
         || record.source == "opencode"
+        || record.source == "glm-acp"
     {
         // ZCode BigModel GLM Coding Plan records (provider=bigmodel) are billed
         // by subscription credits (积分), not model list prices. When the plan
         // credit price is configured, prefer the credit-based cost; other
         // zcode records (opencode-go / tokenrouter channels) fall through.
+        // glm-acp uses the same credit formula and the same time factors
+        // (peak 1.0× / off-peak 0.5×), but its 夜间畅用 window bills at 0.25×
+        // instead of zeroing out (see `compute_glm_acp_credit_cost`); with the
+        // credit price disabled both fall through to the model list price
+        // below.
         if record.source == "zcode" {
             if let Some(cost) = compute_zcode_credit_cost(&cfg.special, record) {
                 return cost;
             }
+        }
+        if record.source == "glm-acp"
+            && let Some(cost) = compute_glm_acp_credit_cost(&cfg.special, record)
+        {
+            return cost;
         }
 
         // DimAgent console-API records are billed at the platform's credit
@@ -3506,6 +3561,88 @@ cache_write_cny = 0.0
         // stays visible instead of silently reading as free.
         let unpriced = make_record("opencode", "opencode-go", "no-such-model", 1_000_000, 0.0);
         assert_eq!(display_cost(&unpriced), -1.0);
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
+    fn glm_acp_shares_zcode_time_factors_but_nights_are_not_free() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        // glm-acp shares the official credit formula, the amortized per-credit
+        // price AND the zcode time factors (peak 1.0× / off-peak 0.5×); only
+        // the 夜间畅用 window differs — 0.25× instead of zcode's 0.
+        // GLM-5.3-Flash: 1M in + 2M cached + 1M out → 1142 credits.
+        let mut flash = make_record("glm-acp", "bigmodel", "GLM-5.3-Flash", 2_000_000, 0.0);
+        flash.input_tokens = 1_000_000;
+        flash.output_tokens = 1_000_000;
+        flash.cache_read_tokens = 2_000_000;
+        let credits = (1_000_000.0 * 2.3 + 2_000_000.0 * 0.56 + 1_000_000.0 * 8.0) / 10_000.0;
+        let per_credit = 0.0014464615384615384;
+
+        // Night-promo window (2026-09-20 23:30 CST): zcode deducts 0, the ACP
+        // channel still deducts 0.25×.
+        let mut glm_night = flash.clone();
+        glm_night.time = "2026-09-20T15:30:00Z".to_string();
+        let glm_night_cost = display_cost(&glm_night);
+        let expected_night = credits * 0.25 * per_credit;
+        assert!(
+            (glm_night_cost - expected_night).abs() < 1e-9,
+            "glm-acp night should deduct 0.25× credits: expected {expected_night}, got {glm_night_cost}"
+        );
+        let mut zcode_night = flash.clone();
+        zcode_night.source = "zcode".into();
+        zcode_night.time = "2026-09-20T15:30:00Z".to_string();
+        assert!(
+            (display_cost(&zcode_night) - 0.0).abs() < 1e-9,
+            "zcode bigmodel night promo should bill 0 credits"
+        );
+
+        // Off-peak (Monday 10:00 CST): both channels bill the same 0.5×.
+        let mut glm_offpeak = flash.clone();
+        glm_offpeak.time = "2026-09-21T02:00:00Z".to_string();
+        let expected_offpeak = credits * 0.5 * per_credit;
+        let glm_offpeak_cost = display_cost(&glm_offpeak);
+        assert!(
+            (glm_offpeak_cost - expected_offpeak).abs() < 1e-9,
+            "glm-acp off-peak should bill 0.5× credits: expected {expected_offpeak}, got {glm_offpeak_cost}"
+        );
+        let mut zcode_offpeak = flash.clone();
+        zcode_offpeak.source = "zcode".into();
+        zcode_offpeak.time = "2026-09-21T02:00:00Z".to_string();
+        assert!((display_cost(&zcode_offpeak) - expected_offpeak).abs() < 1e-9);
+
+        // Peak (Monday 15:00 CST): 1.0× on both channels.
+        let mut glm_peak = flash.clone();
+        glm_peak.time = "2026-09-21T07:00:00Z".to_string();
+        let expected_peak = credits * per_credit;
+        assert!((display_cost(&glm_peak) - expected_peak).abs() < 1e-9);
+        let mut zcode_peak = flash.clone();
+        zcode_peak.source = "zcode".into();
+        zcode_peak.time = "2026-09-21T07:00:00Z".to_string();
+        assert!((display_cost(&zcode_peak) - expected_peak).abs() < 1e-9);
+
+        // GLM-5.3 is not on the night whitelist: its night instant bills at
+        // the plain off-peak 0.5× on both channels.
+        let mut full_model = make_record("glm-acp", "bigmodel", "GLM-5.3", 2_000_000, 0.0);
+        full_model.input_tokens = 1_000_000;
+        full_model.output_tokens = 1_000_000;
+        full_model.time = "2026-09-20T15:30:00Z".to_string();
+        let full_model_credits = (1_000_000.0 * 6.9 + 1_000_000.0 * 24.0) / 10_000.0;
+        let expected_full_model = full_model_credits * 0.5 * per_credit;
+        assert!(
+            (display_cost(&full_model) - expected_full_model).abs() < 1e-9,
+            "glm-acp glm-5.3 night (not whitelisted) should bill 0.5×: expected {expected_full_model}"
+        );
+
+        // Lowercase wire names (pre-normalization log rows) deduct identically —
+        // the credit-rate lookup is case-insensitive.
+        let mut wire = flash.clone();
+        wire.model = "glm-5.3-flash".into();
+        wire.time = "2026-09-20T15:30:00Z".to_string();
+        assert!((display_cost(&wire) - expected_night).abs() < 1e-9);
 
         restore_pricing_env(prev_env);
     }

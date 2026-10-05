@@ -211,6 +211,16 @@
   已废弃。实测验证：积分公式逐请求回算 3768.7 vs 配额
   API 的 3774（-0.14%），滚动 5h 窗口与分钟级增量同样吻合。公式要求
   `input_tokens` 为**非缓存输入**（zcode 解析器已减）。
+- **Paseo glm-acp**（source=`glm-acp`、provider=`bigmodel`）：与 zcode **同一套官方
+  积分公式、积分分摊单价（`zcode_credit_rates` / `zcode_cny_per_credit`）与同一套
+  时间因子**——高峰 1.0×、非高峰 0.5×（实测 ACP 通道同样享受）。唯一差别：夜间畅用
+  窗口内**不归零**，按 `GLM_ACP_NIGHT_CREDIT_FACTOR = 0.25×` 扣（= 非高峰 0.5 的再
+  减半；zcode 通道专属的是"归零"）。窗口的日期边界、每日时段与模型白名单
+  （仅 GLM-5.3-Flash；GLM-5.3 夜间照常按高峰/波谷因子）与 zcode 完全共用，见
+  `compute_glm_acp_credit_cost`。`glm_acp_shares_zcode_time_factors_but_nights_are_not_free`
+  测试钉死：同一时刻 flash 夜间 zcode=0 / glm-acp=0.25×，非高峰两边同为 0.5×，
+  高峰两边同为 1.0×。积分单价未配置时兜底落到 `[[model]]` 的 GLM 列表价条目。
+  模型名在 glm-acp 源解析时归一为官方大小写（`GLM-5.3-Flash`），与 zcode 行同组显示。
 - **成本展示规则**（`display_cost()`）：`original_provider` 决定公式分支；无任何可用价格
   的非 pi 来源显示 "N/A"；pi 记录沿用其存储 cost（DeepSeek 为 CNY 原样，
   其余 USD 折算）。

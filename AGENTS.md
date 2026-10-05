@@ -70,7 +70,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | CPA `workbuddy` 插件写入（DimAgent → 腾讯 CodeBuddy Web API）；`provider=codebuddy` |
 | 18 | `ollama-proxy` | `~/.token-stats/ollama-usage.jsonl` | CPA `ollama-usage` 插件写入（`ollama/` 前缀上游），含 TTFT/TPS |
 | 19 | `stepfun-proxy` | `~/.token-stats/stepfun-usage.jsonl` | CPA `stepfun-usage` 插件写入（`step/` 前缀上游），含 TTFT/TPS |
-| 20 | `glm-acp` | `~/.token-stats/glm-acp-usage.jsonl` | 内置 GLM 回环代理写入——Paseo 的 `glm-acp-agent`（npm）直连 `api.z.ai/api/coding/paas/v4` 且自身不落任何 usage，经 `ACP_GLM_BASE_URL` 指到代理被动抄录；`provider=bigmodel`（成本走 GLM 列表价，非 zcode 积分公式），含 TTFT |
+| 20 | `glm-acp` | `~/.token-stats/glm-acp-usage.jsonl` | 内置 GLM 回环代理写入——Paseo 的 `glm-acp-agent`（npm）直连 `api.z.ai/api/coding/paas/v4` 且自身不落任何 usage，经 `ACP_GLM_BASE_URL` 指到代理被动抄录；`provider=bigmodel`（与 zcode 同一积分公式与时间因子，夜间畅用窗口不归零而按 0.25× 扣，见 `compute_glm_acp_credit_cost`），模型名解析时归一为官方大小写，含 TTFT |
 
 路径大多有 `*_PATH` / `*_LOG_PATH` 环境变量覆盖，逐条见
 [`docs/agents/environment-variables.md`](docs/agents/environment-variables.md)。

@@ -27,7 +27,7 @@
 | 17 | `dim-agent` | `~/.token-stats/workbuddy-usage.jsonl` | JSONL，由 workbuddy CLIProxyAPI 插件（`~/workbuddy-proxy`，systemd 服务 `token-stats-workbuddy.service`）写入——DimAgent 经 Tencent CodeBuddy Web API 的请求；`provider=codebuddy`（成本走 `codebuddy_cny_per_credit` 积分换算，与原生 codebuddy 源同一计费公式），`WORKBUDDY_USAGE_LOG_PATH` 可覆盖 |
 | 18 | `ollama-proxy` | `~/.token-stats/ollama-usage.jsonl` | JSONL，由 `ollama-usage` CLIProxyAPI 插件（`~/workbuddy-proxy/ollama-usage-plugin`，与 workbuddy 同实例）写入——DimAgent 经 CPA `ollama-cloud` 上游（`ollama/` 前缀）的**逐请求**用量，含 TTFT/TPS；`provider=ollama-cloud`（vendor merge 并入 `ollama`，成本走经验费率），`OLLAMA_PROXY_USAGE_LOG_PATH` 可覆盖 |
 | 19 | `stepfun-proxy` | `~/.token-stats/stepfun-usage.jsonl` | JSONL，由 `stepfun-usage` CLIProxyAPI 插件（`~/workbuddy-proxy/stepfun-usage-plugin`，与 workbuddy / ollama 同一个 CPA 实例 :8317）写入——DimAgent 经 CPA `stepfun` 上游（`step/` 前缀，模型 `step-5-preview`）的**逐请求**用量，含 TTFT/TPS；`provider=stepfun`，成本走 StepFun 列表价 ÷ `stepfun_plan_divisor`（见 [`pricing.md`](pricing.md)），`STEPFUN_PROXY_USAGE_LOG_PATH` 可覆盖 |
-| 20 | `glm-acp` | `~/.token-stats/glm-acp-usage.jsonl` | JSONL，由内置 loopback GLM 代理写入（`GLM_ACP_USAGE_LOG_PATH` 可覆盖）——Paseo 的 `glm-acp-agent` 经 `ACP_GLM_BASE_URL` 指入代理（详见「GLM 代理」小节）；`provider=bigmodel`，成本走 GLM 列表价，含 TTFT |
+| 20 | `glm-acp` | `~/.token-stats/glm-acp-usage.jsonl` | JSONL，由内置 loopback GLM 代理写入（`GLM_ACP_USAGE_LOG_PATH` 可覆盖）——Paseo 的 `glm-acp-agent` 经 `ACP_GLM_BASE_URL` 指入代理（详见「GLM 代理」小节）；`provider=bigmodel`，与 zcode 同一积分公式但永远 100% 扣积分（无 zcode 专属优惠），模型名解析时归一为官方大小写（`GLM-5.3-Flash`），含 TTFT |
 
 ## 代理与插件说明
 
@@ -83,11 +83,20 @@ Paseo 侧 provider env 里把 base URL 指到代理即可，**npm 包零改动**
 `reasoning_tokens` 是 completion 子集不另计。
 
 **provider 标签与成本口径**：记录 `provider=bigmodel`（GLM 编码套餐厂商，与 zcode 的
-GLM 流量在 vendor 图同组），但成本**不走** zcode 积分公式（该分支按
-`source == "zcode"` 门控），而是落 GLM 列表价——即「零售价值」口径。这把 key 若与
-bigmodel.cn 编码套餐同账户可再改走积分分支；若是 z.ai 国际版的窗口配额套餐（5h/weekly
-prompt window、超量限流不扣费），更接近 `bigmodel-start` 的「套餐内边际成本 0」口径，
-待确认后调整。
+GLM 流量在 vendor 图同组），成本与 zcode **同一套官方积分公式、积分分摊单价与时间
+因子**（高峰 1.0× / 非高峰 0.5×，实测 ACP 通道同样享受）；唯一差别是夜间畅用窗口内
+**不归零**，按 0.25× 扣（zcode 通道专属的是"归零"；白名单/日期边界与 zcode 共用）。
+见 `compute_glm_acp_credit_cost` 与 docs/agents/pricing.md。这把 key 若与
+bigmodel.cn 编码套餐同账户可再对齐积分口径；若是 z.ai 国际版的窗口配额套餐
+（5h/weekly prompt window、超量限流不扣费），更接近 `bigmodel-start` 的「套餐内
+边际成本 0」口径，待确认后调整。
+
+**模型名归一化**：代理按线上原样抄录模型名（`glm-5.3-flash`），`GlmAcpSource::load`
+解析时把它改写成 BigModel 官方大小写（`glm-前缀→GLM`、`flash` 后缀→`Flash`，如
+`GLM-5.3-Flash`），与 zcode 源的模型名同组显示；非 GLM 名原样透传。改大小写会换
+fingerprint，因此 `TokenStore::purge_glm_acp_wire_casing` 在启动时一次性删除
+`source='glm-acp'` 下小写 `glm-*` 旧行（GLOB 区分大小写；日志是 append-only 且含全部
+历史，删后由全量重解析原样重建；日志文件不存在时不动）。
 
 **接入步骤**（新机器）：安装 `nginx/token-stats-glm-proxy.service` 并启用；Paseo
 `~/.paseo/config.json` 的 `glm-acp-agent` provider 加

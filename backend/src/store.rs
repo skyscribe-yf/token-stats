@@ -845,6 +845,49 @@ impl TokenStore {
         deleted
     }
 
+    /// One-time migration helper for the glm-acp model-name casing.
+    ///
+    /// The loopback GLM proxy records the wire model name Paseo sends
+    /// (`glm-5.3-flash`), but the source now normalizes it to BigModel's
+    /// official casing (`GLM-5.3-Flash`) so glm-acp rows group with the ZCode
+    /// source's models. Rows persisted under the lowercase wire name would
+    /// double-count once re-parsed under the new fingerprints; the append-only
+    /// proxy log reproduces every one of them, so drop the affected rows and
+    /// let the startup re-parse re-ingest them. Guarded on the log existing
+    /// (history would not be reproducible otherwise). Idempotent.
+    pub fn purge_glm_acp_wire_casing(&self) -> usize {
+        if !crate::sources::glm_acp_usage_log_path().exists() {
+            return 0;
+        }
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Token store lock poisoned: {}", e);
+                return 0;
+            }
+        };
+        let deleted = conn
+            .execute(
+                // GLOB (not LIKE): SQLite's LIKE is case-insensitive, which
+                // would also match the official `GLM-…` casing this migrates
+                // towards.
+                "DELETE FROM token_records
+                 WHERE source = 'glm-acp' AND model GLOB 'glm-*'",
+                [],
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to purge glm-acp wire-casing rows: {e}");
+                0
+            });
+        if deleted > 0 {
+            tracing::info!(
+                "Migrated glm-acp collection: removed {deleted} row(s) under the \
+                 lowercase wire model name; re-ingesting with official casing"
+            );
+        }
+        deleted
+    }
+
     /// One-time migration helper for the Ollama Cloud channel switch.
     ///
     /// Dim's local `usage_run_stats` used to expose that channel as one row per
@@ -1486,6 +1529,63 @@ mod tests {
         );
         // Idempotent: second call removes nothing.
         assert_eq!(store.purge_zcode_commandcode(), 0);
+    }
+
+    #[test]
+    fn purge_glm_acp_wire_casing_removes_lowercase_rows_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let insert = |model: &str, time: &str| {
+            conn.execute(
+                INSERT_SQL,
+                params![
+                    time,
+                    "2026-10-04",
+                    "N/A",
+                    "bigmodel",
+                    None::<String>,
+                    model,
+                    "glm-acp",
+                    360i64,
+                    120i64,
+                    640i64,
+                    0i64,
+                    1120i64,
+                    0.0f64,
+                    None::<f64>,
+                    None::<f64>,
+                ],
+            )
+            .unwrap();
+        };
+        insert("glm-5.3-flash", "2026-10-04T05:20:43.288Z");
+        insert("GLM-5.3-Flash", "2026-10-04T05:21:00.000Z");
+        drop(conn);
+
+        // Guard: without a reproducible usage log nothing is touched.
+        let missing_log = dir.path().join("absent-glm-acp-usage.jsonl");
+        temp_env::with_var("GLM_ACP_USAGE_LOG_PATH", Some(&missing_log), || {
+            let store = TokenStore::open(&path);
+            assert_eq!(store.purge_glm_acp_wire_casing(), 0);
+            assert_eq!(store.count(), 2);
+        });
+
+        // With the log present (empty file is enough for the guard), only the
+        // lowercase wire-casing rows go; the official-casing row stays.
+        let log_path = dir.path().join("glm-acp-usage.jsonl");
+        std::fs::write(&log_path, "").unwrap();
+        temp_env::with_var("GLM_ACP_USAGE_LOG_PATH", Some(&log_path), || {
+            let store = TokenStore::open(&path);
+            assert_eq!(store.count(), 2);
+            assert_eq!(store.purge_glm_acp_wire_casing(), 1);
+            let loaded = store.load_all();
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].model, "GLM-5.3-Flash");
+            // Idempotent: second call removes nothing.
+            assert_eq!(store.purge_glm_acp_wire_casing(), 0);
+        });
     }
 
     #[test]

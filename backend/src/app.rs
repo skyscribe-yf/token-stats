@@ -150,6 +150,15 @@ impl AppState {
         // pruned since). Must run before `load_all()` — see the helper.
         store.migrate_opencode_reasoning_output(crate::sources::opencode_readable_row_count());
 
+        // ── glm-acp model-casing migration ──────────────────────────────
+        // The GLM proxy records the wire model name Paseo sends
+        // (`glm-5.3-flash`); the source now normalizes it to BigModel's
+        // official casing (`GLM-5.3-Flash`) so the rows group with ZCode's.
+        // Persisted lowercase rows would double-count once re-parsed under
+        // the new fingerprints; the append-only proxy log reproduces them.
+        // Must run before `load_all()` — see the helper's doc comment.
+        store.purge_glm_acp_wire_casing();
+
         // Restore history from the durable store, then ingest whatever the
         // session logs contain that isn't persisted yet.
         let mut db_records = store.load_all();
