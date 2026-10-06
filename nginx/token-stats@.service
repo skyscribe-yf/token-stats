@@ -12,6 +12,11 @@ Environment="PORT=%i"
 # the bundled SQLite and other C code, which otherwise spreads one arena per
 # thread (8 x nproc) and never returns the high-water mark.
 Environment="MALLOC_ARENA_MAX=2"
+# api.commandcode.ai 与 opencode.ai 直连被 DNS 污染（直连 HTTP 000 / 证书过期），
+# 必须走本机 7800 出口，否则 CommandCode 与 OpenCode 配额卡全部网络报错。
+# reqwest 默认读小写 https_proxy/no_proxy（hyper-util env matcher，auto_sys_proxy=true）。
+Environment="https_proxy=http://127.0.0.1:7800"
+Environment="no_proxy=localhost,127.0.0.1,::1"
 ExecStart=/home/skyscribe/srcs/token-stats/backend/target/release/token-stats-backend
 # earlyoom 会 SIGTERM 杀掉本服务（--prefer 列表里有 token-stats-bac），
 # 后端优雅退出返回 0，on-failure 不会重启，因此必须 always。

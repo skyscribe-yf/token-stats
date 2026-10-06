@@ -10,6 +10,7 @@
 | `PORT` | `3000` | 后端端口 |
 | `RUST_LOG` | - | 日志级别（`info`、`debug`、`trace`） |
 | `MALLOC_ARENA_MAX` | 单元里固定为 `2` | **不是本程序读取的变量**，glibc malloc 自己读的。Rust 分配已由 `#[global_allocator]` 交给 mimalloc，这条管的是仍走 libc 的部分（bundled SQLite 等）：默认按线程开到 8×nproc 个 arena 且只借不还，实测吃出 655 MB。删掉它会让常驻内存明显回涨，见 [`pitfalls.md`](pitfalls.md) 第 24 条 |
+| `https_proxy` | 单元里设为 `http://127.0.0.1:7800`（配 `no_proxy=localhost,127.0.0.1,::1`） | **不是本程序读取的变量**，reqwest 自己读的（hyper-util env matcher）。`api.commandcode.ai` / `opencode.ai` 直连被 DNS 污染（HTTP 000 / 证书过期），配额抓取必须走本机 7800 出口；其他配额主机直连即可，设此变量后也一并经代理。删掉会让 CommandCode / OpenCode 配额卡整卡报「所有 API 请求失败」 |
 | `REFRESH_INTERVAL_SECS` | `30` | 数据刷新间隔 |
 | `TOKEN_STATS_DB_PATH` | `~/.config/token-stats/token-stats.db` | 专用 SQLite 持久化库 |
 | `PRICING_CONFIG` | 二进制旁 `pricing.toml` | 定价配置路径 |
