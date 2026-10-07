@@ -484,7 +484,9 @@ async fn fetch_page(client: &Client, cookie: &str, path: &str) -> Result<String,
 /// upstream uses, so the plan/limits reported belong to the account that
 /// actually serves the metered traffic.
 pub fn get_api_key() -> Option<String> {
-    std::env::var("OLLAMA_API_KEY").ok().filter(|k| !k.is_empty())
+    std::env::var("OLLAMA_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
 }
 
 #[derive(serde::Deserialize)]
@@ -592,7 +594,10 @@ async fn fetch_api_json(
         return Err(format!("{path} HTTP {}", response.status()));
     }
 
-    response.text().await.map_err(|e| format!("Read error: {e}"))
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Read error: {e}"))
 }
 
 /// Build the card payload from `/api/me` + `/api/usage` responses.
@@ -793,10 +798,10 @@ static WINDOW_STATE_LOCK: LazyLock<std::sync::Mutex<()>> =
 /// `OLLAMA_WINDOW_STATE_PATH` overrides; defaults next to the other
 /// token-stats state files.
 fn window_state_path() -> PathBuf {
-    if let Ok(p) = std::env::var("OLLAMA_WINDOW_STATE_PATH") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var("OLLAMA_WINDOW_STATE_PATH")
+        && !p.trim().is_empty()
+    {
+        return PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".config/token-stats/ollama-window.json")
@@ -951,18 +956,18 @@ fn update_window_state(
             // With a fresh previous sample the reset happened within the last
             // poll interval, which pins the new phase. A stale sample (backend
             // was down) cannot date it, so the known phase is kept.
-            if let Some(prev_at) = prev_observed {
-                if now - prev_at <= Duration::seconds(RESET_FRESH_SECS) {
-                    // Keep the established phase when one of its grid points
-                    // falls inside the poll gap (it *is* the reset); otherwise
-                    // the phase moved and the observation re-anchors it.
-                    let grid_point =
-                        anchor.map(|a| grid_start(a, period, prev_at) + Duration::seconds(period));
-                    anchor = Some(match grid_point {
-                        Some(point) if point <= now => point,
-                        _ => now,
-                    });
-                }
+            if let Some(prev_at) = prev_observed
+                && now - prev_at <= Duration::seconds(RESET_FRESH_SECS)
+            {
+                // Keep the established phase when one of its grid points
+                // falls inside the poll gap (it *is* the reset); otherwise
+                // the phase moved and the observation re-anchors it.
+                let grid_point =
+                    anchor.map(|a| grid_start(a, period, prev_at) + Duration::seconds(period));
+                anchor = Some(match grid_point {
+                    Some(point) if point <= now => point,
+                    _ => now,
+                });
             }
         }
 
@@ -1022,7 +1027,9 @@ fn weekly_actuals(
         cost_cny: 0.0,
     };
     for record in records {
-        let Some(t) = record_time(record) else { continue };
+        let Some(t) = record_time(record) else {
+            continue;
+        };
         if t < start || t > now {
             continue;
         }
@@ -1088,6 +1095,7 @@ fn capitalize(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
 
     #[test]
     fn test_get_auth_cookie() {
@@ -1221,12 +1229,15 @@ mod tests {
     #[test]
     fn test_auth_redirect_error_detects_expired_cookie() {
         // What an expired `__Secure-session` actually lands on.
-        let signin_host =
-            Url::parse("https://signin.ollama.com/?client_id=client_01JX&authorization_session_id=01M38")
-                .unwrap();
-        assert!(auth_redirect_error(&signin_host)
-            .unwrap()
-            .contains("Session cookie expired"));
+        let signin_host = Url::parse(
+            "https://signin.ollama.com/?client_id=client_01JX&authorization_session_id=01M38",
+        )
+        .unwrap();
+        assert!(
+            auth_redirect_error(&signin_host)
+                .unwrap()
+                .contains("Session cookie expired")
+        );
 
         let signin_path = Url::parse("https://ollama.com/signin").unwrap();
         assert!(auth_redirect_error(&signin_path).is_some());
@@ -1451,6 +1462,7 @@ mod tests {
     fn record_at(time: &str, tokens: i64) -> TokenRecord {
         TokenRecord {
             date: time[..10].into(),
+            parsed_time: OnceLock::new(),
             time: time.to_string(),
             api_key_prefix: "N/A".into(),
             provider: "ollama-cloud".into(),
@@ -1844,8 +1856,7 @@ mod tests {
                     is_resume: false,
                 }),
             };
-            let resolved =
-                update_window_state(&[], &samples, ts("2026-09-25T06:35:00Z"), &web);
+            let resolved = update_window_state(&[], &samples, ts("2026-09-25T06:35:00Z"), &web);
             assert_eq!(resolved.weekly_reset, Some(ts("2026-09-28T00:00:00Z")));
             assert_eq!(resolved.weekly_start, Some(ts("2026-09-21T00:00:00Z")));
             assert_eq!(resolved.session_reset, Some(ts("2026-09-28T00:00:00Z")));

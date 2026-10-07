@@ -789,7 +789,7 @@ impl ModelPrice {
         record_time: &str,
     ) -> f64 {
         let rt = DateTime::parse_from_rfc3339(record_time).ok();
-        let seg = self.select_segment(rt.clone());
+        let seg = self.select_segment(rt);
         let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
         let tier = seg.select_tier(total_input);
         let (input, output, cache_read, cache_write) = if seg.is_peak_hour(rt.as_ref()) {
@@ -834,7 +834,7 @@ impl ModelPrice {
         force_off_peak: bool,
     ) -> f64 {
         let rt = DateTime::parse_from_rfc3339(record_time).ok();
-        let seg = self.select_segment(rt.clone());
+        let seg = self.select_segment(rt);
         let total_input = input_tokens + cache_read_tokens + cache_write_tokens;
         let tier = seg.select_tier(total_input);
         // `force_off_peak` suppresses the busy-hour multiplier wholesale (DimAgent
@@ -1122,12 +1122,12 @@ pub fn config_path() -> std::path::PathBuf {
     }
 
     // Try next to the running binary
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("pricing.toml");
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("pricing.toml");
+        if candidate.exists() {
+            return candidate;
         }
     }
 
@@ -1639,14 +1639,13 @@ fn compute_zai_cost(state: &PricingState, record: &TokenRecord) -> Option<f64> {
             model: bare.as_str().into(),
             ..record.clone()
         };
-        resolve_model_price(state, &normalized)?
-            .compute_usd(
-                record.input_tokens,
-                record.output_tokens,
-                record.cache_read_tokens,
-                record.cache_write_tokens,
-                &record.time,
-            )
+        resolve_model_price(state, &normalized)?.compute_usd(
+            record.input_tokens,
+            record.output_tokens,
+            record.cache_read_tokens,
+            record.cache_write_tokens,
+            &record.time,
+        )
     };
 
     Some(usd * special.zai_rate_cny_per_usd)
@@ -1754,10 +1753,10 @@ fn get_ainaba_divisor(special: &SpecialPricing, record_time: &str) -> f64 {
         if let Ok(record_dt) = chrono::DateTime::parse_from_rfc3339(record_time) {
             for segment in &special.ainaba_segments {
                 if let Some(ref before) = segment.before {
-                    if let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(before) {
-                        if record_dt < cutoff {
-                            return segment.divisor;
-                        }
+                    if let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(before)
+                        && record_dt < cutoff
+                    {
+                        return segment.divisor;
                     }
                 } else {
                     // Catch-all segment (no `before` field)
@@ -1876,11 +1875,7 @@ fn compute_plan_credit_cost(
             .iter()
             .any(|m| *m == model_key);
         let date = cst.format("%Y-%m-%d").to_string();
-        if promo_live
-            && model_eligible
-            && date.as_str() >= from
-            && date.as_str() <= until
-        {
+        if promo_live && model_eligible && date.as_str() >= from && date.as_str() <= until {
             let in_free = special.zcode_night_free_hours_cst.iter().any(|[s, e]| {
                 if s <= e {
                     *s <= hour && hour < *e
@@ -1973,10 +1968,10 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //    Example: 199元/90000次 × 0.8 = 0.001769元/次 (off-peak)
     if record.provider == "xunfei" || record.provider == "xunfei-ex" {
         let base = cfg.special.xunfei_per_call;
-        if let Some(ref off_peak) = cfg.special.xunfei_off_peak {
-            if is_xunfei_off_peak(record, off_peak) {
-                return base * off_peak.coefficient; // 波谷折扣价
-            }
+        if let Some(ref off_peak) = cfg.special.xunfei_off_peak
+            && is_xunfei_off_peak(record, off_peak)
+        {
+            return base * off_peak.coefficient; // 波谷折扣价
         }
         return base; // 高峰原价
     }
@@ -1993,12 +1988,12 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
 
     // 2. Kimi provider with zero stored cost: model-aware API-equivalent CNY
     //    cost divided by the subscription multiplier. Cache writes are free.
-    if record.provider == "kimi" && record.cost == 0.0 {
-        if let Some(cost) =
-            compute_kimi_subscription_cost(&state, record, cfg.special.kimi_subscription_multiplier)
-        {
-            return cost;
-        }
+    if record.provider == "kimi"
+        && record.cost == 0.0
+        && let Some(cost) =
+            compute_kimi_subscription_cost(state, record, cfg.special.kimi_subscription_multiplier)
+    {
+        return cost;
     }
 
     // 2b. Xiaomi MiMo provider with zero stored cost: per-token estimate in CNY
@@ -2033,17 +2028,17 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //    CC model prices in pricing.toml are the listed API rate (USD / 1M).
     //    Apply commandcode_divisor (subscription discount: actual = list / divisor),
     //    then convert to CNY.
-    if record.provider == "commandcode" {
-        if let Some(mp) = resolve_commandcode_price(&state, &record.model) {
-            let usd = mp.compute_usd(
-                record.input_tokens,
-                record.output_tokens,
-                record.cache_read_tokens,
-                record.cache_write_tokens,
-                &record.time,
-            );
-            return usd * schedule.rate_for(&record.time) / cfg.special.commandcode_divisor;
-        }
+    if record.provider == "commandcode"
+        && let Some(mp) = resolve_commandcode_price(state, &record.model)
+    {
+        let usd = mp.compute_usd(
+            record.input_tokens,
+            record.output_tokens,
+            record.cache_read_tokens,
+            record.cache_write_tokens,
+            &record.time,
+        );
+        return usd * schedule.rate_for(&record.time) / cfg.special.commandcode_divisor;
     }
 
     // 4a. ZAI (api.zairouter.com): always recompute from token counts, because
@@ -2051,10 +2046,10 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //     official Anthropic list price scaled by a per-model multiplier and
     //     settles in USD credit bought 1:1 with RMB, so the result is already
     //     in CNY (zai_rate_cny_per_usd = 1.0).
-    if is_zai_billed(record) {
-        if let Some(cost) = compute_zai_cost(&state, record) {
-            return cost;
-        }
+    if is_zai_billed(record)
+        && let Some(cost) = compute_zai_cost(state, record)
+    {
+        return cost;
     }
 
     // 4a2. Crof provider: always compute from normalized tokens using
@@ -2063,17 +2058,17 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //
     //     Crof model prices in pricing.toml are the listed API rate (USD / 1M).
     //     Convert to CNY using market rate.
-    if record.provider == "crof" {
-        if let Some(mp) = resolve_crof_price(&state, &record.model) {
-            let usd = mp.compute_usd(
-                record.input_tokens,
-                record.output_tokens,
-                record.cache_read_tokens,
-                record.cache_write_tokens,
-                &record.time,
-            );
-            return usd * schedule.rate_for(&record.time);
-        }
+    if record.provider == "crof"
+        && let Some(mp) = resolve_crof_price(state, &record.model)
+    {
+        let usd = mp.compute_usd(
+            record.input_tokens,
+            record.output_tokens,
+            record.cache_read_tokens,
+            record.cache_write_tokens,
+            &record.time,
+        );
+        return usd * schedule.rate_for(&record.time);
     }
 
     // 4b. Ollama Cloud (subscription): empirical per-token estimate in CNY.
@@ -2094,32 +2089,32 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
     //      (`source=stepfun-proxy`) and DimAgent's direct StepPlan channels,
     //      whose stored cost is `missing_price` (0). `step-plan-intl` is a
     //      USD-priced endpoint and intentionally not included.
-    if is_stepfun_plan_billed(record) {
-        if let Some(mp) = resolve_model_price(&state, record) {
-            let cny = if mp.is_cny_priced() {
-                mp.compute_cny(
-                    record.input_tokens,
-                    record.output_tokens,
-                    record.cache_read_tokens,
-                    record.cache_write_tokens,
-                    &record.time,
-                    false,
-                )
-            } else {
-                mp.compute_usd(
-                    record.input_tokens,
-                    record.output_tokens,
-                    record.cache_read_tokens,
-                    record.cache_write_tokens,
-                    &record.time,
-                ) * schedule.rate_for(&record.time)
-            };
-            let divisor = cfg.special.stepfun_plan_divisor;
-            if divisor > 0.0 {
-                return cny / divisor;
-            }
-            return cny;
+    if is_stepfun_plan_billed(record)
+        && let Some(mp) = resolve_model_price(state, record)
+    {
+        let cny = if mp.is_cny_priced() {
+            mp.compute_cny(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+                false,
+            )
+        } else {
+            mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+            ) * schedule.rate_for(&record.time)
+        };
+        let divisor = cfg.special.stepfun_plan_divisor;
+        if divisor > 0.0 {
+            return cny / divisor;
         }
+        return cny;
     }
 
     // 5. Records with stored cost (Pi source, or others that recorded cost)
@@ -2137,19 +2132,19 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
 
         // Pi's stored Ainaba cost can lag the latest pricing table for long
         // contexts, so recompute from token counts when a known model exists.
-        if is_yairouter_billed(record) {
-            if let Some(mp) = resolve_model_price(&state, record) {
-                let usd = mp.compute_usd(
-                    record.input_tokens,
-                    record.output_tokens,
-                    record.cache_read_tokens,
-                    record.cache_write_tokens,
-                    &record.time,
-                );
-                // Ainaiba 按平台固定结算汇率折算（充值 396→8000 额度），不走市场分段汇率。
-                return usd * cfg.special.ainaba_platform_rate
-                    / get_ainaba_divisor(&cfg.special, &record.time);
-            }
+        if is_yairouter_billed(record)
+            && let Some(mp) = resolve_model_price(state, record)
+        {
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+            );
+            // Ainaiba 按平台固定结算汇率折算（充值 396→8000 额度），不走市场分段汇率。
+            return usd * cfg.special.ainaba_platform_rate
+                / get_ainaba_divisor(&cfg.special, &record.time);
         }
 
         // Fenno subscription: like Ainaba, recompute GPT models from token
@@ -2160,18 +2155,17 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         // fenno_divisor (10 CNY buys 150 USD face value).
         if (effective_provider == "fenno" || effective_provider == "fenno-ex")
             && is_gpt_family(&record.model)
+            && let Some(mp) = resolve_model_price(state, record)
         {
-            if let Some(mp) = resolve_model_price(&state, record) {
-                let usd = mp.compute_usd(
-                    record.input_tokens,
-                    record.output_tokens,
-                    record.cache_read_tokens,
-                    record.cache_write_tokens,
-                    &record.time,
-                );
-                return usd * schedule.rate_for(&record.time)
-                    / schedule.fenno_divisor_for(&record.time);
-            }
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+            );
+            return usd * schedule.rate_for(&record.time)
+                / schedule.fenno_divisor_for(&record.time);
         }
 
         // 4a2. Xiaomi MiMo Pi provider: cost is in CNY (from platform), display as-is
@@ -2190,14 +2184,14 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         //     The stored cost is an API list price, not the actual subscription
         //     cost. Recompute from token counts and apply the multiplier.
         //     (original_provider preserved by vendor merge from "kimi-coding" → "kimi")
-        if effective_provider == "kimi-coding" {
-            if let Some(cost) = compute_kimi_subscription_cost(
-                &state,
+        if effective_provider == "kimi-coding"
+            && let Some(cost) = compute_kimi_subscription_cost(
+                state,
                 record,
                 cfg.special.kimi_subscription_multiplier,
-            ) {
-                return cost;
-            }
+            )
+        {
+            return cost;
         }
 
         // 4b3. Dim Grok Build channel: routed to xAI's official API and billed
@@ -2208,18 +2202,16 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         //     "xai-official") and pre-migration rows (provider = "grok-build").
         if record.source == "dim"
             && (record.provider == "xai-official" || effective_provider == "grok-build")
+            && let Some(mp) = resolve_model_price(state, record)
         {
-            if let Some(mp) = resolve_model_price(&state, record) {
-                let usd = mp.compute_usd(
-                    record.input_tokens,
-                    record.output_tokens,
-                    record.cache_read_tokens,
-                    record.cache_write_tokens,
-                    &record.time,
-                );
-                return usd * schedule.rate_for(&record.time)
-                    / schedule.grok_divisor_for(&record.time);
-            }
+            let usd = mp.compute_usd(
+                record.input_tokens,
+                record.output_tokens,
+                record.cache_read_tokens,
+                record.cache_write_tokens,
+                &record.time,
+            );
+            return usd * schedule.rate_for(&record.time) / schedule.grok_divisor_for(&record.time);
         }
 
         // 4c. Other Pi providers: cost is in USD, convert to CNY.
@@ -2261,27 +2253,28 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         .original_provider
         .as_deref()
         .unwrap_or(&record.provider);
-    if effective_provider == "deepseek" && record.cost == 0.0 {
-        if let Some(mp) = resolve_model_price(&state, record) {
-            if mp.is_cny_priced() {
-                return mp.compute_cny(
-                    record.input_tokens,
-                    record.output_tokens,
-                    record.cache_read_tokens,
-                    record.cache_write_tokens,
-                    &record.time,
-                    false,
-                );
-            }
-            let usd = mp.compute_usd(
+    if effective_provider == "deepseek"
+        && record.cost == 0.0
+        && let Some(mp) = resolve_model_price(state, record)
+    {
+        if mp.is_cny_priced() {
+            return mp.compute_cny(
                 record.input_tokens,
                 record.output_tokens,
                 record.cache_read_tokens,
                 record.cache_write_tokens,
                 &record.time,
+                false,
             );
-            return usd * schedule.rate_for(&record.time);
         }
+        let usd = mp.compute_usd(
+            record.input_tokens,
+            record.output_tokens,
+            record.cache_read_tokens,
+            record.cache_write_tokens,
+            &record.time,
+        );
+        return usd * schedule.rate_for(&record.time);
     }
 
     // 6. Derived sources without original cost: codex, claude-code, kimi-code,
@@ -2313,10 +2306,10 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
         // instead of zeroing out (see `compute_glm_acp_credit_cost`); with the
         // credit price disabled both fall through to the model list price
         // below.
-        if record.source == "zcode" {
-            if let Some(cost) = compute_zcode_credit_cost(&cfg.special, record) {
-                return cost;
-            }
+        if record.source == "zcode"
+            && let Some(cost) = compute_zcode_credit_cost(&cfg.special, record)
+        {
+            return cost;
         }
         if record.source == "glm-acp"
             && let Some(cost) = compute_glm_acp_credit_cost(&cfg.special, record)
@@ -2339,7 +2332,7 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
             && DateTime::parse_from_rfc3339(&record.time)
                 .ok()
                 .is_some_and(|rt| in_offpeak_window(&cfg.special.dim_offpeak_windows, Some(&rt)));
-        if let Some(mp) = dim_price.or_else(|| resolve_model_price(&state, record)) {
+        if let Some(mp) = dim_price.or_else(|| resolve_model_price(state, record)) {
             let base_rate = if is_yairouter_billed(record) {
                 cfg.special.ainaba_platform_rate
             } else {
@@ -2391,11 +2384,8 @@ pub(crate) fn display_cost_in(state: &PricingState, record: &TokenRecord) -> f64
             // time-segmented in `dim_entitlement`, so history keeps whatever
             // was in force when the record happened.
             if record.source == "dim" && dim_list_priced {
-                cny *= crate::dim_entitlement::rate_for(
-                    &state.dim_rates,
-                    &record.model,
-                    &record.time,
-                );
+                cny *=
+                    crate::dim_entitlement::rate_for(&state.dim_rates, &record.model, &record.time);
             }
             return cny;
         }
@@ -2459,6 +2449,7 @@ mod tests {
     ) -> TokenRecord {
         TokenRecord {
             date: "2026-05-22".into(),
+            parsed_time: OnceLock::new(),
             time: "2026-05-22T00:00:00Z".to_string(),
             api_key_prefix: "test".into(),
             provider: provider.into(),
@@ -2501,7 +2492,7 @@ cache_write_cny = 0.0
 
     fn stepfun_record(source: &str, provider: &str) -> TokenRecord {
         let mut record = make_record(source, provider, "step-5-preview", 0, 0.0);
-        record.original_provider = Some(provider.to_string());
+        record.original_provider = Some(provider.into());
         record.input_tokens = 1_000;
         record.output_tokens = 500;
         record.cache_read_tokens = 2_000;
@@ -2511,8 +2502,7 @@ cache_write_cny = 0.0
 
     /// ¥99 for ¥1600 of list-price quota ⇒ actual = list × 99/1600.
     fn stepfun_expected_cny() -> f64 {
-        let list =
-            1_000.0 / 1e6 * 7.0 + 500.0 / 1e6 * 20.0 + 2_000.0 / 1e6 * 0.35;
+        let list = 1_000.0 / 1e6 * 7.0 + 500.0 / 1e6 * 20.0 + 2_000.0 / 1e6 * 0.35;
         list * 99.0 / 1600.0
     }
 
@@ -2701,11 +2691,8 @@ cache_write_cny = 0.0
 
         let cost = compute_zai_cost(&state, &record).expect("fable 5.1 must be priced");
         // 54×25 + 26922×100 + 1790155×0.63 + 155184×50, per 1M tokens.
-        let expected = (54.0 * 25.0
-            + 26922.0 * 100.0
-            + 1790155.0 * 0.63
-            + 155184.0 * 50.0)
-            / 1_000_000.0;
+        let expected =
+            (54.0 * 25.0 + 26922.0 * 100.0 + 1790155.0 * 0.63 + 155184.0 * 50.0) / 1_000_000.0;
         assert!(
             (cost - expected).abs() < 1e-9,
             "got {cost}, expected {expected}"
@@ -2755,12 +2742,12 @@ cache_write_cny = 0.0
 
         let cost = compute_zai_cost(&state, &record).unwrap();
         // opus-5 billed: 5/25/0.50/10.
-        let expected = (100_000.0 * 5.0
-            + 1_000.0 * 25.0
-            + 10_000.0 * 0.50
-            + 10_000.0 * 10.0)
-            / 1_000_000.0;
-        assert!((cost - expected).abs() < 1e-9, "got {cost}, expected {expected}");
+        let expected =
+            (100_000.0 * 5.0 + 1_000.0 * 25.0 + 10_000.0 * 0.50 + 10_000.0 * 10.0) / 1_000_000.0;
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "got {cost}, expected {expected}"
+        );
     }
 
     /// The provider prefix the platform's model mapper accepts must not break
@@ -2802,8 +2789,10 @@ cache_write_cny = 0.0
     #[test]
     fn codebuddy_credits_convert_to_cny_at_flat_rate() {
         let _guard = pricing_test_guard();
-        let mut config = PricingConfig::default();
-        config.usd_to_cny = 6.0;
+        let mut config = PricingConfig {
+            usd_to_cny: 6.0,
+            ..Default::default()
+        };
         config.usd_to_cny_segments = vec![
             UsdToCnySegment {
                 effective_from: None,
@@ -3550,7 +3539,13 @@ cache_write_cny = 0.0
 
         // Every OpenCode 2.x record has cost 0, so a free model must resolve to
         // a real ¥0 rather than the -1 "unknown cost" sentinel (N/A in the UI).
-        let free = make_record("opencode", "opencode-go", "space-bunny-free", 1_000_000, 0.0);
+        let free = make_record(
+            "opencode",
+            "opencode-go",
+            "space-bunny-free",
+            1_000_000,
+            0.0,
+        );
         assert_eq!(
             display_cost(&free),
             0.0,
@@ -3795,8 +3790,7 @@ cache_write_cny = 0.0
         // Console-API dim records carry no stored cost; the derived-source
         // branch prices them from pricing.toml dim_model table (DimAgent
         // 平台积分价换算 CNY — vision-exp 非高峰费率).
-        let mut record =
-            make_record("dim", "dim", "deepseek-v4-flash-vision-exp", 1_000_000, 0.0);
+        let mut record = make_record("dim", "dim", "deepseek-v4-flash-vision-exp", 1_000_000, 0.0);
         record.input_tokens = 15276;
         record.output_tokens = 1048;
         record.cache_read_tokens = 17664;
@@ -3926,10 +3920,9 @@ cache_write_cny = 0.0
             // What the public price card's literal field order would have
             // charged: 140 / 280 / 2.8 credits per 1M, i.e. CNY per 1M
             // 0.890909 / 1.781818 / 0.017818 (same ¥70/11000 conversion).
-            price_card_cny += (*input as f64 * 0.890909
-                + *output as f64 * 1.781_818
-                + *cache as f64 * 0.017_818)
-                / 1_000_000.0;
+            price_card_cny +=
+                (*input as f64 * 0.890909 + *output as f64 * 1.781_818 + *cache as f64 * 0.017_818)
+                    / 1_000_000.0;
         }
         let platform_cny = 291.847 * 70.0 / 11000.0;
         let ratio = dashboard_cny / platform_cny;
@@ -3966,10 +3959,8 @@ cache_write_cny = 0.0
             "2026-09-29 07:00 CST bucket: dashboard ¥{after_cny} vs platform ¥{after_platform_cny} (ratio {after_ratio})"
         );
         // The pre-switch rates would have billed the very same bucket at 30.3x.
-        let stale_cny = (105_415.0 * 0.890909
-            + 25_986.0 * 0.017_818
-            + 3_346_432.0 * 1.781_818)
-            / 1_000_000.0;
+        let stale_cny =
+            (105_415.0 * 0.890909 + 25_986.0 * 0.017_818 + 3_346_432.0 * 1.781_818) / 1_000_000.0;
         assert!(
             (stale_cny / after_platform_cny - 30.31).abs() < 0.05,
             "stale (pre-09-29) rates should land near 30.3x, got {}",
@@ -4092,8 +4083,8 @@ cache_write_cny = 0.0
         // Anchor: registering the price card's *reversed* field order (as
         // `mimo-v2.6-flash` required before 09-29) would bill this cache-heavy
         // bucket 7.35x too high.
-        let swapped_cny = (43_075.0 * 2.768_182 + 1_777.0 * 0.022_909 + 154_624.0 * 5.536_364)
-            / 1_000_000.0;
+        let swapped_cny =
+            (43_075.0 * 2.768_182 + 1_777.0 * 0.022_909 + 154_624.0 * 5.536_364) / 1_000_000.0;
         assert!(
             (swapped_cny / mimo_cny - 7.354).abs() < 0.005,
             "reversed field order should land near 7.35x, got {}",
@@ -4194,7 +4185,8 @@ cache_write_cny = 0.0
                 to: None,
             },
         ];
-        let at = |s: &str| in_offpeak_window(&windows, DateTime::parse_from_rfc3339(s).ok().as_ref());
+        let at =
+            |s: &str| in_offpeak_window(&windows, DateTime::parse_from_rfc3339(s).ok().as_ref());
 
         // Half-open [from, to): the switchover instant itself is already off-peak.
         assert!(at("2026-09-30T03:21:00+00:00"));
@@ -4358,7 +4350,7 @@ cache_write_cny = 0.0
         // They carry no stored cost, so display_cost must derive the official
         // DeepSeek CNY price from tokens (no USD→CNY conversion, no divisor).
         let mut record = make_record("dsh", "deepseek", "deepseek-v4-pro", 0, 0.0);
-        record.original_provider = Some("deepseek-official".to_string());
+        record.original_provider = Some("deepseek-official".into());
         record.input_tokens = 653;
         record.output_tokens = 17287;
         record.cache_read_tokens = 50432;
@@ -4604,7 +4596,7 @@ cache_write_cny = 0.0
         // use the model-aware subscription estimate, NOT the stored API cost.
         // This matches kimi-code behavior (same subscription model).
         let mut record = make_record("pi", "kimi", "kimi-for-coding", 1_000_000, 0.05);
-        record.original_provider = Some("kimi-coding".to_string());
+        record.original_provider = Some("kimi-coding".into());
         let cost = display_cost(&record);
         let expected = (500_000.0 * 6.5 + 500_000.0 * 27.0) / 1_000_000.0 / 20.0;
         assert!(
@@ -6101,6 +6093,9 @@ cache_write = 5.00
     // new entries with `effective_from = "2026-07-31T14:00:00+08:00"`.
 
     /// Build a record with explicit token counts and timestamp.
+    // ponytail: every field is explicit at the call sites on purpose; grouping
+    // them into a struct would make the pricing tests harder to read.
+    #[allow(clippy::too_many_arguments)]
     fn make_timed_record(
         source: &str,
         provider: &str,
@@ -6114,6 +6109,7 @@ cache_write = 5.00
     ) -> TokenRecord {
         TokenRecord {
             date: time[..10].into(),
+            parsed_time: OnceLock::new(),
             time: time.to_string(),
             api_key_prefix: "test".into(),
             provider: provider.into(),

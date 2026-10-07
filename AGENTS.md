@@ -13,7 +13,7 @@
 | [`docs/agents/pricing.md`](docs/agents/pricing.md) | `pricing.toml` 全部计费分支、分段汇率/折扣、实测费率与对账口径 | 改 `backend/src/pricing.rs`、`dim_entitlement.rs` 或编辑 `pricing.toml` |
 | [`docs/agents/quota-cards.md`](docs/agents/quota-cards.md) | 每张配额卡的端点、认证细节、DimAgent console API 逆向结论 | 改 `backend/src/quota/*.rs` 或某张卡显示异常/凭据失效 |
 | [`docs/agents/environment-variables.md`](docs/agents/environment-variables.md) | 全部环境变量（默认值 + 覆盖项 + 与插件共用的读取点） | 查某个变量的默认值、给 systemd 注入凭据 |
-| [`docs/agents/pitfalls.md`](docs/agents/pitfalls.md) | 编号陷阱 1–25（共 24 条，历史上跳过 20；本文件末尾按主题给出该读哪几条） | 见下方「按主题的陷阱编号」 |
+| [`docs/agents/pitfalls.md`](docs/agents/pitfalls.md) | 编号陷阱 1–26（共 25 条，历史上跳过 20；本文件末尾按主题给出该读哪几条） | 见下方「按主题的陷阱编号」 |
 | [`docs/ecs-deployment.md`](docs/ecs-deployment.md) | 经 ECS + SSH 反向隧道暴露公网 | 只在做公网暴露相关改动时 |
 
 ---
@@ -109,6 +109,14 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
    行保留为历史，之后的丢弃 + 一次性 store 迁移。cutoff 未知时**不截断**，避免丢历史。
 5. **源库一律只读。** ccswitch / opencode / zcode / dimcode 全部以 `SQLITE_OPEN_READ_ONLY`
    打开（陷阱 3）。
+6. **CPA 通道只能有一个计量点。** CPA 的 usage 插件已经逐请求计量，任何**客户端源**
+   再记一遍就是双计：`pi` / `zcode` / `codex` 里凡是 `provider='cpa'` 或 model 带
+   `wb/` / `ollama/` / `step/` 命名空间前缀的记录必须在解析期丢弃（`sources/mod.rs` 的
+   `meters_cpa_channel()`），不能用 UI 层过滤糊过去。这类记录有两大可见症状：**cost 恒为 0**
+   （前缀名匹配不到任何 `[[model]]`）、以及与插件记录**相隔几秒成对出现**（客户端记请求开始、
+   插件记请求完成）。已落库的历史行由 `TokenStore::purge_cpa_metered_client_rows()` 在每次
+   open 时幂等清除；**不要**把它放宽到插件源——插件自己才是权威计量点，且天生带前缀
+   （如 `cc-proxy` 的 `deepseek/deepseek-v4-flash`）。
 
 ### 配额卡索引（`GET /api/quota`）
 
@@ -156,7 +164,12 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | `src/sources/mod.rs` | `DataSource` trait、`load_all_sources()`/`load_changed_sources()`、跨源规范化（去重、模型名归一、vendor merge、Kimi 模型升级） |
 | `src/sources/*.rs` | 各数据源解析器（说明见 [`docs/agents/data-sources.md`](docs/agents/data-sources.md)） |
 | `src/aggregator.rs` | 过滤、聚合（overall/vendor/date/model/source）、RPM/TPS、排序、分页 |
-| `src/routes.rs` | Axum 处理器与查询参数类型 |
+| `src/routes.rs` | Axum 处理器与查询参数类型。聚合类 handler（`/api/stats`、`/api/rpm`、`/api/tps`、
+`/api/requests`、`/api/export`）必须经 `scan_records_blocking()` 走 `spawn_blocking`：
+全历史聚合是 ~1.8 s CPU 密集，直接跑在 async handler 里会阻塞整个 tokio worker。
+**该 helper 内部用 `blocking_read()`，离开 `spawn_blocking` 直接调它会 panic**
+（`Cannot block the current thread from within a runtime`）——测试里的对照实现也要
+各自包一层 `spawn_blocking`，不能内联在 `#[tokio::test]` 里。 |
 | `src/store.rs` | 专用 SQLite 持久化：schema、指纹去重插入、整库恢复、一次性迁移 |
 | `src/pricing.rs` | 实时成本计算：模型价格、USD→CNY、分段汇率、特殊规则 |
 | `src/dim_entitlement.rs` | Dim 账号 entitlement 折扣（rate/rate_windows）的读取、分段历史与按时刻折算 |
@@ -189,7 +202,7 @@ CodeBuddy、ZCode、DSH、Dim 等数据源，提供图表、表格与筛选的�
 | `GET /api/stats?from=&to=&source=&provider=&model=&tz_offset=&resolution=` | 完整聚合：overall + by_vendor + by_date + by_model + by_source；`resolution` 支持 `day`（默认）/`4h`/`1h` |
 | `GET /api/requests?from=&to=&provider=&model=&source=&page=&limit=&tz_offset=&show_zero_tokens=` | 分页原始请求，按时间倒序；默认排除零 token 记录（如 429），`show_zero_tokens=true` 包含 |
 | `GET /api/filters` | 可用 vendors / models / sources |
-| `GET /api/rpm?from=&to=&gap_threshold=` | 每分钟请求数分析（活跃窗口边界检测，阈值默认 5 分钟） |
+| `GET /api/rpm?from=&to=&gap_threshold=&max_points=` | 每分钟请求数分析（活跃窗口边界检测，阈值默认 5 分钟）；`max_points` 默认 1200，超出后按分钟均值分箱返回（y 轴仍是「请求/分钟」），全历史响应从数 MB 降到几十 KB |
 | `GET /api/tps?from=&to=&models=` | 每秒 token 分析（`models` 为逗号分隔模型列表） |
 | `GET /api/quota` | 全部配额卡（详见[`docs/agents/quota-cards.md`](docs/agents/quota-cards.md)） |
 | `GET /api/xunfei` | 讯飞订阅用量 |
@@ -227,7 +240,7 @@ pub struct TokenRecord {
     pub time: String,               // RFC3339 UTC
     pub api_key_prefix: String,     // JSON 字段名 apiKeyPrefix
     pub provider: String,           // 如 "openai"、"anthropic"、"deepseek"（vendor merge 后）
-    pub original_provider: Option<String>, // merge 前的原始 provider（cost 计算依据，不序列化）
+    pub original_provider: Option<compact_str::CompactString>, // merge 前的原始 provider（cost 计算依据，不序列化）
     pub model: String,              // 如 "gpt-5.5"、"claude-sonnet-4-6"
     pub source: String,             // 数据源标识，见数据源清单
     pub input_tokens: i64,          // JSON: inputTokens（"非缓存输入"语义，见归一化）
@@ -300,13 +313,19 @@ providers = ["openai", "ainaiba", "xai"]
 4. **增量解析** — `DataSource::data_files()` 报告源文件，mtime+size 未变则跳过；一次性跨源
    规范化仍每次执行（只作用于新记录，开销小）。
 5. **单一定价入口** — `pricing::display_cost()` 统一输出 CNY；`cost` 字段保留原始币种。
-6. **内存画像依赖三样东西**（详见 [`pitfalls.md`](docs/agents/pitfalls.md) 第 24 条）—
+6. **内存画像依赖三样东西 + 一处内联缓存**（详见 [`pitfalls.md`](docs/agents/pitfalls.md) 第 24 条）—
    `#[global_allocator] mimalloc`（`main.rs`）、单元里的 `MALLOC_ARENA_MAX=2`、以及
-   `TokenRecord` 的 `date`/`api_key_prefix`/`provider`/`model`/`source` 用 `CompactString`
-   （≤22 字节内联，只有 `time` 留 `String`）。三者共同把 762k 条记录的常驻从 1109 MB 压到
-   300 MB；把字段改回 `String` 或去掉分配器覆盖都会**静默**涨 3 倍以上（不是泄漏，
-   是 glibc arena 只借不还）。改 `TokenRecord` 字段类型必须同步 `store.rs` 的
-   `params![...]`（`.as_str()`）与 `row_to_record`（走 `text_col` 的 `ValueRef` 直读）。
+   `TokenRecord` 的 `date`/`api_key_prefix`/`provider`/`model`/`source`/`original_provider`
+   用 `CompactString`（≤22 字节内联，只有 `time` 留 `String`），加上 `parsed_time:
+   OnceLock` 每记录内联 memo（**曾是一个 `TIME_PARSE_CACHE` 全局分片 Map，809k 个
+   几乎不重复的时间戳上命中率 ~4%，白占 ~66 MB 且每次命中都付一次锁 + malloc；已删除）。
+   四者共同把 762k 条记录的常驻从 1109 MB 压到 300 MB；把字段改回 `String`、去掉分配器
+   覆盖、或复活全局时间戳缓存都会**静默**涨 3 倍以上（不是泄漏，是 glibc arena 只借不还）。
+   改 `TokenRecord` 字段类型必须同步 `store.rs` 的 `params![...]`（`.as_str()`/`.as_deref()`）
+   与 `row_to_record`（走 `text_col`/`opt_text_col` 的 `ValueRef` 直读）。
+   新增字段需补齐**全部 49 个构造点**——编译器会报错兜底，测试构造点在 `#[cfg(test)]`
+   模块里同样要补。`parsed_time` 是 `#[serde(skip)]`，因此 `PartialEq` 为手写实现（忽略 memo），
+   否则「已初始化 vs 未初始化」会被判为不等。
 
 ### 数据持久化（SQLite）
 
@@ -467,14 +486,15 @@ cd backend && ./target/release/token-stats-backend --grok-proxy-only
 
 ## 陷阱与注意事项
 
-全部编号陷阱（1–25，共 24 条；编号被提交信息和代码注释引用，故保持不重排）见
+全部编号陷阱（1–26，共 25 条；编号被提交信息和代码注释引用，故保持不重排）见
 [`docs/agents/pitfalls.md`](docs/agents/pitfalls.md)。按主题该先读哪几条：
 
 | 你在动 | 必读陷阱 |
 |--------|----------|
 | 前端构建 / nginx / base path | 1、2 |
 | 任何源库读取（SQLite） | 3、23 |
-| `sources/dim.rs`、双计防护 | 4、15、19、22 |
+| `sources/dim.rs`、双计防护 | 4、15、19、22、26 |
+| 客户端源 / CPA 通道 | 26 |
 | CPA 插件 / `.so` / dim 凭据 | 13、14 |
 | 聚合 / 请求明细 / 零 token 记录 | 5、7、8 |
 | 定价 / `pricing.toml` | 6、11、18、21、25（+ [`pricing.md`](docs/agents/pricing.md)） |

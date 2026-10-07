@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Qoder CLI (`qodercli`) source: `~/.qoder/logs/sessions/<project>/<session>/segments/*.jsonl`.
 #[derive(Default)]
@@ -60,11 +61,7 @@ fn jsonl_files(base_path: &Path) -> Vec<PathBuf> {
     }
 }
 
-fn parse_segment_files(
-    paths: &[PathBuf],
-    subset: &[PathBuf],
-    source: &str,
-) -> Vec<TokenRecord> {
+fn parse_segment_files(paths: &[PathBuf], subset: &[PathBuf], source: &str) -> Vec<TokenRecord> {
     let mut records = Vec::new();
     let mut seen: HashSet<String> = HashSet::new(); // dedup by request_id
 
@@ -98,7 +95,9 @@ fn parse_segment_files(
                 continue;
             }
 
-            let Some(data) = obj.get("data") else { continue };
+            let Some(data) = obj.get("data") else {
+                continue;
+            };
             let read = |key: &str| data.get(key).and_then(|v| v.as_i64()).unwrap_or(0);
             let raw_input = read("input_tokens");
             let output_tokens = read("output_tokens");
@@ -119,10 +118,12 @@ fn parse_segment_files(
                 .map(str::to_string)
                 .unwrap_or_else(|| super::resolve_provider_from_model(&model));
 
-            let (date, time) = parse_timestamp(obj.get("ts").and_then(|t| t.as_str()).unwrap_or(""));
+            let (date, time) =
+                parse_timestamp(obj.get("ts").and_then(|t| t.as_str()).unwrap_or(""));
 
             records.push(TokenRecord {
                 date: date.into(),
+                parsed_time: OnceLock::new(),
                 time,
                 api_key_prefix: "N/A".into(),
                 provider: provider.into(),
@@ -133,10 +134,7 @@ fn parse_segment_files(
                 output_tokens,
                 cache_read_tokens,
                 cache_write_tokens,
-                total_tokens: input_tokens
-                    + output_tokens
-                    + cache_read_tokens
-                    + cache_write_tokens,
+                total_tokens: input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
                 cost: 0.0,
                 ttft_ms: None,
                 tps: None,
@@ -221,7 +219,12 @@ fn sessions_path(env_var: &str, home_dir_name: &str) -> PathBuf {
     std::env::var(env_var)
         .ok()
         .map(PathBuf::from)
-        .unwrap_or_else(|| super::home_dir().join(home_dir_name).join("logs").join("sessions"))
+        .unwrap_or_else(|| {
+            super::home_dir()
+                .join(home_dir_name)
+                .join("logs")
+                .join("sessions")
+        })
 }
 
 #[cfg(test)]

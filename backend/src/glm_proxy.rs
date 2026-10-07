@@ -26,6 +26,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use compact_str::CompactString;
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
+use std::sync::OnceLock;
 use std::{io::Write, net::SocketAddr, path::PathBuf, time::Instant};
 
 const GLM_SOURCE: &str = "glm-acp";
@@ -95,10 +96,10 @@ fn parse_sse_usage(body: &[u8]) -> Option<(i64, i64, i64)> {
         if data.is_empty() || data == "[DONE]" {
             continue;
         }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
-            if let Some(usage) = extract_usage(&value) {
-                last = Some(usage);
-            }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(data)
+            && let Some(usage) = extract_usage(&value)
+        {
+            last = Some(usage);
         }
     }
     last
@@ -123,6 +124,7 @@ fn build_record(
     let input = (prompt - cached).max(0);
     TokenRecord {
         date: compact_str::format_compact!("{}", recorded_at.format("%Y-%m-%d")),
+        parsed_time: OnceLock::new(),
         time: recorded_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         api_key_prefix: CompactString::default(),
         provider: GLM_PROVIDER.into(),
@@ -205,7 +207,10 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
         }
     };
     let upstream = match client
-        .request(parts.method, format!("{}{}", config.upstream_base_url, path_and_query))
+        .request(
+            parts.method,
+            format!("{}{}", config.upstream_base_url, path_and_query),
+        )
         .headers(headers)
         .body(body)
         .send()
@@ -241,7 +246,16 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
             model,
             config,
         ),
-        |(mut upstream, mut captured, mut failed, mut first_byte, started, is_sse, model, config)| async move {
+        |(
+            mut upstream,
+            mut captured,
+            mut failed,
+            mut first_byte,
+            started,
+            is_sse,
+            model,
+            config,
+        )| async move {
             match upstream.next().await {
                 Some(Ok(chunk)) => {
                     if first_byte.is_none() {
@@ -251,14 +265,7 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                     Some((
                         Ok::<_, reqwest::Error>(chunk),
                         (
-                            upstream,
-                            captured,
-                            failed,
-                            first_byte,
-                            started,
-                            is_sse,
-                            model,
-                            config,
+                            upstream, captured, failed, first_byte, started, is_sse, model, config,
                         ),
                     ))
                 }
@@ -267,14 +274,7 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                     Some((
                         Err(error),
                         (
-                            upstream,
-                            captured,
-                            failed,
-                            first_byte,
-                            started,
-                            is_sse,
-                            model,
-                            config,
+                            upstream, captured, failed, first_byte, started, is_sse, model, config,
                         ),
                     ))
                 }
@@ -289,11 +289,10 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                             parse_json_usage(&captured)
                         };
                         if let (Some(usage), Some(model)) = (usage, model.as_deref()) {
-                            let ttft_ms =
-                                first_byte.map(|t| t.saturating_duration_since(started).as_millis() as f64);
+                            let ttft_ms = first_byte
+                                .map(|t| t.saturating_duration_since(started).as_millis() as f64);
                             let record = build_record(model, usage, Utc::now(), ttft_ms);
-                            if let Err(error) =
-                                append_usage_record(&config.usage_log_path, &record)
+                            if let Err(error) = append_usage_record(&config.usage_log_path, &record)
                             {
                                 tracing::warn!("Could not append GLM usage record: {error}");
                             }
@@ -353,9 +352,7 @@ pub async fn serve() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ProxyConfig, build_record, parse_json_usage, parse_sse_usage, proxy_response,
-    };
+    use super::{ProxyConfig, build_record, parse_json_usage, parse_sse_usage, proxy_response};
     use crate::models::TokenRecord;
     use axum::{
         body::{Body, to_bytes},
@@ -399,7 +396,10 @@ mod tests {
 
     #[test]
     fn sse_without_usage_yields_nothing() {
-        assert_eq!(parse_sse_usage(b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"), None);
+        assert_eq!(
+            parse_sse_usage(b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"),
+            None
+        );
         assert_eq!(parse_sse_usage(b"data: [DONE]\n\n"), None);
     }
 
@@ -491,7 +491,9 @@ mod tests {
     async fn upstream_errors_forward_without_a_record() {
         let upstream = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"bad key"}}"#))
+            .respond_with(
+                ResponseTemplate::new(401).set_body_string(r#"{"error":{"message":"bad key"}}"#),
+            )
             .mount(&upstream)
             .await;
         let dir = tempfile::tempdir().unwrap();

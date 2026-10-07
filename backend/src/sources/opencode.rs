@@ -3,6 +3,7 @@ use crate::models::TokenRecord;
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// OpenCode source: reads `~/.local/share/opencode/opencode.db` (SQLite).
 ///
@@ -117,16 +118,14 @@ impl OpenCodeSource {
     /// outright and the whole source silently yields nothing (seen in practice
     /// on a machine with an actively streaming session).
     fn open_read_only(path: &std::path::Path) -> Option<Connection> {
-        let conn = match Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to open OpenCode DB: {}, skipping", e);
-                return None;
-            }
-        };
+        let conn =
+            match Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to open OpenCode DB: {}, skipping", e);
+                    return None;
+                }
+            };
         conn.busy_timeout(std::time::Duration::from_secs(5)).ok();
         Some(conn)
     }
@@ -221,9 +220,7 @@ impl OpenCodeSource {
             .get("total")
             .and_then(|v| v.as_i64())
             .filter(|t| *t > 0)
-            .unwrap_or(
-                input_tokens + effective_output + cache_read_tokens + cache_write_tokens,
-            );
+            .unwrap_or(input_tokens + effective_output + cache_read_tokens + cache_write_tokens);
 
         let mut provider = if is_v2 {
             obj.get("model")
@@ -263,7 +260,11 @@ impl OpenCodeSource {
         let ts_ms = time_obj
             .and_then(|t| t.get("completed"))
             .and_then(|v| v.as_i64())
-            .or_else(|| time_obj.and_then(|t| t.get("created")).and_then(|v| v.as_i64()))
+            .or_else(|| {
+                time_obj
+                    .and_then(|t| t.get("created"))
+                    .and_then(|v| v.as_i64())
+            })
             .unwrap_or(0);
 
         let (date, time) = if ts_ms > 0 {
@@ -279,6 +280,7 @@ impl OpenCodeSource {
 
         Some(TokenRecord {
             date: date.into(),
+            parsed_time: OnceLock::new(),
             time,
             api_key_prefix: "N/A".into(),
             provider: provider.into(),
@@ -388,8 +390,11 @@ mod tests {
     fn parses_v2_shape_with_the_same_numbers() {
         let v1 = parse_row_for_test(&v1_json("deepseek-v4-flash", 14866, 10, 27, 0), false)
             .expect("v1 row");
-        let v2 = parse_row_for_test(&v2_json("opencode-go", "deepseek-v4-flash", 14866, 10, 27), true)
-            .expect("v2 assistant row");
+        let v2 = parse_row_for_test(
+            &v2_json("opencode-go", "deepseek-v4-flash", 14866, 10, 27),
+            true,
+        )
+        .expect("v2 assistant row");
         assert_eq!(v2.model, v1.model);
         assert_eq!(v2.provider, v1.provider);
         assert_eq!(v2.input_tokens, v1.input_tokens);
@@ -432,7 +437,8 @@ mod tests {
     /// real 1.x row whose cost the API reported.
     #[test]
     fn reasoning_is_billed_as_output() {
-        let (input, output, reasoning, cache_read, cost) = (14866_i64, 10_i64, 27_i64, 0_i64, 0.0020916_f64);
+        let (input, output, reasoning, cache_read, cost) =
+            (14866_i64, 10_i64, 27_i64, 0_i64, 0.0020916_f64);
         let billed = input as f64 * 0.14e-6
             + (output + reasoning) as f64 * 0.28e-6
             + cache_read as f64 * 0.0028e-6;
@@ -461,9 +467,21 @@ mod tests {
 
         for record in &records {
             assert_eq!(record.source, "opencode");
-            assert_ne!(record.model, "unknown", "model must resolve: {:?}", record.time);
-            assert_ne!(record.provider, "unknown", "provider must resolve: {:?}", record.time);
-            assert_ne!(record.time, "unknown", "timestamp must resolve for {:?}", record.model);
+            assert_ne!(
+                record.model, "unknown",
+                "model must resolve: {:?}",
+                record.time
+            );
+            assert_ne!(
+                record.provider, "unknown",
+                "provider must resolve: {:?}",
+                record.time
+            );
+            assert_ne!(
+                record.time, "unknown",
+                "timestamp must resolve for {:?}",
+                record.model
+            );
             assert_eq!(
                 record.total_tokens,
                 record.input_tokens

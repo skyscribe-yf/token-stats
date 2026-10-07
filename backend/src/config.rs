@@ -69,12 +69,12 @@ pub fn get_vendor_merge_config_path() -> std::path::PathBuf {
     }
 
     // Try next to the running binary
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("vendor_merge.toml");
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("vendor_merge.toml");
+        if candidate.exists() {
+            return candidate;
         }
     }
 
@@ -116,7 +116,7 @@ pub fn apply_vendor_merge(records: &mut [TokenRecord], merge_map: &HashMap<Strin
             // Preserve the original provider name for pricing logic
             // (e.g. "kimi-coding" needs different pricing than raw "kimi")
             if record.original_provider.is_none() {
-                record.original_provider = Some(record.provider.to_string());
+                record.original_provider = Some(record.provider.clone());
             }
             record.provider = target.as_str().into();
             merged_count += 1;
@@ -131,6 +131,7 @@ pub fn apply_vendor_merge(records: &mut [TokenRecord], merge_map: &HashMap<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
 
     #[test]
     fn parse_vendor_merge_toml() {
@@ -215,13 +216,10 @@ providers = ["freemodel", "FreeModel"]
 
         // kimi-coding → kimi, original_provider preserved
         assert_eq!(records[0].provider, "kimi");
-        assert_eq!(
-            records[0].original_provider,
-            Some("kimi-coding".to_string())
-        );
+        assert_eq!(records[0].original_provider, Some("kimi-coding".into()));
         // openai → ainaba, original_provider preserved
         assert_eq!(records[1].provider, "ainaba");
-        assert_eq!(records[1].original_provider, Some("openai".to_string()));
+        assert_eq!(records[1].original_provider, Some("openai".into()));
         // kimi → kimi (no merge), original_provider stays None
         assert_eq!(records[2].provider, "kimi");
         assert_eq!(records[2].original_provider, None);
@@ -233,17 +231,14 @@ providers = ["freemodel", "FreeModel"]
         map.insert("kimi-coding".to_string(), "kimi".to_string());
 
         let mut record = test_record("kimi-coding");
-        record.original_provider = Some("custom-orig".to_string());
+        record.original_provider = Some("custom-orig".into());
         let mut records = vec![record];
 
         apply_vendor_merge(&mut records, &map);
 
         // Should NOT overwrite an already-set original_provider
         assert_eq!(records[0].provider, "kimi");
-        assert_eq!(
-            records[0].original_provider,
-            Some("custom-orig".to_string())
-        );
+        assert_eq!(records[0].original_provider, Some("custom-orig".into()));
     }
 
     #[test]
@@ -268,7 +263,7 @@ providers = ["freemodel", "FreeModel"]
         assert_eq!(records[0].provider, "deepseek");
         assert_eq!(
             records[0].original_provider,
-            Some("deepseek-official".to_string())
+            Some("deepseek-official".into())
         );
     }
 
@@ -286,6 +281,7 @@ providers = ["freemodel", "FreeModel"]
     fn test_record(provider: &str) -> TokenRecord {
         TokenRecord {
             date: "2026-05-17".into(),
+            parsed_time: OnceLock::new(),
             time: "2026-05-17T00:00:00Z".to_string(),
             api_key_prefix: "test".into(),
             provider: provider.into(),

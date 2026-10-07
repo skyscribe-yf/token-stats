@@ -28,6 +28,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use compact_str::CompactString;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use std::sync::OnceLock;
 use std::{io::Write, net::SocketAddr, path::PathBuf};
 use tokio::sync::mpsc;
 
@@ -737,6 +738,7 @@ fn record_usage(
 
     Some(crate::models::TokenRecord {
         date: compact_str::format_compact!("{}", recorded_at.format("%Y-%m-%d")),
+        parsed_time: OnceLock::new(),
         time: recorded_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         api_key_prefix: CompactString::default(),
         provider: "commandcode".into(),
@@ -1453,10 +1455,10 @@ mod tests {
     /// Wait for the async recorder task to append at least one usage line.
     async fn wait_for_usage_log(path: &Path) -> String {
         for _ in 0..100 {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                if !text.trim().is_empty() {
-                    return text;
-                }
+            if let Ok(text) = std::fs::read_to_string(path)
+                && !text.trim().is_empty()
+            {
+                return text;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }

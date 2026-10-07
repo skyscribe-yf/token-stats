@@ -572,23 +572,26 @@ export default function App() {
   useVisibleInterval(() => {
     void loadData();
     void loadRequests();
-    if (appliedRange.from && appliedRange.to) {
-      void fetchRpm(
-        appliedRange.from,
-        appliedRange.to,
-        undefined,
-        undefined,
-        tzOffset
-      ).then(setRpmData).catch(() => {});
-      void fetchTps(
-        appliedRange.from,
-        appliedRange.to,
-        undefined,
-        undefined,
-        tzOffset
-      ).then(setTpsData).catch(() => {});
-    }
   }, 30_000, [appliedRange.from, appliedRange.to, tzOffset]);
+
+  // RPM/TPS are minute-bucket trend charts: their payloads are the two largest
+  // in the app (multi-MB at wide ranges) and re-deriving them every 30s buys
+  // nothing a 5-minute cadence would not. Kept out of the main poll so the
+  // cheap endpoints stay fresh without dragging these along.
+  useVisibleInterval(
+    () => {
+      if (!appliedRange.from || !appliedRange.to) return;
+      void fetchRpm(appliedRange.from, appliedRange.to, undefined, undefined, tzOffset)
+        .then(setRpmData)
+        .catch(() => {});
+      void fetchTps(appliedRange.from, appliedRange.to, undefined, undefined, tzOffset)
+        .then(setTpsData)
+        .catch(() => {});
+    },
+    300_000,
+    [appliedRange.from, appliedRange.to, tzOffset],
+    600_000
+  );
 
   // Mount-time fetch — poll interval doesn't fire until 30s later
   useEffect(() => {

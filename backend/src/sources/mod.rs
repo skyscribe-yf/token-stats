@@ -31,6 +31,36 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+/// CPA upstream namespaces. A model name carrying one of these prefixes means
+/// the request was routed through CLIProxyAPI (`:8317`), where a dedicated
+/// usage plugin meters it per request (see `docs/agents/data-sources.md`).
+///
+/// Every prefix here must have a companion plugin: the plugin record is the
+/// only one whose `model` is the bare upstream name, which is the key
+/// `pricing.toml` and `vendor_merge.toml` look up — the prefixed form
+/// (`step/step-5-preview`) resolves to no price and would display ¥0 forever.
+pub(crate) const CPA_MODEL_PREFIXES: &[&str] = &["wb/", "ollama/", "step/"];
+
+/// Provider id client-side logs use for calls routed through CPA.
+///
+/// `usage.jsonl` (source `pi`) writes this verbatim, and it is the same
+/// double-metering problem a prefixed model name is: CLIProxyAPI's own usage
+/// plugin already recorded the request.
+pub(crate) const CPA_CLIENT_PROVIDER: &str = "cpa";
+
+/// True when this record meters a call that a CPA usage plugin already meters.
+///
+/// Used to keep client-side sources (Pi, ZCode) from re-recording CPA traffic.
+/// Dropping the client row is the right direction, not the other way round:
+/// the plugin row carries the bare model name (`step-5-preview`, not
+/// `step/step-5-preview`) so `pricing.toml` can actually price it, and per
+/// AGENTS.md the plugin is the authoritative per-request meter for a CPA
+/// channel. Both signals are checked — ZCode stores the CPA channel under its
+/// own provider id (`opencode-go`), so there the prefix is the only tell.
+pub(crate) fn meters_cpa_channel(provider: &str, model: &str) -> bool {
+    provider == CPA_CLIENT_PROVIDER || CPA_MODEL_PREFIXES.iter().any(|p| model.starts_with(p))
+}
+
 pub use cc_proxy::CcProxySource;
 pub(crate) use cc_proxy::cc_proxy_usage_log_path;
 pub use ccswitch::CcSwitchSource;
@@ -193,9 +223,7 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" => "openai".to_string(),
         "glm-5" | "glm-5.1" | "glm-4.7-flash" => "opencode-go".to_string(),
         "sonnet" | "haiku" => "anthropic".to_string(),
-        "qmodel_latest" | "efficient" | "auto" | "qfmodel" | "qmodel_38max" => {
-            "qoder".to_string()
-        }
+        "qmodel_latest" | "efficient" | "auto" | "qfmodel" | "qmodel_38max" => "qoder".to_string(),
         "spark-x2" | "spark-x2-flash" => "xunfei".to_string(),
         "qwen3.6-35b" | "qwen3.5-35b" | "qwen3.5-397b" | "qwen3-coder-next" => "qwen".to_string(),
         "minimax-m2.5" => "minimax".to_string(),
@@ -327,7 +355,7 @@ pub(crate) fn changed_files(paths: &[std::path::PathBuf]) -> Vec<std::path::Path
     paths
         .iter()
         .zip(known)
-        .filter(|(p, known)| stamp_of(p).map_or(true, |stamp| *known != Some(stamp)))
+        .filter(|(p, known)| stamp_of(p).is_none_or(|stamp| *known != Some(stamp)))
         .map(|(p, _)| p.clone())
         .collect()
 }
@@ -397,7 +425,7 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
         .collect();
 
     // Only log "not found" warnings once, not every 30s
-    let already_warned = UNAVAILABLE_SOURCES.get().map_or(false, |prev| {
+    let already_warned = UNAVAILABLE_SOURCES.get().is_some_and(|prev| {
         prev.len() == unavailable.len() && prev.iter().zip(unavailable.iter()).all(|(a, b)| a == b)
     });
     if !already_warned {
@@ -517,13 +545,13 @@ fn load_sources_impl(incremental: bool) -> Vec<TokenRecord> {
         .with_timezone(&chrono::Utc);
     let mut kimi_renamed = 0usize;
     for record in all_records.iter_mut() {
-        if record.provider == "kimi" && record.model == "kimi-for-coding" {
-            if let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
-                if record_time.with_timezone(&chrono::Utc) >= kimi_k27_cutoff {
-                    record.model = "kimi-k2.7".into();
-                    kimi_renamed += 1;
-                }
-            }
+        if record.provider == "kimi"
+            && record.model == "kimi-for-coding"
+            && let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time)
+            && record_time.with_timezone(&chrono::Utc) >= kimi_k27_cutoff
+        {
+            record.model = "kimi-k2.7".into();
+            kimi_renamed += 1;
         }
     }
     if kimi_renamed > 0 {
@@ -726,6 +754,7 @@ mod tests {
         // subtracted in the commandcode parser.
         let mut record = TokenRecord {
             date: "2026-05-25".into(),
+            parsed_time: OnceLock::new(),
             time: "2026-05-25T12:46:55Z".to_string(),
             api_key_prefix: "sk-test".into(),
             provider: "commandcode".into(),
@@ -757,6 +786,7 @@ mod tests {
         assert_eq!(record.total_tokens, 295 + 286 + 20864);
         // Native cmd source is NOT normalized (already exclusive)
         let native = TokenRecord {
+            parsed_time: OnceLock::new(),
             date: "2026-08-18".into(),
             time: "2026-08-18T23:22:28.444Z".to_string(),
             api_key_prefix: "N/A".into(),
@@ -785,6 +815,7 @@ mod tests {
         );
         // Non-commandcode records unchanged either way
         let normal = TokenRecord {
+            parsed_time: OnceLock::new(),
             date: "2026-05-25".into(),
             time: "2026-05-25T12:00:00Z".to_string(),
             api_key_prefix: "sk-test".into(),
@@ -819,6 +850,7 @@ mod tests {
 
         fn make_record(provider: &str, model: &str, time: &str) -> TokenRecord {
             TokenRecord {
+                parsed_time: OnceLock::new(),
                 date: time[..10].into(),
                 time: time.to_string(),
                 api_key_prefix: "test".into(),
@@ -837,7 +869,7 @@ mod tests {
             }
         }
 
-        let mut records = vec![
+        let mut records = [
             // Before cutoff — should NOT be renamed
             make_record("kimi", "kimi-for-coding", "2026-06-11T22:00:00Z"),
             // Exactly at cutoff — should be renamed
@@ -853,13 +885,13 @@ mod tests {
         // Apply the same logic as load_all_sources() (post vendor-merge)
         let mut renamed = 0usize;
         for record in records.iter_mut() {
-            if record.provider == "kimi" && record.model == "kimi-for-coding" {
-                if let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time) {
-                    if record_time.with_timezone(&chrono::Utc) >= cutoff {
-                        record.model = "kimi-k2.7".into();
-                        renamed += 1;
-                    }
-                }
+            if record.provider == "kimi"
+                && record.model == "kimi-for-coding"
+                && let Ok(record_time) = chrono::DateTime::parse_from_rfc3339(&record.time)
+                && record_time.with_timezone(&chrono::Utc) >= cutoff
+            {
+                record.model = "kimi-k2.7".into();
+                renamed += 1;
             }
         }
 

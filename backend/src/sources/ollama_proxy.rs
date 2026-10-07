@@ -60,10 +60,10 @@ pub(crate) fn ollama_run_cutoff() -> Option<String> {
         // A poisoned lock only costs a re-read; never panic on it.
         Err(poisoned) => poisoned.into_inner(),
     };
-    if let Some((cached_path, value)) = cached.as_ref() {
-        if *cached_path == path {
-            return Some(value.clone());
-        }
+    if let Some((cached_path, value)) = cached.as_ref()
+        && *cached_path == path
+    {
+        return Some(value.clone());
     }
     let cutoff = first_record_time(&path)?;
     *cached = Some((path, cutoff.clone()));
@@ -171,6 +171,7 @@ impl DataSource for OllamaProxySource {
 mod tests {
     use super::OllamaProxySource;
     use crate::sources::DataSource;
+    use std::sync::OnceLock;
 
     #[test]
     fn loads_ollama_proxy_usage_jsonl() {
@@ -276,6 +277,7 @@ mod tests {
         temp_env::with_var("OLLAMA_PROXY_USAGE_LOG_PATH", Some(&log_path), || {
             let mut run_row = crate::models::TokenRecord {
                 date: "2026-09-11".into(),
+                parsed_time: OnceLock::new(),
                 time: "2026-09-11T14:30:00+00:00".into(),
                 api_key_prefix: "N/A".into(),
                 // Vendor merge renames the provider but keeps the raw id.

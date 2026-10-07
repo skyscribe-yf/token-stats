@@ -1,10 +1,9 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::OnceLock;
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokenRecord {
     /// The low-cardinality fields are `CompactString`: values up to 22 bytes
     /// live inline, so `date`/`api_key_prefix`/`provider`/`source` and most
@@ -20,8 +19,14 @@ pub struct TokenRecord {
     /// The provider name before vendor merge was applied.
     /// Used by display_cost() to determine the correct cost formula
     /// (e.g. opencode-go records merged into deepseek still need USD→CNY conversion).
+    ///
+    /// `CompactString` like the other low-cardinality fields: 433k of the 842k
+    /// persisted rows carry one, and every value is a short provider slug
+    /// (`kimi-coding`, `deepseek-official`), so inlining removes a malloc per
+    /// row — ~20 MB resident across the table. `as_deref()` keeps its use as
+    /// `&str` at every call site.
     #[serde(default, skip_serializing)]
-    pub original_provider: Option<String>,
+    pub original_provider: Option<CompactString>,
     pub model: CompactString,
     #[serde(default)]
     pub source: CompactString,
@@ -40,6 +45,23 @@ pub struct TokenRecord {
     pub ttft_ms: Option<f64>,
     #[serde(rename = "tps", default)]
     pub tps: Option<f64>,
+    /// Memoized parse of [`Self::time`].
+    ///
+    /// `time` is written once at parse time and read from every aggregation
+    /// pass (`filter_records`, `compute_*`, `minute_index_utc`, pricing's
+    /// `select_segment`), so re-running the RFC3339 parse on each access cost
+    /// ~5 parses over the whole table per full-history request. OnceLock keeps
+    /// that at ≤1 parse per record for the life of the process, with no lock
+    /// on the hot path and no per-entry heap allocation.
+    ///
+    /// Not serialized: `time` stays the single source of truth, so a
+    /// JSON round-trip (or a restore from the store) rebuilds it lazily.
+    ///
+    /// Public only so the many struct-literal construction sites across the
+    /// source parsers can initialize it; nothing outside `models.rs` should
+    /// ever read it — use [`Self::parsed_time`] for that.
+    #[serde(skip)]
+    pub parsed_time: OnceLock<Option<DateTime<Utc>>>,
 }
 
 impl TokenRecord {
@@ -98,7 +120,13 @@ impl TokenRecord {
     }
 
     pub fn parsed_time(&self) -> Option<DateTime<Utc>> {
-        cached_parse_time(&self.time)
+        // `get_or_init` is a single acquire load once populated, and the
+        // closure runs at most once per record even under concurrent readers.
+        *self.parsed_time.get_or_init(|| {
+            DateTime::parse_from_rfc3339(&self.time)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        })
     }
 
     /// Returns the UTC minute index (minutes since Unix epoch) for RPM calculations.
@@ -386,65 +414,119 @@ impl TokenRecord {
             cost: 0.0,
             ttft_ms: None,
             tps: None,
+            parsed_time: OnceLock::new(),
         }
     }
 }
 
-// ── RFC3339 parse memoization ──────────────────────────────────────────────
+// ── Manual `PartialEq`: identity never depends on memo state ───────────────
 //
-// `parsed_time()` is hot: the filter path parses every record once, and each
-// `compute_*` aggregation re-parses the same records. Across a full-history
-// `/api/stats` that is several million RFC3339 parses per request. Timestamp
-// strings repeat heavily (bursty requests share a second), so a bounded,
-// sharded cache keyed by the `time` string amortizes the parse to ~one per
-// distinct timestamp — at the cost of a short-lived lock per call instead of a
-// full chrono parse. Sharding keeps lock contention low under the async runtime.
+// `OnceLock`'s derived `PartialEq` treats an uninitialized and an initialized
+// cell as unequal even when the inner values match, so the auto-derive would
+// make two records for the same request compare differently depending on
+// whether one of them had been through an aggregation pass. Nothing in the
+// pipeline compares whole records today (dedup is fingerprint-based), but the
+// type now carries a lazily-populated field, so make the equality contract
+// explicit rather than accidental.
 
-const TIME_CACHE_SHARDS: usize = 64;
-/// Per-shard capacity; total resident entries ≈ SHARDS × this. ~16k/shard ⇒
-/// ~250k distinct timestamps (~20 MB) — far more than a real history holds,
-/// while bounding memory if ever exceeded (the shard is cleared on overflow).
-const TIME_CACHE_PER_SHARD: usize = 16_384;
-
-struct TimeParseCache {
-    shards: [Mutex<HashMap<String, DateTime<Utc>>>; TIME_CACHE_SHARDS],
+impl PartialEq for TokenRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time
+            && self.date == other.date
+            && self.api_key_prefix == other.api_key_prefix
+            && self.provider == other.provider
+            && self.original_provider == other.original_provider
+            && self.model == other.model
+            && self.source == other.source
+            && self.input_tokens == other.input_tokens
+            && self.output_tokens == other.output_tokens
+            && self.cache_read_tokens == other.cache_read_tokens
+            && self.cache_write_tokens == other.cache_write_tokens
+            && self.total_tokens == other.total_tokens
+            && self.cost == other.cost
+            && self.ttft_ms == other.ttft_ms
+            && self.tps == other.tps
+    }
 }
 
-static TIME_PARSE_CACHE: LazyLock<TimeParseCache> = LazyLock::new(|| TimeParseCache {
-    shards: std::array::from_fn(|_| Mutex::new(HashMap::new())),
-});
+#[cfg(test)]
+mod parsed_time_tests {
+    use super::*;
 
-fn cached_parse_time(time: &str) -> Option<DateTime<Utc>> {
-    use std::hash::{Hash, Hasher};
+    fn rec(time: &str) -> TokenRecord {
+        TokenRecord::fixture("pi", "ainaba", "gpt-5.5", time, 100)
+    }
 
-    let shard_idx = {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        time.hash(&mut h);
-        (h.finish() as usize) % TIME_CACHE_SHARDS
-    };
+    #[test]
+    fn fingerprint_is_stable_across_memoization() {
+        // The memo must not influence identity: a record whose parsed_time has
+        // been materialized has to hash exactly like a freshly parsed twin,
+        // otherwise dedup would silently split history.
+        let fresh = rec("2026-10-06T23:03:47.173Z");
+        let warm = rec("2026-10-06T23:03:47.173Z");
+        assert_eq!(warm.parsed_time(), fresh.parsed_time());
+        assert!(warm.parsed_time().is_some(), "the string must parse");
 
-    {
-        let guard = TIME_PARSE_CACHE.shards[shard_idx]
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(dt) = guard.get(time) {
-            return Some(*dt);
+        assert_eq!(
+            fresh.fingerprint(),
+            warm.fingerprint(),
+            "memoizing the timestamp changed the record's identity"
+        );
+    }
+
+    #[test]
+    fn memo_is_idempotent_and_parses_every_stored_format() {
+        // Formats actually present in the store: Z-suffixed, +00:00-offset,
+        // second precision and sub-second precision.
+        for t in [
+            "2026-10-06T23:03:15Z",
+            "2026-10-06T23:03:47.173Z",
+            "2026-10-06T23:03:47.173+00:00",
+            "2026-10-06T23:04:02.143Z",
+        ] {
+            let r = rec(t);
+            let first = r.parsed_time().expect(t);
+            let second = r.parsed_time().expect(t);
+            assert_eq!(first, second, "not idempotent for {t}");
+            assert_eq!(
+                first,
+                DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&Utc),
+                "wrong instant for {t}"
+            );
         }
     }
 
-    let parsed = DateTime::parse_from_rfc3339(time)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc));
-
-    if let Some(dt) = parsed {
-        let mut guard = TIME_PARSE_CACHE.shards[shard_idx]
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if guard.len() >= TIME_CACHE_PER_SHARD {
-            guard.clear();
-        }
-        guard.insert(time.to_string(), dt);
+    #[test]
+    fn malformed_time_memoizes_failure_rather_than_reparsing() {
+        let r = rec("not-a-timestamp");
+        assert!(r.parsed_time().is_none());
+        assert!(
+            r.parsed_time().is_none(),
+            "failure must be cached, not retried"
+        );
     }
 
-    parsed
+    #[test]
+    fn serde_round_trip_rebuilds_the_memo() {
+        let r = rec("2026-10-06T23:03:47.173Z");
+        let _ = r.parsed_time();
+        let json = serde_json::to_string(&r).expect("serialize");
+        assert!(
+            !json.contains("parsed_time"),
+            "memo leaked into the wire format"
+        );
+        let back: TokenRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.parsed_time(), r.parsed_time());
+        assert_eq!(back.fingerprint(), r.fingerprint());
+    }
+
+    #[test]
+    fn equality_ignores_memo_state() {
+        // Records built by different paths (parser vs. store restore) must
+        // compare equal regardless of whether either side has parsed yet.
+        let unparsed = rec("2026-10-06T23:03:47.173Z");
+        let parsed = rec("2026-10-06T23:03:47.173Z");
+        assert!(parsed.parsed_time().is_some());
+        assert_eq!(unparsed, parsed);
+    }
 }

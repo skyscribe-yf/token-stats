@@ -1,6 +1,6 @@
 use crate::aggregator;
 use crate::ainaiba::fetch_ainaiba_credit;
-use crate::app::AppState;
+use crate::app::{AppState, RecordTable};
 use crate::models::*;
 use crate::pricing;
 use crate::quota::QuotaResponse;
@@ -8,16 +8,18 @@ use crate::settings;
 use crate::time::{parse_time_bound, tz_offset_to_fixed};
 use crate::xunfei::XunfeiFetcher;
 use axum::{
+    Json,
     extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use tokio::sync::RwLock;
 
 // ─── Query parameter types ───────────────────────────────────────────────────
 
@@ -54,7 +56,6 @@ pub struct RequestsQuery {
 fn default_page() -> usize {
     1
 }
-
 fn default_limit() -> usize {
     50
 }
@@ -69,13 +70,46 @@ fn validate_pagination(page: usize, limit: usize) -> (usize, usize) {
     (page, limit)
 }
 
+/// Run a CPU-bound record scan on the blocking pool.
+///
+/// `aggregate_records` / `filter_records` / `compute_*_analysis` are pure
+/// functions over the record table, but at full history each one is a ~1 s,
+/// single-threaded scan over ~840k records. Running that inline inside an
+/// axum handler parks the async worker for the whole scan, so every other
+/// request, quota fetch and the 30 s refresh task stalls behind it — that is
+/// the jitter seen while paging through the "全部" range.
+///
+/// Cloning the `Arc` (not the table) lets the scan hold a read lock only
+/// where it needs it, on a thread that is allowed to block.
+///
+/// Note the lock is taken with [`tokio::sync::RwLock::blocking_read`], which
+/// panics if called on a runtime worker — that is fine here because this whole
+/// body runs on the blocking pool, but never hoist the `blocking_read()` out
+/// to use it from an `async fn`.
+async fn scan_records_blocking<F, T>(records: Arc<RwLock<RecordTable>>, f: F) -> T
+where
+    F: FnOnce(&RecordTable) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    // `block_in_place` would be the cheaper variant, but it still occupies the
+    // worker; a dedicated pool keeps the runtime free to serve other requests
+    // while the scan runs.
+    tokio::task::spawn_blocking(move || {
+        // Blocking read: a refresh that takes the write lock queues behind us
+        // only for the write, and our own scan is not preempted.
+        let guard = records.blocking_read();
+        f(&guard)
+    })
+    .await
+    .expect("record scan task panicked")
+}
+
 // ─── Route handlers ──────────────────────────────────────────────────────────
 
 pub async fn get_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StatsQuery>,
 ) -> impl IntoResponse {
-    let records = state.records.read().await;
     let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
@@ -88,16 +122,19 @@ pub async fn get_stats(
         .and_then(Resolution::from_str)
         .unwrap_or_default();
 
-    let filters = aggregator::FilterCriteria {
-        from: from.as_ref(),
-        to: to.as_ref(),
-        source,
-        provider,
-        model,
-        tz: tz.as_ref(),
+    let filters = aggregator::OwnedFilterCriteria {
+        from,
+        to,
+        source: source.map(str::to_string),
+        provider: provider.map(str::to_string),
+        model: model.map(str::to_string),
+        tz,
         exclude_zero_tokens: true,
     };
-    let response = aggregator::aggregate_records(&records, &filters, resolution);
+    let response = scan_records_blocking(state.records.clone(), move |records| {
+        aggregator::aggregate_records(records, &filters.criteria(), resolution)
+    })
+    .await;
     Json(response)
 }
 
@@ -112,17 +149,29 @@ pub struct RpmQuery {
     /// Gap threshold in minutes for active-window boundary detection (default: 5)
     #[serde(default = "default_gap_threshold")]
     pub gap_threshold: i64,
+    /// Upper bound on emitted minute buckets. The full timeline is returned
+    /// under this many points; past it, buckets are averaged together so the
+    /// response stays small while the y-axis still reads requests/minute.
+    #[serde(default = "default_max_points")]
+    pub max_points: Option<usize>,
 }
 
 fn default_gap_threshold() -> i64 {
     5
 }
 
+/// Matches the front-end chart's rendered-point budget: more buckets than this
+/// are pure payload, since the chart bins anything above it anyway.
+const DEFAULT_RPM_MAX_POINTS: usize = 1_200;
+
+fn default_max_points() -> Option<usize> {
+    Some(DEFAULT_RPM_MAX_POINTS)
+}
+
 pub async fn get_rpm(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RpmQuery>,
 ) -> impl IntoResponse {
-    let records = state.records.read().await;
     let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
@@ -130,17 +179,24 @@ pub async fn get_rpm(
     let model = query.model.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
     let gap_threshold = query.gap_threshold.max(1);
+    let max_points = query
+        .max_points
+        .unwrap_or(DEFAULT_RPM_MAX_POINTS)
+        .clamp(1, 50_000);
 
-    let filters = aggregator::FilterCriteria {
-        from: from.as_ref(),
-        to: to.as_ref(),
-        source,
-        provider,
-        model,
-        tz: tz.as_ref(),
+    let filters = aggregator::OwnedFilterCriteria {
+        from,
+        to,
+        source: source.map(str::to_string),
+        provider: provider.map(str::to_string),
+        model: model.map(str::to_string),
+        tz,
         exclude_zero_tokens: true,
     };
-    let response = aggregator::compute_rpm_analysis(&records, &filters, gap_threshold);
+    let response = scan_records_blocking(state.records.clone(), move |records| {
+        aggregator::compute_rpm_analysis(records, &filters.criteria(), gap_threshold, max_points)
+    })
+    .await;
     Json(response)
 }
 
@@ -160,24 +216,27 @@ pub async fn get_tps(
     State(state): State<Arc<AppState>>,
     Query(query): Query<TpsQuery>,
 ) -> impl IntoResponse {
-    let records = state.records.read().await;
     let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
     let source = query.source.as_deref().filter(|s| !s.is_empty());
     let provider = query.provider.as_deref().filter(|s| !s.is_empty());
     let model = query.model.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
+    let models = query.models;
 
-    let filters = aggregator::FilterCriteria {
-        from: from.as_ref(),
-        to: to.as_ref(),
-        source,
-        provider,
-        model,
-        tz: tz.as_ref(),
+    let filters = aggregator::OwnedFilterCriteria {
+        from,
+        to,
+        source: source.map(str::to_string),
+        provider: provider.map(str::to_string),
+        model: model.map(str::to_string),
+        tz,
         exclude_zero_tokens: true,
     };
-    let response = aggregator::compute_tps_analysis(&records, &filters, query.models.as_deref());
+    let response = scan_records_blocking(state.records.clone(), move |records| {
+        aggregator::compute_tps_analysis(records, &filters.criteria(), models.as_deref())
+    })
+    .await;
     Json(response)
 }
 
@@ -185,31 +244,48 @@ pub async fn get_requests(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RequestsQuery>,
 ) -> impl IntoResponse {
-    let records = state.records.read().await;
     let from = query.from.as_ref().and_then(|s| parse_time_bound(s));
     let to = query.to.as_ref().and_then(|s| parse_time_bound(s));
-    let provider = query.provider.as_deref().filter(|s| !s.is_empty());
-    let model = query.model.as_deref().filter(|s| !s.is_empty());
-    let source = query.source.as_deref().filter(|s| !s.is_empty());
     let tz = query.tz_offset.map(tz_offset_to_fixed);
     let exclude_zero_tokens = !query.show_zero_tokens.unwrap_or(false);
-
-    let filters = aggregator::FilterCriteria {
-        from: from.as_ref(),
-        to: to.as_ref(),
-        source,
-        provider,
-        model,
-        tz: tz.as_ref(),
-        exclude_zero_tokens,
-    };
-    let filtered = aggregator::filter_records_unsorted(&records, &filters);
     let (page, limit) = validate_pagination(query.page, query.limit);
+    // Copy the filter strings out of `query` before they are captured by the
+    // `'static` closure below (`query` is dropped when the handler returns).
+    let provider = query
+        .provider
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let model = query
+        .model
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let source = query
+        .source
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // Filter, partial-sort and render one page inside a single blocking task:
+    // the intermediate `Vec<&TokenRecord>` borrows the table, so it cannot
+    // cross the task boundary — the whole stage runs there instead.
     // One pricing read guard for the whole page, not one lock per record.
-    // `paginate_requests` owns the sort now (partial-sort fast path for large
-    // history), so we feed it the unsorted, filtered set.
-    let pricing_guard = crate::pricing::state_read();
-    let paginated = aggregator::paginate_requests(filtered, page, limit, tz.as_ref(), &pricing_guard);
+    let paginated = scan_records_blocking(state.records.clone(), move |t| {
+        let filters = aggregator::OwnedFilterCriteria {
+            from,
+            to,
+            source,
+            provider,
+            model,
+            tz,
+            exclude_zero_tokens,
+        };
+        let filtered = aggregator::filter_records_unsorted(t, &filters.criteria());
+        let pricing_guard = crate::pricing::state_read();
+        aggregator::paginate_requests(filtered, page, limit, tz.as_ref(), &pricing_guard)
+    })
+    .await;
 
     Json(paginated)
 }
@@ -248,8 +324,7 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         records
             .iter()
             .filter(|r| {
-                r.source == "grok-cli"
-                    || (r.source == "dim" && r.provider == "xai-official")
+                r.source == "grok-cli" || (r.source == "dim" && r.provider == "xai-official")
             })
             .cloned()
             .collect()
@@ -341,19 +416,24 @@ pub async fn get_quota(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
 /// Export all records as downloadable JSONL.
 pub async fn export_data(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let guard = state.records.read().await;
-    let mut out = String::with_capacity(guard.len() * 256);
-    for r in guard.iter() {
-        match serde_json::to_string(r) {
-            Ok(line) => {
-                out.push_str(&line);
-                out.push('\n');
-            }
-            Err(e) => {
-                tracing::warn!("Failed to serialize record during export: {}", e);
+    // Serializing every record is ~250 MB of JSON; same reasoning as the
+    // aggregation handlers — keep it off the async worker.
+    let out = scan_records_blocking(state.records.clone(), |guard| {
+        let mut out = String::with_capacity(guard.len() * 256);
+        for r in guard.iter() {
+            match serde_json::to_string(r) {
+                Ok(line) => {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to serialize record during export: {}", e);
+                }
             }
         }
-    }
+        out
+    })
+    .await;
     (
         [
             ("Content-Type", "application/x-ndjson"),
@@ -480,13 +560,13 @@ pub async fn update_subscription_settings(
     Json(body): Json<settings::SubscriptionSettings>,
 ) -> impl IntoResponse {
     // Validate kimi_monthly_start_day: must be None or 1..=28
-    if let Some(day) = body.kimi_monthly_start_day {
-        if !(1..=28).contains(&day) {
-            return Json(serde_json::json!({
-                "success": false,
-                "error": "kimi_monthly_start_day must be between 1 and 28"
-            }));
-        }
+    if let Some(day) = body.kimi_monthly_start_day
+        && !(1..=28).contains(&day)
+    {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": "kimi_monthly_start_day must be between 1 and 28"
+        }));
     }
     if !body.kimi_subscription_multiplier.is_finite() || body.kimi_subscription_multiplier <= 0.0 {
         return Json(serde_json::json!({
@@ -630,10 +710,11 @@ pub async fn restore_backup(
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with("token-stats-export-") && name.ends_with(".jsonl") {
-                        files.push(path);
-                    }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name.starts_with("token-stats-export-")
+                    && name.ends_with(".jsonl")
+                {
+                    files.push(path);
                 }
             }
         }
@@ -682,6 +763,7 @@ pub async fn restore_backup(
                 let inferred = infer_source_from_filename(file_path);
                 TokenRecord {
                     source: inferred.into(),
+                    parsed_time: OnceLock::new(),
                     ..record
                 }
             } else {
@@ -729,4 +811,117 @@ pub async fn restore_backup(
         skipped,
         errors,
     }))
+}
+
+#[cfg(test)]
+mod blocking_scan_tests {
+    use super::*;
+    use crate::app::RecordTable;
+    use crate::models::TokenRecord;
+    use std::sync::OnceLock;
+
+    fn rec(time: &str, provider: &str, model: &str, total: i64) -> TokenRecord {
+        TokenRecord {
+            date: time[..10].into(),
+            time: time.to_string(),
+            api_key_prefix: "test".into(),
+            provider: provider.into(),
+            original_provider: None,
+            model: model.into(),
+            source: "pi".into(),
+            input_tokens: total / 2,
+            output_tokens: total / 2,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_tokens: total,
+            cost: 0.0,
+            ttft_ms: None,
+            tps: None,
+            parsed_time: OnceLock::new(),
+        }
+    }
+
+    /// A filter set that matches everything; mirrors what the handlers build
+    /// when the query string carries no bounds or selectors.
+    const EMPTY_FILTERS: aggregator::FilterCriteria<'static> = aggregator::FilterCriteria {
+        from: None,
+        to: None,
+        source: None,
+        provider: None,
+        model: None,
+        tz: None,
+        exclude_zero_tokens: true,
+    };
+
+    fn table() -> Arc<RwLock<RecordTable>> {
+        Arc::new(RwLock::new(RecordTable::new(vec![
+            rec("2026-10-06T10:00:00Z", "ainaba", "gpt-5.5", 100),
+            rec("2026-10-06T10:00:01Z", "ainaba", "gpt-5.5", 200),
+            rec("2026-10-06T11:00:00Z", "kimi", "kimi-k2.7", 300),
+        ])))
+    }
+
+    #[tokio::test]
+    async fn blocking_scan_matches_the_synchronous_result() {
+        let records = table();
+
+        let via_blocking = scan_records_blocking(records.clone(), |t| {
+            aggregator::aggregate_records(t, &EMPTY_FILTERS, crate::models::Resolution::Day)
+        })
+        .await;
+
+        // Same call, same input, on a plain thread: the blocking indirection
+        // must not change what the aggregation sees. `blocking_read` panics on
+        // a runtime worker, so the reference run goes through its own
+        // `spawn_blocking` rather than being inlined here.
+        let reference = {
+            let records = records.clone();
+            tokio::task::spawn_blocking(move || {
+                let guard = records.blocking_read();
+                aggregator::aggregate_records(
+                    &guard,
+                    &EMPTY_FILTERS,
+                    crate::models::Resolution::Day,
+                )
+            })
+            .await
+            .expect("reference scan panicked")
+        };
+
+        assert_eq!(
+            via_blocking.overall.total_calls,
+            reference.overall.total_calls
+        );
+        assert_eq!(
+            via_blocking.overall.total_tokens,
+            reference.overall.total_tokens
+        );
+        assert_eq!(via_blocking.by_vendor.len(), reference.by_vendor.len());
+    }
+
+    #[tokio::test]
+    async fn blocking_scan_filters_are_applied_inside_the_closure() {
+        let records = table();
+        let matched = scan_records_blocking(records.clone(), |t| {
+            // Count inside the closure: the filtered set borrows `t` and so
+            // cannot outlive the task boundary.
+            aggregator::filter_records_unsorted(
+                t,
+                &aggregator::FilterCriteria {
+                    provider: Some("kimi"),
+                    exclude_zero_tokens: true,
+                    ..EMPTY_FILTERS
+                },
+            )
+            .into_iter()
+            .map(|r| r.provider.to_string())
+            .collect::<Vec<_>>()
+        })
+        .await;
+        assert_eq!(
+            matched,
+            vec!["kimi".to_string()],
+            "filter must survive the move"
+        );
+    }
 }

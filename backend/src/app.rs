@@ -188,8 +188,10 @@ impl AppState {
         // from a persisted watermark only sees records newer than the
         // watermark, and treating that partial fingerprint set as "the whole
         // history" would purge every older dim row.
-        let dim_migrated =
-            !dim_keep.is_empty() && DimSource::full_backfill_done();
+        let dim_migrated = !dim_keep.is_empty() && DimSource::full_backfill_done();
+        // Reclaim the slack the migration `retain` just opened up, otherwise
+        // the extend below grows the buffer from the old (larger) capacity.
+        db_records.shrink_to_fit();
         if dim_migrated {
             store.purge_dim_legacy(&dim_keep);
         }
@@ -279,28 +281,28 @@ impl AppState {
         db_records.reserve(new_from_sources.len());
         db_records.retain(|r| {
             // Drop the legacy rows each migration purge just removed from the
-            // store so memory and DB stay in sync.
-            !(dim_migrated && r.source == "dim" && !dim_keep.contains(&r.fingerprint()))
-                // Legacy grok-build dim rows.
-                && !(dim_grok_migrated
-                    && r.source == "dim"
-                    && r.provider == "grok-build")
-                // Legacy workbuddy dim rows.
-                && !(dim_workbuddy_migrated
-                    && r.source == "dim"
-                    && r.provider == "workbuddy")
-                // Dim cc-proxy run rows: the cc-proxy source meters them.
-                && !(dim_cc_proxy_migrated
-                    && r.source == "dim"
-                    && r.original_provider.as_deref() == Some("cc-proxy"))
+            // store so memory and DB stay in sync. One leading `!` over the
+            // whole disjunction (rather than a chain of `!(..) && !(..)`) so
+            // the intent stays "keep everything that is not one of these".
+            !(r.source == "dim"
+                && (dim_migrated && !dim_keep.contains(&r.fingerprint())
+                    // Legacy grok-build dim rows.
+                    || dim_grok_migrated
+                        && r.provider == "grok-build"
+                    // Legacy workbuddy dim rows.
+                    || dim_workbuddy_migrated
+                        && r.provider == "workbuddy"
+                    // Dim cc-proxy run rows: the cc-proxy source meters them.
+                    || dim_cc_proxy_migrated
+                        && r.original_provider.as_deref() == Some("cc-proxy"))
                 // Per-run Ollama Cloud rows the proxy supersedes.
-                && !(ollama_run_purged && crate::sources::ollama_run_record_superseded(r))
+                || ollama_run_purged && crate::sources::ollama_run_record_superseded(r)
                 // Mislabeled zcode anthropic rows.
-                && !(zcode_anthropic_purged
+                || zcode_anthropic_purged
                     && r.source == "zcode"
-                    && r.provider == "anthropic")
+                    && r.provider == "anthropic"
                 // zcode commandcode rows: the cc-proxy source meters them.
-                && !(zcode_commandcode_purged
+                || zcode_commandcode_purged
                     && r.source == "zcode"
                     && r.provider == "commandcode")
         });
@@ -743,10 +745,12 @@ async fn shutdown_signal() {
 mod tests {
     use super::drop_unknown_codex_twins;
     use crate::models::TokenRecord;
+    use std::sync::OnceLock;
 
     fn rec(source: &str, provider: &str, model: &str, time: &str) -> TokenRecord {
         TokenRecord {
             date: time[..10].into(),
+            parsed_time: OnceLock::new(),
             time: time.to_string(),
             api_key_prefix: "N/A".into(),
             provider: provider.into(),

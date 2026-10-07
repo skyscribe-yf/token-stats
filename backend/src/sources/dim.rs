@@ -54,6 +54,7 @@ use super::DataSource;
 use super::OLLAMA_CLOUD_RUN_PROVIDER;
 use crate::models::TokenRecord;
 use chrono::TimeZone;
+use compact_str::CompactString;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -120,7 +121,8 @@ fn cpa_loopback_addrs() -> Vec<String> {
 fn cpa_metered_providers(conn: &rusqlite::Connection) -> HashSet<String> {
     let addrs = cpa_loopback_addrs();
     let mut ids = HashSet::new();
-    let Ok(mut stmt) = conn.prepare("SELECT providerId, baseUrl FROM providers WHERE baseUrl IS NOT NULL")
+    let Ok(mut stmt) =
+        conn.prepare("SELECT providerId, baseUrl FROM providers WHERE baseUrl IS NOT NULL")
     else {
         return ids;
     };
@@ -130,10 +132,10 @@ fn cpa_metered_providers(conn: &rusqlite::Connection) -> HashSet<String> {
         return ids;
     };
     for row in rows.flatten() {
-        if let Some(authority) = url_authority(&row.1) {
-            if addrs.iter().any(|addr| addr == &authority) {
-                ids.insert(row.0);
-            }
+        if let Some(authority) = url_authority(&row.1)
+            && addrs.iter().any(|addr| addr == &authority)
+        {
+            ids.insert(row.0);
         }
     }
     ids
@@ -541,10 +543,8 @@ impl DimSource {
         {
             let mut state = POLL_STATE.lock().unwrap();
             state.last_sync_complete = complete;
-            if complete {
-                if let Some(max_id) = items.iter().map(|it| it.id).max() {
-                    state.last_seen_id = Some(max_id);
-                }
+            if complete && let Some(max_id) = items.iter().map(|it| it.id).max() {
+                state.last_seen_id = Some(max_id);
             }
         }
         if !records.is_empty() {
@@ -572,8 +572,7 @@ impl DimSource {
         if complete {
             let last_seen = POLL_STATE.lock().unwrap().last_seen_id;
             if let Some(id) = last_seen {
-                crate::store::TokenStore::open_default()
-                    .set_sync_watermark(WATERMARK_KEY, id);
+                crate::store::TokenStore::open_default().set_sync_watermark(WATERMARK_KEY, id);
             }
             if from_scratch {
                 POLL_STATE.lock().unwrap().backfill_done = true;
@@ -633,13 +632,13 @@ fn fetch_page(
 /// unknown provider ids can be labeled with their human-readable name.
 fn local_provider_names(conn: &rusqlite::Connection) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT providerId, displayName FROM providers") {
-        if let Ok(rows) = stmt.query_map([], |row| {
+    if let Ok(mut stmt) = conn.prepare("SELECT providerId, displayName FROM providers")
+        && let Ok(rows) = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        }) {
-            for row in rows.flatten() {
-                map.insert(row.0, row.1);
-            }
+        })
+    {
+        for row in rows.flatten() {
+            map.insert(row.0, row.1);
         }
     }
     map
@@ -648,6 +647,9 @@ fn local_provider_names(conn: &rusqlite::Connection) -> HashMap<String, String> 
 /// Map one local `usage_run_stats` row (third-party provider) to a
 /// [`TokenRecord`]. OpenAI cache convention: `inputTokens` includes
 /// `cacheReadTokens` → subtract to get the non-cached input.
+// ponytail: 11 params map 1:1 to the `usage_run_stats` columns; a params struct
+// would churn all 6 call sites for no behaviour change.
+#[allow(clippy::too_many_arguments)]
 fn local_row_to_record(
     provider_id: &str,
     model_id: &str,
@@ -684,7 +686,7 @@ fn local_row_to_record(
     // Keep the raw provider id as original_provider so display_cost() can
     // distinguish this channel (e.g. ollama-cloud subscription billing)
     // from records merged into the same vendor by vendor_merge.toml.
-    let original_provider = Some(provider_id.to_string());
+    let original_provider = Some(CompactString::from(provider_id));
 
     // Exact catalog-computed USD cost (Dim's provider catalog). Stored so
     // display_cost() can fall back to it; ollama-cloud rows are billed with
@@ -696,6 +698,7 @@ fn local_row_to_record(
 
     Some(TokenRecord {
         date: date.into(),
+        parsed_time: OnceLock::new(),
         time,
         api_key_prefix: "N/A".into(),
         provider: provider.into(),
@@ -737,10 +740,11 @@ fn item_to_record(item: &LogItem) -> Option<TokenRecord> {
 
     Some(TokenRecord {
         date: date.into(),
+        parsed_time: OnceLock::new(),
         time,
         api_key_prefix: "N/A".into(),
         provider: "dim".into(),
-        original_provider: Some("dim".to_string()),
+        original_provider: Some("dim".into()),
         model: item.model_name.as_str().into(),
         source: "dim".into(),
         input_tokens: effective_input,
@@ -849,6 +853,8 @@ mod tests {
         ])
     }
 
+    // ponytail: mirrors the SQL column tuple; a type alias would only hide it.
+    #[allow(clippy::type_complexity)]
     fn sample_local_row() -> (
         String,
         String,

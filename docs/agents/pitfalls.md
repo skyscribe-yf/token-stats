@@ -227,3 +227,19 @@
     11:21 之前按 2×、之后按 1×（切换点在桶中间，逐条解出来的），而 09-20 同时段
     确实按忙时收。判据是**同一时段跨日期对比**，不是单桶。
 
+26. **CPA 通道的客户端侧副本必须整条丢弃，不是过滤**（2026-10-07 排障）——
+    CPA 的 usage 插件是唯一逐请求计量点，但 `pi` / `zcode` / `codex` 这些客户端源会把同一次
+    调用**再记一遍**：`pi` 的 `provider='cpa'`（`wb/hy4-preview`、`step/step-5-preview`、
+    `ollama/*`），`zcode` 的 model 带 `ollama/` 前缀（provider 存的是真实通道名
+    `opencode-go`，所以前缀是唯一信号），`codex` 的 `turn_context` 指向 CPA 模型。
+    症状有两条，见到任意一条就往这查：**cost 恒为 0**（前缀名匹配不到 `pricing.toml` 任何
+    `[[model]]`），以及与插件记录**相隔几秒成对出现**（客户端记请求开始、插件记请求完成，
+    实测 `pi`/`dim-agent` 0s、`zcode`/`ollama-proxy` -2s ~ -20s）。
+    修法是解析期 `continue`（`sources/mod.rs` 的 `meters_cpa_channel()`，三个源各自调用并
+    各自计数打 info 日志），**不能**只在前端/聚合层过滤——fingerprint 不同、UI 过滤遮不住
+    双计的 token 与成本。已落库的历史行由
+    `TokenStore::purge_cpa_metered_client_rows()` 在每次 store open 时幂等清除
+    （`CLIENT_SOURCES = ["pi","zcode","codex"]`，**只删客户端源**：插件自己就是权威计量点
+    且天生带前缀，`cc-proxy` 的 `deepseek/deepseek-v4-flash` 必须保留）。
+    2026-10-07 实删 420 行；注意**加新客户端源时必须同步这张表**，否则它的 CPA 行永远
+    清不掉。

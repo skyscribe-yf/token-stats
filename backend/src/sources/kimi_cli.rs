@@ -4,6 +4,7 @@ use chrono::{TimeZone, Utc};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Kimi CLI session source: reads `~/.kimi/sessions/*/wire.jsonl`.
 #[derive(Default)]
@@ -98,60 +99,59 @@ impl KimiCliSource {
                 }
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
                     let message = msg.get("message");
-                    if let Some(message) = message {
-                        if message.get("type").and_then(|t| t.as_str()) == Some("StatusUpdate") {
-                            let payload = message.get("payload");
-                            if let Some(payload) = payload {
-                                let token_usage = payload.get("token_usage");
-                                if let Some(usage) = token_usage {
-                                    let input_other = usage
-                                        .get("input_other")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or(0);
-                                    let output =
-                                        usage.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
-                                    let cache_read = usage
-                                        .get("input_cache_read")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or(0);
-                                    let cache_creation = usage
-                                        .get("input_cache_creation")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or(0);
+                    if let Some(message) = message
+                        && message.get("type").and_then(|t| t.as_str()) == Some("StatusUpdate")
+                    {
+                        let payload = message.get("payload");
+                        if let Some(payload) = payload {
+                            let token_usage = payload.get("token_usage");
+                            if let Some(usage) = token_usage {
+                                let input_other = usage
+                                    .get("input_other")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0);
+                                let output =
+                                    usage.get("output").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let cache_read = usage
+                                    .get("input_cache_read")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0);
+                                let cache_creation = usage
+                                    .get("input_cache_creation")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0);
 
-                                    let timestamp = msg
-                                        .get("timestamp")
-                                        .and_then(|v| v.as_f64())
-                                        .unwrap_or(0.0);
-                                    let secs = timestamp as i64;
-                                    let dt = Utc.timestamp_opt(secs, 0).single();
-                                    let (date, time) = match dt {
-                                        Some(dt) => {
-                                            (dt.format("%Y-%m-%d").to_string(), dt.to_rfc3339())
-                                        }
-                                        None => ("unknown".to_string(), "unknown".to_string()),
-                                    };
+                                let timestamp =
+                                    msg.get("timestamp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let secs = timestamp as i64;
+                                let dt = Utc.timestamp_opt(secs, 0).single();
+                                let (date, time) = match dt {
+                                    Some(dt) => {
+                                        (dt.format("%Y-%m-%d").to_string(), dt.to_rfc3339())
+                                    }
+                                    None => ("unknown".to_string(), "unknown".to_string()),
+                                };
 
-                                    let total = input_other + output + cache_read + cache_creation;
+                                let total = input_other + output + cache_read + cache_creation;
 
-                                    records.push(TokenRecord {
-                                        date: date.into(),
-                                        time,
-                                        api_key_prefix: "N/A".into(),
-                                        provider: "kimi".into(),
-                                        original_provider: None,
-                                        model: model.as_str().into(),
-                                        source: "kimi-cli".into(),
-                                        input_tokens: input_other,
-                                        output_tokens: output,
-                                        cache_read_tokens: cache_read,
-                                        cache_write_tokens: cache_creation,
-                                        total_tokens: total,
-                                        cost: 0.0,
-                                        ttft_ms: None,
-                                        tps: None,
-                                    });
-                                }
+                                records.push(TokenRecord {
+                                    date: date.into(),
+                                    parsed_time: OnceLock::new(),
+                                    time,
+                                    api_key_prefix: "N/A".into(),
+                                    provider: "kimi".into(),
+                                    original_provider: None,
+                                    model: model.as_str().into(),
+                                    source: "kimi-cli".into(),
+                                    input_tokens: input_other,
+                                    output_tokens: output,
+                                    cache_read_tokens: cache_read,
+                                    cache_write_tokens: cache_creation,
+                                    total_tokens: total,
+                                    cost: 0.0,
+                                    ttft_ms: None,
+                                    tps: None,
+                                });
                             }
                         }
                     }
@@ -171,10 +171,10 @@ impl KimiCliSource {
                 if let Some(model) = state.get("model").and_then(|m| m.as_str()) {
                     return model.to_string();
                 }
-                if let Some(config) = state.get("config") {
-                    if let Some(model) = config.get("default_model").and_then(|m| m.as_str()) {
-                        return model.to_string();
-                    }
+                if let Some(config) = state.get("config")
+                    && let Some(model) = config.get("default_model").and_then(|m| m.as_str())
+                {
+                    return model.to_string();
                 }
             }
         }

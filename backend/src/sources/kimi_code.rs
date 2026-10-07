@@ -4,6 +4,7 @@ use chrono::{TimeZone, Utc};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Kimi Code source: reads `~/.kimi-code*/sessions/*/*/agents/*/wire.jsonl`.
 ///
@@ -113,7 +114,7 @@ impl KimiCodeSource {
 
         // Ensure ~/.kimi-code is always included even if the glob missed it.
         let default = home.join(".kimi-code");
-        if !dirs.iter().any(|d| *d == default) {
+        if !dirs.contains(&default) {
             dirs.push(default);
         }
 
@@ -257,6 +258,7 @@ impl KimiCodeSource {
 
                 records.push(TokenRecord {
                     date: date.into(),
+                    parsed_time: OnceLock::new(),
                     time,
                     api_key_prefix: "N/A".into(),
                     provider: provider.into(),

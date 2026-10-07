@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub struct DshSource;
 
@@ -194,6 +195,7 @@ fn parse_session_file(path: &Path) -> Result<Vec<TokenRecord>, Box<dyn std::erro
             + usage.cache_write_tokens;
         records.push(TokenRecord {
             date: compact_str::format_compact!("{}", utc.format("%Y-%m-%d")),
+            parsed_time: OnceLock::new(),
             time: utc.to_rfc3339(),
             api_key_prefix: session_id.as_str().into(),
             provider: provider.into(),

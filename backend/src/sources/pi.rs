@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 /// How far into `usage.jsonl` we have already parsed.
 ///
@@ -20,6 +21,15 @@ struct PiCursor {
 }
 
 static PI_CURSOR: Mutex<Option<PiCursor>> = Mutex::new(None);
+
+/// CPA-routed lines dropped from `usage.jsonl` because the CPA usage plugin
+/// already metered them. Surfaced in the source's log line so a silent drop is
+/// still visible.
+static PI_CPA_DUPLICATES: Mutex<usize> = Mutex::new(0);
+
+fn pi_cpa_duplicates_skipped() -> std::sync::MutexGuard<'static, usize> {
+    PI_CPA_DUPLICATES.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// `(date, provider, model)` triples that `usage.jsonl` already covers,
 /// accumulated across every pass.
@@ -49,6 +59,7 @@ impl DataSource for PiSource {
         tracing::info!("Loading pi data from: {:?}", log_path);
         let (live_records, consumed) = Self::parse_log_from(&log_path, 0);
         tracing::info!("Loaded {} pi live records", live_records.len());
+        Self::report_cpa_duplicates();
 
         // Build a coverage set: if usage.jsonl already has per-call records
         // for a given (UTC date, provider, model), exit summaries for
@@ -99,6 +110,7 @@ impl DataSource for PiSource {
         };
 
         let (live_records, consumed) = Self::parse_log_from(&log_path, start_offset);
+        Self::report_cpa_duplicates();
 
         // Nothing appended and nothing re-read — skip the taskplane scan,
         // matching the old "file unchanged" early-out.
@@ -124,6 +136,18 @@ impl DataSource for PiSource {
 }
 
 impl PiSource {
+    /// Log (once per pass, and only when non-zero) how many CPA-routed lines
+    /// were dropped, so the exclusion stays observable instead of silently
+    /// thinning the series.
+    fn report_cpa_duplicates() {
+        let n = *pi_cpa_duplicates_skipped();
+        if n > 0 {
+            tracing::info!(
+                "pi: skipped {n} CPA-routed record(s) already metered by the CPA usage plugin"
+            );
+        }
+    }
+
     fn log_path() -> PathBuf {
         super::home_dir()
             .join(".pi")
@@ -187,6 +211,16 @@ impl PiSource {
                 if record.source.is_empty() {
                     record.source = "pi".into();
                 }
+                // A CPA-routed call is metered per request by that upstream's
+                // usage plugin (`wb/`→dim-agent, `ollama/`→ollama-proxy,
+                // `step/`→stepfun-proxy). Recording it here too would double
+                // count it, and this copy could never be priced: the model
+                // name keeps the CPA namespace prefix, which no `[[model]]`
+                // entry matches.
+                if super::meters_cpa_channel(&record.provider, &record.model) {
+                    *pi_cpa_duplicates_skipped() += 1;
+                    continue;
+                }
                 records.push(record);
             }
         }
@@ -201,19 +235,18 @@ impl PiSource {
     /// whose triple was covered by `usage.jsonl` lines read on an earlier pass
     /// stays suppressed. On a full re-read (`reset`) the set is rebuilt, since
     /// the previous triples described a different file.
-    fn merge_coverage(
-        records: &[TokenRecord],
-        reset: bool,
-    ) -> HashSet<(String, String, String)> {
-        let mut guard = PI_COVERED
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+    fn merge_coverage(records: &[TokenRecord], reset: bool) -> HashSet<(String, String, String)> {
+        let mut guard = PI_COVERED.lock().unwrap_or_else(|e| e.into_inner());
         let set = guard.get_or_insert_with(HashSet::new);
         if reset {
             set.clear();
         }
         for r in records {
-            set.insert((r.date.to_string(), r.provider.to_string(), r.model.to_string()));
+            set.insert((
+                r.date.to_string(),
+                r.provider.to_string(),
+                r.model.to_string(),
+            ));
         }
         // ~800 distinct triples; cloning is cheaper than holding the lock
         // across the taskplane scan's file I/O.
@@ -362,6 +395,7 @@ impl PiSource {
 
                 records.push(TokenRecord {
                     date: batch_date.as_str().into(),
+                    parsed_time: OnceLock::new(),
                     time: batch_time.clone(),
                     api_key_prefix: format!("runtime:{}", batch_name).into(),
                     provider: provider.into(),
@@ -519,6 +553,7 @@ mod tests {
     fn reset_state() {
         *PI_CURSOR.lock().unwrap() = None;
         *PI_COVERED.lock().unwrap() = None;
+        *PI_CPA_DUPLICATES.lock().unwrap() = 0;
     }
 
     fn in_temp_home<F: FnOnce()>(home: &Path, f: F) {
@@ -552,21 +587,122 @@ mod tests {
         )
     }
 
+    /// A CPA-routed line, exactly as `usage.jsonl` writes it: `provider:"cpa"`
+    /// and the model name carrying the CPA namespace prefix.
+    fn cpa_rec(time: &str, provider: &str, model: &str) -> String {
+        format!(
+            r#"{{"date":"2026-08-30","time":"{time}","apiKeyPrefix":"N/A","provider":"{provider}","model":"{model}","source":"pi","inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":15,"cost":0.0,"ttftMs":null,"tps":null}}"#
+        )
+    }
+
+    #[test]
+    fn cpa_routed_lines_are_not_recorded_twice() {
+        // Regression: each CPA upstream has its own usage plugin that meters
+        // the request (source dim-agent / ollama-proxy / stepfun-proxy). Pi
+        // logging the same call again double-counted tokens and, because the
+        // model name keeps the `wb/` / `ollama/` / `step/` prefix, could never
+        // be priced — it displayed as a permanent ¥0 duplicate row.
+        let home = tempfile::tempdir().unwrap();
+        in_temp_home(home.path(), || {
+            write_log(
+                home.path(),
+                &format!(
+                    "{}\n{}\n{}\n{}\n",
+                    rec("2026-08-30T10:00:00Z"),
+                    cpa_rec("2026-08-30T10:00:01Z", "cpa", "step/step-5-preview"),
+                    cpa_rec("2026-08-30T10:00:02Z", "cpa", "wb/hy4-preview"),
+                    cpa_rec("2026-08-30T10:00:03Z", "cpa", "ollama/deepseek-v4.1-flash"),
+                ),
+            );
+            let records = PiSource.load();
+            assert_eq!(
+                records.len(),
+                1,
+                "only the non-CPA record survives; got {:?}",
+                records.iter().map(|r| &r.model).collect::<Vec<_>>()
+            );
+            assert_eq!(records[0].model, "deepseek-v4-pro");
+            assert_eq!(*PI_CPA_DUPLICATES.lock().unwrap(), 3);
+        });
+    }
+
+    #[test]
+    fn non_cpa_providers_with_prefixed_model_names_are_also_skipped() {
+        // ZCode records CPA traffic under the real channel provider
+        // (`opencode-go`), so the prefix is the only signal there. The shared
+        // predicate must catch it without relying on provider == "cpa".
+        let home = tempfile::tempdir().unwrap();
+        in_temp_home(home.path(), || {
+            write_log(
+                home.path(),
+                &format!(
+                    "{}\n{}\n",
+                    rec("2026-08-30T10:00:00Z"),
+                    cpa_rec(
+                        "2026-08-30T10:00:01Z",
+                        "opencode-go",
+                        "ollama/deepseek-v4.1-flash"
+                    ),
+                ),
+            );
+            assert_eq!(PiSource.load().len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_model_name_merely_containing_a_prefix_is_kept() {
+        // Only a leading `prefix/` marks a CPA namespace; `ollama` without the
+        // slash is a plain provider name and must survive.
+        let home = tempfile::tempdir().unwrap();
+        in_temp_home(home.path(), || {
+            write_log(
+                home.path(),
+                &format!("{}\n", cpa_rec("2026-08-30T10:00:00Z", "ollama", "ollama")),
+            );
+            let records = PiSource.load();
+            assert_eq!(
+                records.len(),
+                1,
+                "provider=ollama, model=ollama is not CPA namespaced"
+            );
+            assert_eq!(records[0].provider, "ollama");
+        });
+    }
+
     #[test]
     fn incremental_reads_only_appended_lines() {
         let home = tempfile::tempdir().unwrap();
         in_temp_home(home.path(), || {
             write_log(
                 home.path(),
-                &format!("{}\n{}\n{}\n", rec("2026-08-30T10:00:00Z"), rec("2026-08-30T10:01:00Z"), rec("2026-08-30T10:02:00Z")),
+                &format!(
+                    "{}\n{}\n{}\n",
+                    rec("2026-08-30T10:00:00Z"),
+                    rec("2026-08-30T10:01:00Z"),
+                    rec("2026-08-30T10:02:00Z")
+                ),
             );
-            assert_eq!(PiSource.load_incremental().len(), 3, "first pass reads all 3");
+            assert_eq!(
+                PiSource.load_incremental().len(),
+                3,
+                "first pass reads all 3"
+            );
 
             let p = log_path(home.path());
             let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
-            write!(f, "{}\n{}\n", rec("2026-08-30T10:03:00Z"), rec("2026-08-30T10:04:00Z")).unwrap();
+            write!(
+                f,
+                "{}\n{}\n",
+                rec("2026-08-30T10:03:00Z"),
+                rec("2026-08-30T10:04:00Z")
+            )
+            .unwrap();
 
-            assert_eq!(PiSource.load_incremental().len(), 2, "second pass reads only the 2 appended lines");
+            assert_eq!(
+                PiSource.load_incremental().len(),
+                2,
+                "second pass reads only the 2 appended lines"
+            );
         });
     }
 
@@ -582,12 +718,20 @@ mod tests {
             let full = rec("2026-08-30T10:01:00Z");
             write!(f, "{}", &full[..50]).unwrap();
 
-            assert_eq!(PiSource.load_incremental().len(), 1, "only the complete line is parsed");
+            assert_eq!(
+                PiSource.load_incremental().len(),
+                1,
+                "only the complete line is parsed"
+            );
 
             // Complete that same line.
             let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
-            write!(f, "{}\n", &full[50..]).unwrap();
-            assert_eq!(PiSource.load_incremental().len(), 1, "completed line parsed exactly once");
+            writeln!(f, "{}", &full[50..]).unwrap();
+            assert_eq!(
+                PiSource.load_incremental().len(),
+                1,
+                "completed line parsed exactly once"
+            );
         });
     }
 
@@ -597,12 +741,20 @@ mod tests {
         in_temp_home(home.path(), || {
             write_log(
                 home.path(),
-                &format!("{}\n{}\n", rec("2026-08-30T10:00:00Z"), rec("2026-08-30T10:01:00Z")),
+                &format!(
+                    "{}\n{}\n",
+                    rec("2026-08-30T10:00:00Z"),
+                    rec("2026-08-30T10:01:00Z")
+                ),
             );
             assert_eq!(PiSource.load_incremental().len(), 2);
             // Truncate to a single line.
             write_log(home.path(), &rec("2026-08-30T10:00:00Z"));
-            assert_eq!(PiSource.load_incremental().len(), 1, "re-reads the single remaining line");
+            assert_eq!(
+                PiSource.load_incremental().len(),
+                1,
+                "re-reads the single remaining line"
+            );
         });
     }
 
@@ -646,7 +798,7 @@ mod tests {
             // exactly as the original code behaved).
             let p = log_path(home.path());
             let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
-            write!(f, "{}\n", rec("2026-08-30T10:05:00Z")).unwrap();
+            writeln!(f, "{}", rec("2026-08-30T10:05:00Z")).unwrap();
 
             // An exit summary with an UNCOVERED triple is picked up on re-scan.
             let rt2 = rt.parent().unwrap().join("agent2");

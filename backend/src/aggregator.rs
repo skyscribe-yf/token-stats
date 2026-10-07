@@ -51,11 +51,11 @@ impl StatAccum {
 
 /// Get the local date string for a record, given an optional timezone offset.
 fn local_date_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> String {
-    if let Some(tz) = tz {
-        if let Some(utc_dt) = record.parsed_time() {
-            let local_dt = utc_dt.with_timezone(tz);
-            return local_dt.format("%Y-%m-%d").to_string();
-        }
+    if let Some(tz) = tz
+        && let Some(utc_dt) = record.parsed_time()
+    {
+        let local_dt = utc_dt.with_timezone(tz);
+        return local_dt.format("%Y-%m-%d").to_string();
     }
     record.date.to_string()
 }
@@ -75,6 +75,40 @@ pub struct FilterCriteria<'a> {
     pub tz: Option<&'a FixedOffset>,
     /// When true (default), exclude zero-token records (e.g. 429 errors).
     pub exclude_zero_tokens: bool,
+}
+
+/// Owned snapshot of a request's filter parameters.
+///
+/// [`FilterCriteria`] borrows every field so the hot aggregation loops never
+/// allocate, but a handler has to hand its filters to a `'static` closure when
+/// the scan runs on the blocking pool — and borrowing a local `String` there
+/// does not satisfy the lifetime. Capturing owned values and rebuilding the
+/// borrowed view inside the closure keeps both properties: zero allocation on
+/// the record path, `'static` closure at the call site.
+#[derive(Debug, Clone, Default)]
+pub struct OwnedFilterCriteria {
+    pub from: Option<TimeBound>,
+    pub to: Option<TimeBound>,
+    pub source: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub tz: Option<FixedOffset>,
+    pub exclude_zero_tokens: bool,
+}
+
+impl OwnedFilterCriteria {
+    /// Borrowing view over `self`, matching [`FilterCriteria`].
+    pub fn criteria(&self) -> FilterCriteria<'_> {
+        FilterCriteria {
+            from: self.from.as_ref(),
+            to: self.to.as_ref(),
+            source: self.source.as_deref(),
+            provider: self.provider.as_deref(),
+            model: self.model.as_deref(),
+            tz: self.tz.as_ref(),
+            exclude_zero_tokens: self.exclude_zero_tokens,
+        }
+    }
 }
 
 /// Whether a record belongs in the aggregates: zero-token records normally mark
@@ -98,7 +132,13 @@ pub fn aggregate_records(
         .iter()
         // Parse each timestamp exactly once, reused by the bound check.
         .filter(|r| {
-            record_matches_bound(r, r.parsed_time().as_ref(), filters.from, filters.to, filters.tz)
+            record_matches_bound(
+                r,
+                r.parsed_time().as_ref(),
+                filters.from,
+                filters.to,
+                filters.tz,
+            )
         })
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
@@ -136,11 +176,12 @@ pub fn filter_records<'a>(
         .iter()
         .filter_map(|r| {
             let parsed = r.parsed_time();
-            let matches = record_matches_bound(r, parsed.as_ref(), filters.from, filters.to, filters.tz)
-                && (providers.is_empty() || providers.contains(&r.provider.as_str()))
-                && (models.is_empty() || models.contains(&r.model.as_str()))
-                && (sources.is_empty() || sources.contains(&r.source.as_str()))
-                && (!filters.exclude_zero_tokens || counts_in_stats(r));
+            let matches =
+                record_matches_bound(r, parsed.as_ref(), filters.from, filters.to, filters.tz)
+                    && (providers.is_empty() || providers.contains(&r.provider.as_str()))
+                    && (models.is_empty() || models.contains(&r.model.as_str()))
+                    && (sources.is_empty() || sources.contains(&r.source.as_str()))
+                    && (!filters.exclude_zero_tokens || counts_in_stats(r));
             matches.then_some((parsed, r))
         })
         .collect();
@@ -175,8 +216,13 @@ pub fn filter_records_unsorted<'a>(
     records
         .iter()
         .filter(|r| {
-            record_matches_bound(r, r.parsed_time().as_ref(), filters.from, filters.to, filters.tz)
-                && (providers.is_empty() || providers.contains(&r.provider.as_str()))
+            record_matches_bound(
+                r,
+                r.parsed_time().as_ref(),
+                filters.from,
+                filters.to,
+                filters.tz,
+            ) && (providers.is_empty() || providers.contains(&r.provider.as_str()))
                 && (models.is_empty() || models.contains(&r.model.as_str()))
                 && (sources.is_empty() || sources.contains(&r.source.as_str()))
                 && (!filters.exclude_zero_tokens || counts_in_stats(r))
@@ -363,18 +409,21 @@ fn compute_vendor_stats<'a>(
     for r in records {
         // Borrow the provider string from the record instead of cloning it for
         // every record — the clone only happens once per distinct provider below.
-        map.entry(r.provider.as_str()).or_default().accumulate(ps, r);
-        if let Some(ttft) = r.ttft_ms {
-            if ttft > 0.0 {
-                ttft_map.entry(r.provider.as_str()).or_default().push(ttft);
-            }
+        map.entry(r.provider.as_str())
+            .or_default()
+            .accumulate(ps, r);
+        if let Some(ttft) = r.ttft_ms
+            && ttft > 0.0
+        {
+            ttft_map.entry(r.provider.as_str()).or_default().push(ttft);
         }
-        if let Some(tps) = r.tps {
-            if tps > 0.0 && r.output_tokens > 0 {
-                let entry = tps_map.entry(r.provider.as_str()).or_default();
-                entry.0 += r.output_tokens;
-                entry.1 += r.output_tokens as f64 / tps;
-            }
+        if let Some(tps) = r.tps
+            && tps > 0.0
+            && r.output_tokens > 0
+        {
+            let entry = tps_map.entry(r.provider.as_str()).or_default();
+            entry.0 += r.output_tokens;
+            entry.1 += r.output_tokens as f64 / tps;
         }
     }
 
@@ -646,24 +695,25 @@ fn compute_model_stats<'a>(
                 .or_default()
                 .push(minute);
         }
-        if let Some(ttft) = r.ttft_ms {
-            if ttft > 0.0 {
-                agg.ttft_values.push(ttft);
-                agg.source_ttft
-                    .entry(r.source.as_str())
-                    .or_default()
-                    .push(ttft);
-            }
+        if let Some(ttft) = r.ttft_ms
+            && ttft > 0.0
+        {
+            agg.ttft_values.push(ttft);
+            agg.source_ttft
+                .entry(r.source.as_str())
+                .or_default()
+                .push(ttft);
         }
-        if let Some(tps) = r.tps {
-            if tps > 0.0 && r.output_tokens > 0 {
-                let dur = r.output_tokens as f64 / tps;
-                agg.tps_data.0 += r.output_tokens;
-                agg.tps_data.1 += dur;
-                let entry = agg.source_tps_data.entry(r.source.as_str()).or_default();
-                entry.0 += r.output_tokens;
-                entry.1 += dur;
-            }
+        if let Some(tps) = r.tps
+            && tps > 0.0
+            && r.output_tokens > 0
+        {
+            let dur = r.output_tokens as f64 / tps;
+            agg.tps_data.0 += r.output_tokens;
+            agg.tps_data.1 += dur;
+            let entry = agg.source_tps_data.entry(r.source.as_str()).or_default();
+            entry.0 += r.output_tokens;
+            entry.1 += dur;
         }
     }
 
@@ -795,8 +845,7 @@ fn minute_index_for_record(record: &TokenRecord, tz: Option<&FixedOffset>) -> Op
 
 /// Format a minute index back to the "YYYY-MM-DD HH:MM" display string in UTC.
 fn format_minute_index(idx: i64) -> String {
-    let dt = chrono::DateTime::from_timestamp(idx * 60, 0)
-        .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
+    let dt = chrono::DateTime::from_timestamp(idx * 60, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
     let dt = dt.with_timezone(&chrono::Utc);
     format!(
         "{} {:02}:{:02}",
@@ -826,13 +875,22 @@ pub fn compute_rpm_analysis(
     records: &[TokenRecord],
     filters: &FilterCriteria,
     gap_threshold_minutes: i64,
+    max_points: usize,
 ) -> RpmAnalysis {
     let sources = parse_csv_filter(filters.source);
     let providers = parse_csv_filter(filters.provider);
     let models = parse_csv_filter(filters.model);
     let filtered: Vec<&TokenRecord> = records
         .iter()
-        .filter(|r| record_matches_bound(r, r.parsed_time().as_ref(), filters.from, filters.to, filters.tz))
+        .filter(|r| {
+            record_matches_bound(
+                r,
+                r.parsed_time().as_ref(),
+                filters.from,
+                filters.to,
+                filters.tz,
+            )
+        })
         .filter(|r| sources.is_empty() || sources.contains(&r.source.as_str()))
         .filter(|r| providers.is_empty() || providers.contains(&r.provider.as_str()))
         .filter(|r| models.is_empty() || models.contains(&r.model.as_str()))
@@ -885,20 +943,7 @@ pub fn compute_rpm_analysis(
     }
 
     // 4. Build the full all_buckets list (filling in zero-request minutes within windows)
-    let mut all_buckets: Vec<MinuteBucket> = Vec::new();
-    for w in &windows {
-        let start_idx = parse_minute_key(&w.start)
-            .map(|dt| dt.and_utc().timestamp() / 60)
-            .unwrap_or(0);
-        let end_idx = parse_minute_key(&w.end)
-            .map(|dt| dt.and_utc().timestamp() / 60)
-            .unwrap_or(0);
-        for idx in start_idx..=end_idx {
-            let minute = format_minute_index(idx);
-            let requests = minute_map.get(&idx).copied().unwrap_or(0);
-            all_buckets.push(MinuteBucket { minute, requests });
-        }
-    }
+    let all_buckets = build_minute_buckets(&windows, &minute_map, max_points);
 
     // 5. Compute overall stats
     let total_requests: i64 = windows.iter().map(|w| w.total_requests).sum();
@@ -918,6 +963,72 @@ pub fn compute_rpm_analysis(
         total_active_minutes,
         gap_threshold_minutes,
     }
+}
+
+/// Build the chart series: every minute inside each window, zero-filled so
+/// the line stays continuous across quiet stretches within a window.
+///
+/// `max_points` caps the emitted rows. At the default range this never
+/// triggers, but a full-history `/api/rpm` spans ~120k active minutes, and
+/// shipping one bucket per minute made the response several MB for a chart
+/// that renders ~1200 points. Buckets past the cap are averaged into
+/// `stride`-minute groups so the y-axis keeps meaning "requests / minute"
+/// (a plain decimation would instead read as a spike of unrelated height).
+fn build_minute_buckets(
+    windows: &[ActiveWindow],
+    minute_map: &HashMap<i64, i64>,
+    max_points: usize,
+) -> Vec<MinuteBucket> {
+    let mut spans: Vec<(i64, i64)> = Vec::with_capacity(windows.len());
+    for w in windows {
+        let start = parse_minute_key(&w.start).map(|dt| dt.and_utc().timestamp() / 60);
+        let end = parse_minute_key(&w.end).map(|dt| dt.and_utc().timestamp() / 60);
+        if let (Some(s), Some(e)) = (start, end) {
+            spans.push((s, e));
+        }
+    }
+    let total_minutes: i64 = spans.iter().map(|(s, e)| e - s + 1).sum();
+    if total_minutes <= 0 {
+        return Vec::new();
+    }
+
+    let max_points = max_points.max(1) as i64;
+    let stride = ((total_minutes + max_points - 1) / max_points).max(1);
+    if stride == 1 {
+        // Uncapped path: exactly one bucket per minute, no averaging.
+        let mut out = Vec::with_capacity(total_minutes as usize);
+        for (start, end) in spans {
+            for idx in start..=end {
+                out.push(MinuteBucket {
+                    minute: format_minute_index(idx),
+                    requests: minute_map.get(&idx).copied().unwrap_or(0),
+                });
+            }
+        }
+        return out;
+    }
+
+    // Aggregated path: window-relative averaging so quiet gaps inside a window
+    // keep dragging the average down, exactly as the bucketed front-end chart
+    // does today.
+    let mut out = Vec::new();
+    for (start, end) in spans {
+        let mut idx = start;
+        while idx <= end {
+            let group_end = (idx + stride - 1).min(end);
+            let count = group_end - idx + 1;
+            let sum: i64 = (idx..=group_end)
+                .map(|i| minute_map.get(&i).copied().unwrap_or(0))
+                .sum();
+            out.push(MinuteBucket {
+                minute: format_minute_index(idx),
+                // Mean over the group keeps the axis in "requests per minute".
+                requests: sum / count,
+            });
+            idx = group_end + 1;
+        }
+    }
+    out
 }
 
 /// Build an ActiveWindow from a slice of sorted minute indices that belong together.
@@ -1001,50 +1112,50 @@ pub fn compute_tps_analysis(
             continue;
         }
 
-        if let Some(tps) = r.tps {
-            if tps > 0.0 && r.output_tokens > 0 {
-                let duration_secs = r.output_tokens as f64 / tps;
+        if let Some(tps) = r.tps
+            && tps > 0.0
+            && r.output_tokens > 0
+        {
+            let duration_secs = r.output_tokens as f64 / tps;
 
-                if let Some(start_utc) = r.parsed_time() {
-                    let start_local = if let Some(tz) = filters.tz {
-                        start_utc.with_timezone(tz)
-                    } else {
-                        start_utc.fixed_offset()
-                    };
-                    let end_local = start_local
-                        + Duration::try_milliseconds((duration_secs * 1000.0).ceil() as i64)
-                            .unwrap_or(Duration::default());
+            if let Some(start_utc) = r.parsed_time() {
+                let start_local = if let Some(tz) = filters.tz {
+                    start_utc.with_timezone(tz)
+                } else {
+                    start_utc.fixed_offset()
+                };
+                let end_local = start_local
+                    + Duration::try_milliseconds((duration_secs * 1000.0).ceil() as i64)
+                        .unwrap_or_default();
 
-                    let entry_key = (r.provider.clone(), r.model.clone());
-                    let buckets = minute_buckets.entry(entry_key).or_default();
+                let entry_key = (r.provider.clone(), r.model.clone());
+                let buckets = minute_buckets.entry(entry_key).or_default();
 
-                    let mut cursor = start_local
-                        .with_second(0)
-                        .and_then(|d| d.with_nanosecond(0))
-                        .unwrap_or(start_local);
+                let mut cursor = start_local
+                    .with_second(0)
+                    .and_then(|d| d.with_nanosecond(0))
+                    .unwrap_or(start_local);
 
-                    while cursor < end_local {
-                        let bucket_end = (cursor
-                            + Duration::try_seconds(60).unwrap_or(Duration::default()))
-                        .min(end_local);
-                        let effective_start = cursor.max(start_local);
-                        let overlap_secs =
-                            (bucket_end - effective_start).num_milliseconds() as f64 / 1000.0;
+                while cursor < end_local {
+                    let bucket_end =
+                        (cursor + Duration::try_seconds(60).unwrap_or_default()).min(end_local);
+                    let effective_start = cursor.max(start_local);
+                    let overlap_secs =
+                        (bucket_end - effective_start).num_milliseconds() as f64 / 1000.0;
 
-                        if overlap_secs > 0.0 {
-                            let sec_start =
-                                (effective_start - cursor).num_milliseconds() as f64 / 1000.0;
-                            let sec_end = (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
-                            let bucket = buckets.entry(cursor).or_insert_with(|| MinuteBucket {
-                                tokens: 0.0,
-                                intervals: Vec::new(),
-                            });
-                            bucket.tokens += tps * overlap_secs;
-                            bucket.intervals.push((sec_start, sec_end));
-                        }
-
-                        cursor += Duration::try_seconds(60).unwrap_or(Duration::default());
+                    if overlap_secs > 0.0 {
+                        let sec_start =
+                            (effective_start - cursor).num_milliseconds() as f64 / 1000.0;
+                        let sec_end = (bucket_end - cursor).num_milliseconds() as f64 / 1000.0;
+                        let bucket = buckets.entry(cursor).or_insert_with(|| MinuteBucket {
+                            tokens: 0.0,
+                            intervals: Vec::new(),
+                        });
+                        bucket.tokens += tps * overlap_secs;
+                        bucket.intervals.push((sec_start, sec_end));
                     }
+
+                    cursor += Duration::try_seconds(60).unwrap_or_default();
                 }
             }
         }
@@ -1065,11 +1176,11 @@ pub fn compute_tps_analysis(
                     intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                     let mut merged: Vec<(f64, f64)> = Vec::new();
                     for (start, end) in intervals {
-                        if let Some(last) = merged.last_mut() {
-                            if start <= last.1 {
-                                last.1 = last.1.max(end);
-                                continue;
-                            }
+                        if let Some(last) = merged.last_mut()
+                            && start <= last.1
+                        {
+                            last.1 = last.1.max(end);
+                            continue;
                         }
                         merged.push((start, end));
                     }
@@ -1077,7 +1188,7 @@ pub fn compute_tps_analysis(
                     (cursor, bucket.tokens, active_secs)
                 })
                 .collect();
-            resolved.sort_by(|a, b| a.0.cmp(&b.0));
+            resolved.sort_by_key(|a| a.0);
 
             // Compute 5-minute rolling active-period TPS with a sliding window.
             // resolved is sorted by cursor, so we advance the window start
@@ -1143,6 +1254,7 @@ pub fn compute_tps_analysis(
 mod tests {
     use super::*;
     use chrono::{NaiveDate, NaiveDateTime};
+    use std::sync::OnceLock;
 
     fn record(
         source: &str,
@@ -1153,6 +1265,7 @@ mod tests {
     ) -> TokenRecord {
         TokenRecord {
             date: time[..10].into(),
+            parsed_time: OnceLock::new(),
             time: time.to_string(),
             api_key_prefix: "test".into(),
             provider: provider.into(),
@@ -1343,6 +1456,7 @@ mod tests {
     ) -> TokenRecord {
         TokenRecord {
             date: time[..10].into(),
+            parsed_time: OnceLock::new(),
             time: time.to_string(),
             api_key_prefix: "test".into(),
             provider: provider.into(),
@@ -1514,7 +1628,7 @@ mod tests {
 
     #[test]
     fn grok_records_are_included_in_paginated_requests() {
-        let records = vec![
+        let records = [
             record("grok-cli", "xai", "grok-4.5", "2026-07-11T10:00:00Z", 10),
             record("pi", "openai", "gpt-5.5", "2026-07-11T11:00:00Z", 10),
         ];
@@ -1533,7 +1647,13 @@ mod tests {
         let mut records: Vec<TokenRecord> = (0..6000)
             .map(|i| {
                 let t = format!("2026-07-11T12:{:02}:00Z", 10 + i / 250); // 12:10..12:34, 250 records/minute
-                record("pi", if i % 2 == 0 { "openai" } else { "deepseek" }, "gpt-5.5", &t, 10)
+                record(
+                    "pi",
+                    if i % 2 == 0 { "openai" } else { "deepseek" },
+                    "gpt-5.5",
+                    &t,
+                    10,
+                )
             })
             .collect();
         // Scramble, as the real store ordering is append-only, not time-sorted.
@@ -1577,5 +1697,118 @@ mod tests {
             .unwrap()
             .and_hms_opt(hour, minute, second)
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod minute_bucket_tests {
+    use super::*;
+
+    fn window(start: &str, end: &str) -> ActiveWindow {
+        ActiveWindow {
+            start: start.to_string(),
+            end: end.to_string(),
+            duration_minutes: 3,
+            total_requests: 0,
+            avg_rpm: 0.0,
+            peak_rpm: 0,
+        }
+    }
+
+    /// Minute-key for "2026-01-01 00:MM" in UTC, matching how
+    /// `compute_rpm_analysis` builds `minute_map`.
+    fn key_at(minute: i64) -> i64 {
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, minute as u32, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+            / 60
+    }
+
+    fn rows(out: &[MinuteBucket]) -> Vec<(&str, i64)> {
+        out.iter()
+            .map(|b| (b.minute.as_str(), b.requests))
+            .collect()
+    }
+
+    /// The uncapped path must be byte-for-byte what it always was: one row per
+    /// minute, zero-filled, in window order.
+    #[test]
+    fn uncapped_path_emits_every_minute() {
+        let mm = [(key_at(0), 2), (key_at(2), 5)].into_iter().collect();
+        let out =
+            build_minute_buckets(&[window("2026-01-01 00:00", "2026-01-01 00:02")], &mm, 1200);
+        assert_eq!(
+            rows(&out),
+            vec![
+                ("2026-01-01 00:00", 2),
+                ("2026-01-01 00:01", 0),
+                ("2026-01-01 00:02", 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn stride_averages_groups_and_keeps_the_per_minute_scale() {
+        // 8 minutes, 2 requests each. stride=4 => two buckets of mean 2, not
+        // 8 - the y-axis must keep reading "requests per minute".
+        let mm: HashMap<i64, i64> = (0..8).map(|m| (key_at(m), 2)).collect();
+        let out = build_minute_buckets(&[window("2026-01-01 00:00", "2026-01-01 00:07")], &mm, 2);
+        assert_eq!(out.len(), 2, "max_points=2 should halve 8 minutes");
+        assert_eq!(out[0].requests, 2);
+        assert_eq!(out[1].requests, 2);
+        assert_eq!(
+            out[0].minute, "2026-01-01 00:00",
+            "group label is its first minute"
+        );
+        assert_eq!(out[1].minute, "2026-01-01 00:04");
+    }
+
+    #[test]
+    fn stride_includes_quiet_minutes_in_the_average() {
+        // 4 minutes, requests only in the first. Averaging over the whole group
+        // must dilute to 1, not report 4 (a plain decimation would lie here).
+        let mm = [(key_at(0), 4)].into_iter().collect();
+        let out = build_minute_buckets(&[window("2026-01-01 00:00", "2026-01-01 00:03")], &mm, 1);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].requests, 1, "(4 requests / 4 minutes) = 1/min");
+    }
+
+    #[test]
+    fn stride_never_spans_windows() {
+        // Two separate windows must not be averaged into one bucket: the gap
+        // between them is not part of either active window.
+        let mm = [(key_at(0), 10), (key_at(20), 10)].into_iter().collect();
+        let out = build_minute_buckets(
+            &[
+                window("2026-01-01 00:00", "2026-01-01 00:00"),
+                window("2026-01-01 00:20", "2026-01-01 00:20"),
+            ],
+            &mm,
+            1,
+        );
+        assert_eq!(out.len(), 2, "each window keeps its own buckets");
+        assert_eq!(out[0].requests, 10);
+        assert_eq!(out[1].requests, 10);
+    }
+
+    #[test]
+    fn empty_windows_emit_nothing() {
+        let mm = [(key_at(0), 1)].into_iter().collect();
+        assert!(build_minute_buckets(&[], &mm, 1200).is_empty());
+    }
+
+    #[test]
+    fn max_points_is_clamped_not_panicked() {
+        // Zero would divide by zero; the handler clamps, but keep the helper
+        // safe on its own too.
+        let mm = [(key_at(0), 3), (key_at(1), 3)].into_iter().collect();
+        let out = build_minute_buckets(&[window("2026-01-01 00:00", "2026-01-01 00:01")], &mm, 0);
+        // No panic, no empty series; the mean over a 2-minute group is 3/min,
+        // so the emitted series is that single averaged bucket.
+        assert!(!out.is_empty());
+        assert_eq!(out[0].requests, 3);
     }
 }

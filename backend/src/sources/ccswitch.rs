@@ -3,6 +3,7 @@ use crate::models::TokenRecord;
 use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Legacy ccswitch source: reads `~/.cc-switch/cc-switch.db` (SQLite).
 ///
@@ -237,6 +238,7 @@ impl CcSwitchSource {
 
                     records.push(TokenRecord {
                         date: date.into(),
+                        parsed_time: OnceLock::new(),
                         time,
                         api_key_prefix: "N/A".into(),
                         provider: provider.into(),

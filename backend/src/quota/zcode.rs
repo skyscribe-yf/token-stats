@@ -78,8 +78,7 @@ impl QuotaEnvelope {
     /// Mirror the ZCode app's envelope check:
     /// `success !== false && (code == null || code === 0 || code === 200)`.
     fn is_success(&self) -> bool {
-        self.success != Some(false)
-            && matches!(self.code, None | Some(0) | Some(200))
+        self.success != Some(false) && matches!(self.code, None | Some(0) | Some(200))
     }
 }
 
@@ -158,10 +157,7 @@ struct RawSubscription {
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 /// Fetch ZCode (BigModel GLM coding plan) quota plus local usage aggregation.
-pub async fn fetch_zcode_quota(
-    client: &Client,
-    zcode_records: &[TokenRecord],
-) -> ZcodeQuotaStatus {
+pub async fn fetch_zcode_quota(client: &Client, zcode_records: &[TokenRecord]) -> ZcodeQuotaStatus {
     let local = LocalUsage::from_records(zcode_records);
 
     // 1. Credentials — without a key the remote half cannot work, but the
@@ -261,11 +257,15 @@ fn start_plan_grant_env_set() -> bool {
 
 // ─── Remote fetching ─────────────────────────────────────────────────────────
 
-async fn fetch_remote_cached(client: &Client, key: &str, quota_url: &str) -> Result<RemoteSnapshot, String> {
-    if let Some((at, snap)) = cache().lock().ok().and_then(|guard| guard.clone()) {
-        if at.elapsed() < Duration::from_secs(CACHE_TTL_SECS) {
-            return Ok(snap);
-        }
+async fn fetch_remote_cached(
+    client: &Client,
+    key: &str,
+    quota_url: &str,
+) -> Result<RemoteSnapshot, String> {
+    if let Some((at, snap)) = cache().lock().ok().and_then(|guard| guard.clone())
+        && at.elapsed() < Duration::from_secs(CACHE_TTL_SECS)
+    {
+        return Ok(snap);
     }
 
     let snap = fetch_remote(client, key, quota_url).await?;
@@ -275,7 +275,11 @@ async fn fetch_remote_cached(client: &Client, key: &str, quota_url: &str) -> Res
     Ok(snap)
 }
 
-async fn fetch_remote(client: &Client, key: &str, quota_url: &str) -> Result<RemoteSnapshot, String> {
+async fn fetch_remote(
+    client: &Client,
+    key: &str,
+    quota_url: &str,
+) -> Result<RemoteSnapshot, String> {
     let (level, limits) = fetch_quota_limits(client, key, quota_url).await?;
     // Subscription info is a nice-to-have; failure must not sink the card.
     let subscription = match fetch_subscription(client, key).await {
@@ -366,7 +370,10 @@ async fn fetch_quota_limits(
 }
 
 /// GET the subscription list and pick the current-term entry.
-async fn fetch_subscription(client: &Client, key: &str) -> Result<Option<ZcodeSubscription>, String> {
+async fn fetch_subscription(
+    client: &Client,
+    key: &str,
+) -> Result<Option<ZcodeSubscription>, String> {
     let resp = client
         .get(SUBSCRIPTION_URL)
         .header("Authorization", key)
@@ -428,9 +435,7 @@ fn resolve_credentials() -> Result<(String, String), String> {
 fn key_from_config() -> Result<String, String> {
     let path = std::env::var("ZCODE_CONFIG_PATH")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs_or_home().join(".zcode").join("v2").join("config.json")
-        });
+        .unwrap_or_else(|_| dirs_or_home().join(".zcode").join("v2").join("config.json"));
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("ZCode 配置读取失败 ({}): {e}", path.display()))?;
     let cfg: serde_json::Value =
@@ -443,7 +448,9 @@ fn key_from_config() -> Result<String, String> {
         .and_then(|k| k.as_str())
         .map(str::trim)
         .filter(|k| !k.is_empty())
-        .ok_or_else(|| format!("ZCode 配置中未找到 {PROVIDER_ID} 的 apiKey（应用需登录过 BigModel 编码套餐）"))?;
+        .ok_or_else(|| {
+            format!("ZCode 配置中未找到 {PROVIDER_ID} 的 apiKey（应用需登录过 BigModel 编码套餐）")
+        })?;
     Ok(key.to_string())
 }
 
@@ -470,7 +477,7 @@ fn epoch_ms_to_rfc3339(ms: f64) -> Option<String> {
 /// colons, so splitting on `-` and re-joining each half works.
 fn valid_range_end(valid: &str) -> Option<String> {
     let parts: Vec<&str> = valid.split('-').collect();
-    if parts.len() < 2 || parts.len() % 2 != 0 {
+    if parts.len() < 2 || !parts.len().is_multiple_of(2) {
         return None;
     }
     let half = parts.len() / 2;
@@ -594,9 +601,10 @@ mod tests {
 
     #[test]
     fn envelope_failure_shapes() {
-        let no_plan: QuotaEnvelope =
-            serde_json::from_str(r#"{"code":500,"msg":"当前用户不存在coding plan","success":false}"#)
-                .unwrap();
+        let no_plan: QuotaEnvelope = serde_json::from_str(
+            r#"{"code":500,"msg":"当前用户不存在coding plan","success":false}"#,
+        )
+        .unwrap();
         assert!(!no_plan.is_success());
         let msg = no_plan.msg.unwrap();
         assert!(msg.contains("不存在coding plan"));
@@ -651,6 +659,7 @@ mod tests {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let mk = |date: &str, input: i64, output: i64| TokenRecord {
             date: date.into(),
+            parsed_time: OnceLock::new(),
             time: format!("{date}T00:00:00Z"),
             api_key_prefix: "N/A".into(),
             provider: "bigmodel".into(),
@@ -683,6 +692,7 @@ mod tests {
     fn local_usage_splits_trial_grant_from_paid_plan() {
         let mk = |provider: &str, input: i64, output: i64| TokenRecord {
             date: "2026-09-13".into(),
+            parsed_time: OnceLock::new(),
             time: "2026-09-13T01:00:00Z".to_string(),
             api_key_prefix: "N/A".into(),
             provider: provider.into(),
@@ -712,7 +722,9 @@ mod tests {
 
         temp_env::with_var("ZCODE_START_PLAN_TOTAL_TOKENS", None::<&str>, || {
             let data = build_data(None, &usage, None);
-            let sp = data.start_plan.expect("trial traffic must surface start_plan");
+            let sp = data
+                .start_plan
+                .expect("trial traffic must surface start_plan");
             assert_eq!(sp.grant_tokens, DEFAULT_START_PLAN_GRANT_TOKENS);
             assert_eq!(sp.used_tokens, 1750);
             assert_eq!(sp.remaining_tokens, DEFAULT_START_PLAN_GRANT_TOKENS - 1750);
@@ -755,12 +767,16 @@ mod tests {
             ),
         )
         .unwrap();
-        temp_env::with_var("ZCODE_CONFIG_PATH", Some(cfg_path.to_str().unwrap()), || {
-            temp_env::with_var("ZCODE_BIGMODEL_USAGE_API_KEY", None::<&str>, || {
-                let (key, _) = resolve_credentials().unwrap();
-                assert_eq!(key, "cfg-key-123");
-            });
-        });
+        temp_env::with_var(
+            "ZCODE_CONFIG_PATH",
+            Some(cfg_path.to_str().unwrap()),
+            || {
+                temp_env::with_var("ZCODE_BIGMODEL_USAGE_API_KEY", None::<&str>, || {
+                    let (key, _) = resolve_credentials().unwrap();
+                    assert_eq!(key, "cfg-key-123");
+                });
+            },
+        );
     }
 
     #[test]
@@ -768,10 +784,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg_path = dir.path().join("config.json");
         std::fs::write(&cfg_path, r#"{"provider":{}}"#).unwrap();
-        temp_env::with_var("ZCODE_CONFIG_PATH", Some(cfg_path.to_str().unwrap()), || {
-            temp_env::with_var("ZCODE_BIGMODEL_USAGE_API_KEY", None::<&str>, || {
-                assert!(resolve_credentials().is_err());
-            });
-        });
+        temp_env::with_var(
+            "ZCODE_CONFIG_PATH",
+            Some(cfg_path.to_str().unwrap()),
+            || {
+                temp_env::with_var("ZCODE_BIGMODEL_USAGE_API_KEY", None::<&str>, || {
+                    assert!(resolve_credentials().is_err());
+                });
+            },
+        );
     }
 }

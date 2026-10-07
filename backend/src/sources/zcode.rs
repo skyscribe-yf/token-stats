@@ -3,6 +3,7 @@ use crate::models::TokenRecord;
 use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// ZCode source: reads `~/.zcode/cli/db/db.sqlite` (SQLite) `model_usage` table.
 ///
@@ -139,22 +140,20 @@ fn billing_provider_map(conn: &rusqlite::Connection) -> HashMap<String, String> 
     let mut map = HashMap::new();
     let sql = "SELECT provider_id, provider_metadata_json FROM model_usage
                WHERE provider_metadata_json IS NOT NULL AND provider_metadata_json != ''";
-    if let Ok(mut stmt) = conn.prepare(sql) {
-        if let Ok(rows) = stmt.query_map([], |row| {
+    if let Ok(mut stmt) = conn.prepare(sql)
+        && let Ok(rows) = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        }) {
-            for row in rows.flatten() {
-                let (pid, meta) = row;
-                if let Ok(serde_json::Value::Object(fields)) =
-                    serde_json::from_str::<serde_json::Value>(&meta)
-                {
-                    for key in fields.keys() {
-                        if !ADAPTER_METADATA_KEYS.contains(&key.as_str())
-                            && key != "rawFinishReason"
-                        {
-                            map.entry(pid.clone())
-                                .or_insert_with(|| normalize_billing_provider(key));
-                        }
+        })
+    {
+        for row in rows.flatten() {
+            let (pid, meta) = row;
+            if let Ok(serde_json::Value::Object(fields)) =
+                serde_json::from_str::<serde_json::Value>(&meta)
+            {
+                for key in fields.keys() {
+                    if !ADAPTER_METADATA_KEYS.contains(&key.as_str()) && key != "rawFinishReason" {
+                        map.entry(pid.clone())
+                            .or_insert_with(|| normalize_billing_provider(key));
                     }
                 }
             }
@@ -183,10 +182,7 @@ impl ZcodeSource {
     /// `cc_proxy_metering` = the loopback cc-proxy is writing its per-request
     /// usage log, which makes the `commandcode` channel rows duplicates.
     /// Split out so tests control that ambient condition.
-    fn parse_with_cc_proxy(
-        path: &std::path::Path,
-        cc_proxy_metering: bool,
-    ) -> Vec<TokenRecord> {
+    fn parse_with_cc_proxy(path: &std::path::Path, cc_proxy_metering: bool) -> Vec<TokenRecord> {
         if !path.exists() {
             tracing::warn!("ZCode DB not found at {:?}, skipping", path);
             return Vec::new();
@@ -232,6 +228,7 @@ impl ZcodeSource {
             &[]
         };
         let mut skipped_proxy = 0usize;
+        let mut skipped_cpa = 0usize;
         let mut records = Vec::new();
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -275,6 +272,17 @@ impl ZcodeSource {
                         continue;
                     }
 
+                    // ZCode stores CPA-routed calls under their real channel
+                    // provider, so the namespace prefix on the model name is
+                    // the only tell. The CPA usage plugin already meters these
+                    // per request; this row is the same call a few seconds
+                    // later (start vs. completion timestamp) with a model
+                    // name that no price entry can match.
+                    if super::meters_cpa_channel(&provider_id, &model_id) {
+                        skipped_cpa += 1;
+                        continue;
+                    }
+
                     // OpenAI convention: input_tokens includes cache reads and
                     // cache creations; subtract to match the Anthropic convention.
                     let effective_input = (input_tokens - cache_read - cache_creation).max(0);
@@ -297,6 +305,7 @@ impl ZcodeSource {
 
                     records.push(TokenRecord {
                         date: date.into(),
+                        parsed_time: OnceLock::new(),
                         time,
                         api_key_prefix: "N/A".into(),
                         provider: provider.into(),
@@ -325,6 +334,13 @@ impl ZcodeSource {
                 "ZCode: skipped {skipped_proxy} row(s) on proxy-metered channel(s) {:?} \
                  (already recorded per request by their own source)",
                 PROXY_METERED_PROVIDERS
+            );
+        }
+
+        if skipped_cpa > 0 {
+            tracing::info!(
+                "ZCode: skipped {skipped_cpa} row(s) whose model name carries a CPA namespace \
+                 prefix (already metered per request by the CPA usage plugin)"
             );
         }
 
@@ -499,7 +515,12 @@ mod tests {
         .unwrap();
         for (id, pid, model, meta) in [
             ("a", "p-1", "deepseek-v4-flash", "{\"OpenCodeGo\":{}}"),
-            ("b", "p-1", "deepseek-v4-flash", "{\"rawFinishReason\":\"tool_calls\"}"),
+            (
+                "b",
+                "p-1",
+                "deepseek-v4-flash",
+                "{\"rawFinishReason\":\"tool_calls\"}",
+            ),
             ("c", "p-2", "z-ai/glm-5.3-free", "{\"Tokenrouter\":{}}"),
             ("d", "p-2", "z-ai/glm-5.3-free", ""),
             ("e", "p-3", "some-model", "{\"rawFinishReason\":\"stop\"}"),
@@ -519,8 +540,10 @@ mod tests {
         drop(conn);
 
         let records = ZcodeSource::parse(&db_path);
-        let by_id: std::collections::HashMap<_, _> =
-            records.iter().map(|r| (r.model.clone(), r.provider.clone())).collect();
+        let by_id: std::collections::HashMap<_, _> = records
+            .iter()
+            .map(|r| (r.model.clone(), r.provider.clone()))
+            .collect();
         assert_eq!(by_id["deepseek-v4-flash"], "opencode-go");
         assert_eq!(by_id["z-ai/glm-5.3-free"], "tokenrouter");
         // Provider with no billing metadata keeps the historical default.
@@ -577,7 +600,10 @@ mod tests {
         let records = ZcodeSource::parse(&db_path);
         assert_eq!(records.len(), 3);
         for r in &records {
-            assert_eq!(r.provider, "bigmodel", "anthropic adapter key leaked: {r:?}");
+            assert_eq!(
+                r.provider, "bigmodel",
+                "anthropic adapter key leaked: {r:?}"
+            );
         }
     }
 
@@ -625,8 +651,7 @@ mod tests {
 
         let records = ZcodeSource::parse(&db_path);
         assert_eq!(records.len(), 2);
-        let mut providers: Vec<&str> =
-            records.iter().map(|r| r.provider.as_str()).collect();
+        let mut providers: Vec<&str> = records.iter().map(|r| r.provider.as_str()).collect();
         providers.sort_unstable();
         assert_eq!(providers, vec!["bigmodel", "bigmodel-start"]);
     }
@@ -678,8 +703,7 @@ mod tests {
 
         let records = ZcodeSource::parse(&db_path);
         assert_eq!(records.len(), 3);
-        let mut providers: Vec<&str> =
-            records.iter().map(|r| r.provider.as_str()).collect();
+        let mut providers: Vec<&str> = records.iter().map(|r| r.provider.as_str()).collect();
         providers.sort_unstable();
         assert_eq!(providers, vec!["bigmodel", "bigmodel-start", "opencode-go"]);
     }
@@ -736,7 +760,10 @@ mod tests {
         let unmetered = ZcodeSource::parse_with_cc_proxy(&db_path, false);
         assert_eq!(unmetered.len(), 2);
         assert_eq!(
-            unmetered.iter().filter(|r| r.provider == "commandcode").count(),
+            unmetered
+                .iter()
+                .filter(|r| r.provider == "commandcode")
+                .count(),
             1
         );
     }
@@ -746,5 +773,34 @@ mod tests {
         let dir = tempdir().unwrap();
         let records = ZcodeSource::parse(&dir.path().join("nope.sqlite"));
         assert!(records.is_empty());
+    }
+
+    /// ZCode stores CPA-routed calls under their real channel provider
+    /// (`opencode-go`), so the namespace prefix is the only signal. Regression
+    /// test for the duplicated rows: the same call also landed in
+    /// `ollama-proxy` a few seconds later, and this copy could never be priced.
+    #[test]
+    fn cpa_namespaced_models_are_skipped() {
+        // model|started|completed|ttft|input|output|cache_creation|cache_read
+        for model in [
+            "ollama/deepseek-v4.1-flash",
+            "wb/glm-5.3-flash",
+            "step/step-5-preview",
+        ] {
+            let (_dir, db_path) = make_db(&[&format!(
+                "{model}|1786539129536|1786539138916|2479|32940|1048|0|17664"
+            )]);
+            assert!(
+                ZcodeSource::parse(&db_path).is_empty(),
+                "{model} is metered by its CPA usage plugin, not by ZCode"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_models_are_kept_alongside_cpa_skipping() {
+        let (_dir, db_path) =
+            make_db(&["deepseek-v4-flash|1786539129536|1786539138916|2479|32940|1048|0|17664"]);
+        assert_eq!(ZcodeSource::parse(&db_path).len(), 1);
     }
 }

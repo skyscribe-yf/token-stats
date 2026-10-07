@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Codex session source: reads `~/.codex/sessions/*/rollout-*.jsonl`.
 #[derive(Default)]
@@ -100,6 +101,7 @@ impl CodexSource {
     ) -> Vec<TokenRecord> {
         let mut records = Vec::new();
         let mut seen_usage: HashMap<_, PathBuf> = HashMap::new();
+        let mut skipped_cpa = 0usize;
 
         for path in paths {
             if !subset.is_empty() && !subset.contains(path) {
@@ -144,15 +146,14 @@ impl CodexSource {
                     }
                 } else {
                     saw_non_meta = true;
-                    if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context") {
-                        if let Some(model) = obj
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("turn_context")
+                        && let Some(model) = obj
                             .get("payload")
                             .and_then(|p| p.get("model"))
                             .and_then(|m| m.as_str())
-                        {
-                            session_model = model.to_string();
-                            have_model = true;
-                        }
+                    {
+                        session_model = model.to_string();
+                        have_model = true;
                     }
                 }
                 // Both resolved. `session_meta` is always the header line, so
@@ -269,8 +270,20 @@ impl CodexSource {
                     let ts_str = obj.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
                     let (date, time) = super::parse_iso_timestamp(ts_str);
 
+                    // A CPA-routed call is metered per request by that
+                    // upstream's usage plugin. Keeping this row too double
+                    // counts the call (the client stamps request start, the
+                    // plugin stamps completion, so the pair reads as two
+                    // records seconds apart) and it can never be priced:
+                    // the model name keeps the CPA namespace prefix.
+                    if super::meters_cpa_channel(&session_provider, &session_model) {
+                        skipped_cpa += 1;
+                        continue;
+                    }
+
                     records.push(TokenRecord {
                         date: date.into(),
+                        parsed_time: OnceLock::new(),
                         time,
                         api_key_prefix: "N/A".into(),
                         provider: session_provider.as_str().into(),
@@ -288,6 +301,12 @@ impl CodexSource {
                     });
                 }
             }
+        }
+
+        if skipped_cpa > 0 {
+            tracing::info!(
+                "codex: skipped {skipped_cpa} CPA-routed record(s) already metered by the CPA usage plugin"
+            );
         }
 
         records
@@ -456,7 +475,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
         let mk_count = |ts: &str, cum_input: i64| {
-            format!("{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{usage},\"total_token_usage\":{{\"input_tokens\":{cum_input},\"cached_input_tokens\":80,\"output_tokens\":10,\"reasoning_output_tokens\":2,\"total_tokens\":110}}}}}}}}")
+            format!(
+                "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{usage},\"total_token_usage\":{{\"input_tokens\":{cum_input},\"cached_input_tokens\":80,\"output_tokens\":10,\"reasoning_output_tokens\":2,\"total_tokens\":110}}}}}}}}"
+            )
         };
         // token_count events (with different cumulative totals) appear BEFORE turn_context
         let replayed1 = mk_count("2026-07-10T10:00:00Z", 100);
@@ -490,7 +511,9 @@ mod tests {
         let session_meta = r#"{"type":"session_meta","payload":{"model_provider":"fenno"}}"#;
         let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
         let mk_count = |ts: &str, cum_input: i64| {
-            format!("{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{usage},\"total_token_usage\":{{\"input_tokens\":{cum_input}}}}}}}}}")
+            format!(
+                "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{usage},\"total_token_usage\":{{\"input_tokens\":{cum_input}}}}}}}}}"
+            )
         };
         fs::write(
             dir.path().join("rollout-fenno.jsonl"),
@@ -557,7 +580,11 @@ mod tests {
 
         let file_a = dir.path().join("rollout-a.jsonl");
         let file_b = dir.path().join("rollout-b.jsonl");
-        fs::write(&file_a, format!("{context}\n{}\n", event("2026-07-10T10:00:00Z"))).unwrap();
+        fs::write(
+            &file_a,
+            format!("{context}\n{}\n", event("2026-07-10T10:00:00Z")),
+        )
+        .unwrap();
         fs::write(
             &file_b,
             format!(
@@ -598,16 +625,19 @@ mod tests {
             format!(
                 "{context}\n{}\n{}\n",
                 event("2026-07-10T10:00:00Z"),
-                event("2026-07-10T10:01:00Z")
-                    .replace(
-                        r#""total_token_usage":{"input_tokens":100}"#,
-                        r#""total_token_usage":{"input_tokens":300}"#
-                    )
+                event("2026-07-10T10:01:00Z").replace(
+                    r#""total_token_usage":{"input_tokens":100}"#,
+                    r#""total_token_usage":{"input_tokens":300}"#
+                )
             ),
         )
         .unwrap();
         let changed3 = crate::sources::changed_files(&all);
-        assert_eq!(changed3, vec![file_a.clone()], "only the appended file changed");
+        assert_eq!(
+            changed3,
+            vec![file_a.clone()],
+            "only the appended file changed"
+        );
         let records3 = CodexSource::parse_files(&all, &changed3);
         assert_eq!(
             records3.len(),
@@ -617,7 +647,10 @@ mod tests {
         assert!(
             records3.iter().all(|r| r.model == "gpt-5.6-terra"),
             "incremental re-parse must keep the turn_context model, got {:?}",
-            records3.iter().map(|r| r.model.as_str()).collect::<Vec<_>>()
+            records3
+                .iter()
+                .map(|r| r.model.as_str())
+                .collect::<Vec<_>>()
         );
         assert!(
             records3
@@ -625,5 +658,53 @@ mod tests {
                 .any(|r| r.time == "2026-07-10T10:01:00+00:00"),
             "the appended call is included"
         );
+    }
+}
+
+#[cfg(test)]
+mod cpa_skip_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// A codex session whose turn_context names a CPA namespaced model is a
+    /// call CLIProxyAPI already metered per request. Regression test: it used
+    /// to be recorded twice — once here with a permanently ¥0 cost and the
+    /// unpriced `ollama/` prefix, once by the plugin, three seconds apart.
+    #[test]
+    fn cpa_namespaced_models_are_skipped() {
+        let dir = tempdir().unwrap();
+        let context = r#"{"type":"turn_context","payload":{"model":"ollama/glm-5.3"}}"#;
+        let usage = r#"{"input_tokens":34048,"cached_input_tokens":0,"output_tokens":7,"reasoning_output_tokens":0,"total_tokens":34055}"#;
+        let event = format!(
+            r#"{{"timestamp":"2026-10-05T09:44:09Z","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{usage}}}}}}}"#
+        );
+        fs::write(
+            dir.path().join("rollout-a.jsonl"),
+            format!("{context}\n{event}\n"),
+        )
+        .unwrap();
+
+        assert!(
+            CodexSource::parse(dir.path()).is_empty(),
+            "a CPA-namespaced model is not metered by the client source"
+        );
+    }
+
+    #[test]
+    fn plain_models_are_kept() {
+        let dir = tempdir().unwrap();
+        let context = r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#;
+        let usage = r#"{"input_tokens":100,"cached_input_tokens":80,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":110}"#;
+        let event = format!(
+            r#"{{"timestamp":"2026-10-05T09:44:09Z","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{usage}}}}}}}"#
+        );
+        fs::write(
+            dir.path().join("rollout-a.jsonl"),
+            format!("{context}\n{event}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(CodexSource::parse(dir.path()).len(), 1);
     }
 }

@@ -20,7 +20,7 @@ use compact_str::CompactString;
 use rusqlite::{Connection, OpenFlags, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Env var overriding the token-stats database path.
@@ -38,10 +38,10 @@ static COUNT_CACHE: LazyLock<Mutex<HashMap<PathBuf, (Instant, usize)>>> =
 /// Default database location: `~/.config/token-stats/token-stats.db`
 /// (same directory family as the persisted Fenno auth state).
 pub fn token_store_path() -> PathBuf {
-    if let Ok(p) = std::env::var(DB_PATH_ENV) {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var(DB_PATH_ENV)
+        && !p.trim().is_empty()
+    {
+        return PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
@@ -77,7 +77,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_token_records_fingerprint
 
 CREATE INDEX IF NOT EXISTS idx_token_records_time ON token_records(time);
 CREATE INDEX IF NOT EXISTS idx_token_records_source ON token_records(source);
-CREATE INDEX IF NOT EXISTS idx_token_records_provider ON token_records(provider);
+
+-- `purge_superseded_ollama_run_rows` and `purge_dim_cc_proxy` both filter on
+-- this column; without it every startup pays a full-table scan over ~840k
+-- rows. The values repeat across only ~18 distinct provider slugs, so the
+-- index is small and cheap to maintain compared with what it saves.
+CREATE INDEX IF NOT EXISTS idx_token_records_orig_provider
+    ON token_records(original_provider);
 
 -- Small key/value side table for source sync watermarks (e.g. the DimAgent
 -- console API's newest ingested log id). Persisting them keeps a cold start
@@ -126,16 +132,16 @@ impl TokenStore {
     /// because durability is the point of this store — failing loudly beats
     /// silently running without persistence.
     pub fn open(path: &Path) -> Self {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to create token store directory {:?}: {}. \
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to create token store directory {:?}: {}. \
                          Set {} to use a different location.",
-                        parent, e, DB_PATH_ENV
-                    )
-                });
-            }
+                    parent, e, DB_PATH_ENV
+                )
+            });
         }
 
         let conn = Connection::open_with_flags(
@@ -183,10 +189,30 @@ fn apply_store_patches(conn: &Connection) {
     // on every open and destroyed legitimate dim supplement rows (third-party
     // channels like ollama-cloud / xai-official) that carry their own provider.
 
+    // `idx_token_records_provider` was never used: no query filters on
+    // `provider` alone, and the composite fingerprint index already leads with
+    // `time`. There is no reason to keep paying for its 15 MB plus a B-tree
+    // write on every insert, so drop it. Idempotent — `IF EXISTS` on an
+    // already-migrated DB is a no-op, and the freed pages go back to the
+    // freelist on the next VACUUM rather than on every boot.
+    match conn.execute("DROP INDEX IF EXISTS idx_token_records_provider", []) {
+        Ok(0) => {}
+        Ok(_) => tracing::info!(
+            "Dropped unused index idx_token_records_provider (~15 MB reclaimed on next VACUUM)"
+        ),
+        Err(e) => tracing::warn!("Failed to drop unused provider index: {e}"),
+    }
+
     collapse_commandcode_inclusive_twins(conn);
     collapse_unknown_codex_twins(conn);
+    // Runs after the collapses so it sees their result. The sources now skip
+    // CPA traffic themselves (`sources::meters_cpa_channel`); this clears what
+    // was already written before that existed.
+    let purged = TokenStore::purge_cpa_metered_client_rows(conn);
+    if purged > 0 {
+        tracing::info!("Purged {purged} client-side row(s) duplicating a CPA usage-plugin record");
+    }
 }
-
 /// Drop native cmd rows that stored OpenAI-inclusive `inputTokens` when the
 /// exclusive twin is also present. Safe to run on every open: exclusive
 /// leftovers (cache hit ≤ 50%) are left alone.
@@ -264,10 +290,10 @@ impl TokenStore {
         let now = Instant::now();
         {
             let guard = COUNT_CACHE.lock().unwrap();
-            if let Some((fetched_at, n)) = guard.get(&path) {
-                if now.duration_since(*fetched_at) < COUNT_CACHE_TTL {
-                    return *n;
-                }
+            if let Some((fetched_at, n)) = guard.get(&path)
+                && now.duration_since(*fetched_at) < COUNT_CACHE_TTL
+            {
+                return *n;
             }
         }
         let n = self.count_uncached();
@@ -449,6 +475,9 @@ impl TokenStore {
                             cost: 0.0,
                             ttft_ms: None,
                             tps: None,
+                            // Lazily filled by `fingerprint()`'s callers; never
+                            // read here (only the token fields above matter).
+                            parsed_time: OnceLock::new(),
                         };
                         if !keep.contains(&rec.fingerprint()) {
                             to_delete.push(id);
@@ -721,14 +750,11 @@ impl TokenStore {
                     return 0;
                 }
             };
-            conn.execute(
-                "DELETE FROM token_records WHERE source = 'opencode'",
-                [],
-            )
-            .unwrap_or_else(|e| {
-                tracing::warn!("Failed to purge pre-reasoning opencode rows: {e}");
-                0
-            })
+            conn.execute("DELETE FROM token_records WHERE source = 'opencode'", [])
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to purge pre-reasoning opencode rows: {e}");
+                    0
+                })
         };
         if deleted > 0 {
             // After the guard above is released — `set_sync_watermark` locks too.
@@ -955,8 +981,56 @@ impl TokenStore {
         deleted
     }
 
-    /// Insert records that are not already present (fingerprint-unique).
+    /// Delete client-side rows that re-record a call a CPA usage plugin
+    /// already meters.
     ///
+    /// Before the `pi` / `zcode` sources learned to skip CPA traffic, a call
+    /// routed through CLIProxyAPI produced two rows: the plugin's per-request
+    /// record (bare model name, priced) and the client's own (prefixed model
+    /// name, permanently ¥0), a few seconds apart because one stamps request
+    /// start and the other completion. This removes the client copy.
+    ///
+    /// Deliberately narrow: it only matches the *client* sources and only the
+    /// CPA namespaces, so the authoritative plugin rows
+    /// (`dim-agent` / `ollama-proxy` / `stepfun-proxy`) and every other
+    /// channel are untouched. Idempotent.
+    pub(crate) fn purge_cpa_metered_client_rows(conn: &Connection) -> usize {
+        // Sourced by the client log, not by a CPA usage plugin. Anything
+        // written by a plugin keeps its own `source` id and is excluded here
+        // by construction. `codex` belongs here for the same reason `pi` does:
+        // a codex session routed through CPA stamped the request itself.
+        const CLIENT_SOURCES: &[&str] = &["pi", "zcode", "codex"];
+        let placeholders = CLIENT_SOURCES
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "DELETE FROM token_records
+             WHERE source IN ({placeholders})
+               AND (provider = 'cpa'
+                    OR model LIKE 'wb/%'
+                    OR model LIKE 'ollama/%'
+                    OR model LIKE 'step/%')"
+        );
+        match conn.execute(&sql, rusqlite::params_from_iter(CLIENT_SOURCES.iter())) {
+            Ok(n) => {
+                if n > 0 {
+                    tracing::info!(
+                        "Removed {n} client-side row(s) that duplicated a CPA usage-plugin record"
+                    );
+                }
+                n
+            }
+            Err(e) => {
+                tracing::warn!("Failed to purge CPA-duplicated client rows: {e}");
+                0
+            }
+        }
+    }
+
+    /// Insert records that are not already present (fingerprint-unique).
+    ///    ///
     /// Returns the number of rows newly inserted. Duplicates are ignored.
     /// The whole batch is rolled back if any insert fails, so callers can
     /// safely retry on the next refresh.
@@ -989,7 +1063,7 @@ impl TokenStore {
                     r.date.as_str(),
                     r.api_key_prefix.as_str(),
                     r.provider.as_str(),
-                    r.original_provider,
+                    r.original_provider.as_deref(),
                     r.model.as_str(),
                     r.source.as_str(),
                     r.input_tokens,
@@ -1149,13 +1223,23 @@ fn text_col(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<CompactStri
     Ok(row.get_ref(idx)?.as_str()?.into())
 }
 
+/// Like [`text_col`] but for a nullable column: `None` stays `None` instead of
+/// failing the row read (`original_provider` is unset on every unmerged row).
+fn opt_text_col(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Option<CompactString>> {
+    match row.get_ref(idx)? {
+        rusqlite::types::ValueRef::Null => Ok(None),
+        v => Ok(Some(v.as_str()?.into())),
+    }
+}
+
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TokenRecord> {
     Ok(TokenRecord {
         time: row.get(0)?,
+        parsed_time: OnceLock::new(),
         date: text_col(row, 1)?,
         api_key_prefix: text_col(row, 2)?,
         provider: text_col(row, 3)?,
-        original_provider: row.get(4)?,
+        original_provider: opt_text_col(row, 4)?,
         model: text_col(row, 5)?,
         source: text_col(row, 6)?,
         input_tokens: row.get(7)?,
@@ -1176,6 +1260,7 @@ mod tests {
     fn fixture(source: &str, provider: &str, model: &str, time: &str, tokens: i64) -> TokenRecord {
         TokenRecord {
             date: time[..10].into(),
+            parsed_time: OnceLock::new(),
             time: time.to_string(),
             api_key_prefix: "sk-test".into(),
             provider: provider.into(),
@@ -1325,7 +1410,7 @@ mod tests {
         );
         r.ttft_ms = None;
         r.tps = None;
-        r.original_provider = Some("opencode-go".to_string());
+        r.original_provider = Some("opencode-go".into());
         assert_eq!(store.insert_batch(&[r]), 1);
         let loaded = store.load_all();
         assert_eq!(loaded[0].ttft_ms, None);
@@ -1524,7 +1609,9 @@ mod tests {
         let loaded = store.load_all();
         assert_eq!(loaded.len(), 2);
         assert!(
-            loaded.iter().all(|r| !(r.source == "zcode" && r.provider == "commandcode")),
+            loaded
+                .iter()
+                .all(|r| !(r.source == "zcode" && r.provider == "commandcode")),
             "proxy-metered zcode row should be purged"
         );
         // Idempotent: second call removes nothing.
@@ -1644,15 +1731,18 @@ mod tests {
         drop(conn);
 
         let store = TokenStore::open(&path);
-        assert_eq!(store.count(), 5);
+        // 5 seeded rows minus the `wb/glm-5.3-flash` CPA row, which the
+        // open-time `meters_cpa_channel` purge takes because ollama-proxy's
+        // usage plugin meters that channel per request. The account-plan purge
+        // below is unaffected and must still be surgical about the rest.
+        assert_eq!(store.count(), 4);
         assert_eq!(store.purge_zcode_account_plan_opencode_go(), 1);
         let loaded = store.load_all();
-        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded.len(), 3);
         assert!(
-            loaded
-                .iter()
-                .all(|r| !(r.provider == "opencode-go" && r.model == "GLM-5.3-Flash"
-                    && r.time == "2026-09-19T14:19:10.655+00:00")),
+            loaded.iter().all(|r| !(r.provider == "opencode-go"
+                && r.model == "GLM-5.3-Flash"
+                && r.time == "2026-09-19T14:19:10.655+00:00")),
             "mislabeled account-plan row should be gone: {loaded:?}"
         );
         // Idempotent: second call removes nothing.
@@ -1761,6 +1851,7 @@ mod tests {
         assert_eq!(store.count(), 1);
         let exclusive = TokenRecord {
             date: "2026-08-23".into(),
+            parsed_time: OnceLock::new(),
             time: "2026-08-23T12:32:48.057Z".to_string(),
             api_key_prefix: "N/A".into(),
             provider: "commandcode".into(),
@@ -2004,7 +2095,15 @@ mod tests {
 
     fn seed_opencode_rows(store: &TokenStore, n: usize) {
         let records: Vec<TokenRecord> = (0..n)
-            .map(|i| fixture("opencode", "opencode-go", "space-bunny-free", &format!("2026-09-2{}T01:00:00Z", i % 9), 100 + i as i64))
+            .map(|i| {
+                fixture(
+                    "opencode",
+                    "opencode-go",
+                    "space-bunny-free",
+                    &format!("2026-09-2{}T01:00:00Z", i % 9),
+                    100 + i as i64,
+                )
+            })
             .collect();
         store.insert_batch(&records);
     }
@@ -2013,7 +2112,13 @@ mod tests {
     fn opencode_reasoning_migration_purges_when_source_can_reproduce() {
         let store = temp_store();
         seed_opencode_rows(&store, 3);
-        store.insert_batch(&[fixture("codex", "openai", "gpt-5.5", "2026-09-20T01:00:00Z", 300)]);
+        store.insert_batch(&[fixture(
+            "codex",
+            "openai",
+            "gpt-5.5",
+            "2026-09-20T01:00:00Z",
+            300,
+        )]);
 
         // The OpenCode DB reproduces every row → safe to drop and re-ingest.
         assert_eq!(store.migrate_opencode_reasoning_output(Some(3)), 3);
@@ -2060,7 +2165,11 @@ mod tests {
         assert_eq!(opencode_row_count(&store), 3, "history survives");
 
         assert_eq!(store.migrate_opencode_reasoning_output(None), 0);
-        assert_eq!(opencode_row_count(&store), 3, "unreadable DB is not a licence to delete");
+        assert_eq!(
+            opencode_row_count(&store),
+            3,
+            "unreadable DB is not a licence to delete"
+        );
 
         // The guard is not sticky — a later start with an intact DB migrates.
         assert_eq!(store.migrate_opencode_reasoning_output(Some(3)), 3);
@@ -2070,7 +2179,13 @@ mod tests {
     #[test]
     fn opencode_reasoning_migration_marks_empty_store_without_touching_it() {
         let store = temp_store();
-        store.insert_batch(&[fixture("codex", "openai", "gpt-5.5", "2026-09-20T01:00:00Z", 300)]);
+        store.insert_batch(&[fixture(
+            "codex",
+            "openai",
+            "gpt-5.5",
+            "2026-09-20T01:00:00Z",
+            300,
+        )]);
 
         assert_eq!(store.migrate_opencode_reasoning_output(None), 0);
         assert_eq!(store.count(), 1);
@@ -2085,5 +2200,299 @@ mod tests {
         )]);
         assert_eq!(store.migrate_opencode_reasoning_output(Some(1)), 0);
         assert_eq!(opencode_row_count(&store), 1);
+    }
+}
+
+#[cfg(test)]
+mod index_patch_tests {
+    use super::*;
+
+    #[test]
+    fn provider_index_is_absent_and_orig_provider_index_is_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        // Simulate a DB created before the patch carried the old index.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS token_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    time TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    api_key_prefix TEXT NOT NULL DEFAULT '',
+                    provider TEXT NOT NULL,
+                    original_provider TEXT,
+                    model TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT '',
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost REAL NOT NULL DEFAULT 0,
+                    ttft_ms REAL,
+                    tps REAL,
+                    ingested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_token_records_provider
+                    ON token_records(provider);",
+            )
+            .unwrap();
+        }
+
+        let _store = TokenStore::open(&path);
+
+        let conn = Connection::open(&path).unwrap();
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .flatten()
+            .collect();
+
+        assert!(
+            !names.iter().any(|n| n == "idx_token_records_provider"),
+            "unused provider index must be dropped, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "idx_token_records_orig_provider"),
+            "original_provider index must exist, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn opening_twice_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        for _ in 0..3 {
+            let store = TokenStore::open(&path);
+            let conn = store.conn.lock().unwrap();
+            let names: Vec<String> = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .flatten()
+                .collect();
+            assert_eq!(
+                names
+                    .iter()
+                    .filter(|n| n.as_str() == "idx_token_records_orig_provider")
+                    .count(),
+                1,
+                "index set must be stable across opens"
+            );
+        }
+    }
+
+    #[test]
+    fn original_provider_lookup_uses_the_new_index() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("token-stats.db");
+        let store = TokenStore::open(&path);
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO token_records (time, date, provider, original_provider, model, source)
+             VALUES ('2026-01-01T00:00:00Z', '2026-01-01', 'ollama', 'custom-ollama-cloud-x',
+                     'glm-5.3', 'dim')",
+            [],
+        )
+        .unwrap();
+
+        let plan: Vec<String> = conn
+            .prepare("EXPLAIN QUERY PLAN SELECT id, time FROM token_records WHERE original_provider = ?1")
+            .unwrap()
+            .query_map(["custom-ollama-cloud-x"], |row| row.get(3))
+            .unwrap()
+            .flatten()
+            .collect();
+        let plan = plan.join(" ");
+        assert!(
+            plan.contains("idx_token_records_orig_provider"),
+            "expected the new index in the plan, got: {plan}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cpa_dedup_tests {
+    use super::*;
+
+    fn insert(conn: &Connection, source: &str, provider: &str, model: &str) {
+        let time = "2026-10-06T23:19:25Z";
+        conn.execute(
+            INSERT_SQL,
+            params![
+                time,
+                &time[..10],
+                "N/A",
+                provider,
+                None::<String>,
+                model,
+                source,
+                100i64,
+                50i64,
+                200i64,
+                0i64,
+                350i64,
+                0.0f64,
+                None::<f64>,
+                None::<f64>,
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_removes_client_rows_but_keeps_the_plugin_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token-stats.db");
+        // Raw connection, not `TokenStore::open` — open() already runs the
+        // patch pass, which is asserted separately below.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        // The duplicate pair: pi's copy and the workbuddy plugin's copy.
+        insert(&conn, "pi", "cpa", "wb/hy4-preview");
+        insert(&conn, "dim-agent", "codebuddy", "wb/hy4-preview");
+        // Same shape on the other CPA upstreams.
+        insert(&conn, "pi", "cpa", "step/step-5-preview");
+        insert(&conn, "stepfun-proxy", "stepfun", "step-5-preview");
+        insert(&conn, "zcode", "opencode-go", "ollama/deepseek-v4.1-flash");
+        insert(&conn, "ollama-proxy", "ollama-cloud", "deepseek-v4.1-flash");
+        // A codex session routed through CPA: same root cause, and it pairs
+        // with the plugin row exactly three seconds apart.
+        insert(&conn, "codex", "cpa", "ollama/glm-5.3");
+        insert(&conn, "ollama-proxy", "ollama", "glm-5.3");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM token_records", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+
+        let removed = TokenStore::purge_cpa_metered_client_rows(&conn);
+        assert_eq!(removed, 4, "only the four client-side copies go");
+
+        let mut remaining: Vec<(String, String, String)> = conn
+            .prepare("SELECT source, provider, model FROM token_records")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .flatten()
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                (
+                    "dim-agent".to_string(),
+                    "codebuddy".to_string(),
+                    "wb/hy4-preview".to_string()
+                ),
+                (
+                    "ollama-proxy".to_string(),
+                    "ollama".to_string(),
+                    "glm-5.3".to_string()
+                ),
+                (
+                    "ollama-proxy".to_string(),
+                    "ollama-cloud".to_string(),
+                    "deepseek-v4.1-flash".to_string()
+                ),
+                (
+                    "stepfun-proxy".to_string(),
+                    "stepfun".to_string(),
+                    "step-5-preview".to_string()
+                ),
+            ],
+            "the authoritative per-request plugin rows must be untouched"
+        );
+    }
+
+    #[test]
+    fn purge_keeps_unrelated_client_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token-stats.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            // Provider is `ollama` and the model is the bare name: a real
+            // ollama call, not CPA's `ollama/` namespace.
+            insert(&conn, "pi", "ollama", "deepseek-v4-pro");
+            insert(&conn, "pi", "deepseek", "deepseek-v4-pro");
+            // `wb` without the slash is a channel name, not a namespace.
+            insert(&conn, "zcode", "opencode-go", "wb-glm-5.3");
+        }
+        let store = TokenStore::open(&path);
+        let removed = TokenStore::purge_cpa_metered_client_rows(&store.conn.lock().unwrap());
+        assert_eq!(removed, 0, "none of these are CPA namespaced");
+        assert_eq!(store.count(), 3);
+    }
+
+    #[test]
+    fn purge_is_idempotent_and_runs_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token-stats.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            insert(&conn, "codex", "cpa", "ollama/glm-5.3");
+        }
+        // open() itself runs the patch pass, so the row is gone by here.
+        let store = TokenStore::open(&path);
+        assert_eq!(store.count(), 0, "the open-time patch pass purged it");
+        let again = TokenStore::purge_cpa_metered_client_rows(&store.conn.lock().unwrap());
+        assert_eq!(again, 0, "second run deletes nothing");
+    }
+}
+
+#[cfg(test)]
+mod cpa_rows_survive_other_purges {
+    use super::*;
+
+    /// The account-plan purge must not treat a CPA row as account-plan traffic.
+    /// Checked on a raw connection because `TokenStore::open` runs the CPA
+    /// purge first, which removes these rows by design (see
+    /// `cpa_dedup_tests`).
+    #[test]
+    fn account_plan_purge_leaves_cpa_prefixed_rows_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token-stats.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let t = "2026-09-19T15:20:10.655+00:00";
+        conn.execute(
+            INSERT_SQL,
+            params![
+                t,
+                &t[..10],
+                "N/A",
+                "opencode-go",
+                None::<String>,
+                "wb/glm-5.3-flash",
+                "zcode",
+                1i64,
+                1i64,
+                0i64,
+                0i64,
+                2i64,
+                0.0f64,
+                None::<f64>,
+                None::<f64>,
+            ],
+        )
+        .unwrap();
+
+        let store = TokenStore {
+            path: path.clone(),
+            conn: Mutex::new(conn),
+        };
+        assert_eq!(
+            store.purge_zcode_account_plan_opencode_go(),
+            0,
+            "a CPA-namespaced row is not account-plan traffic"
+        );
+        assert_eq!(store.count(), 1);
     }
 }

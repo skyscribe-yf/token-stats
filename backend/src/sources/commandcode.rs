@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 #[derive(Default)]
 pub struct CommandCodeSource;
@@ -181,6 +182,7 @@ impl CommandCodeSource {
 
                 records.push(TokenRecord {
                     date: date.into(),
+                    parsed_time: OnceLock::new(),
                     time,
                     api_key_prefix: "N/A".into(),
                     provider: provider.into(),
@@ -248,7 +250,10 @@ mod tests {
         assert_eq!(records[0].total_tokens, 296 + 1197 + 140209);
         let denom = records[0].input_tokens + records[0].cache_read_tokens;
         let ratio = records[0].cache_read_tokens as f64 / denom as f64 * 100.0;
-        assert!(ratio > 99.0, "cache hit should reflect inclusive input, got {ratio}");
+        assert!(
+            ratio > 99.0,
+            "cache hit should reflect inclusive input, got {ratio}"
+        );
     }
 
     #[test]

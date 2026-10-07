@@ -10,6 +10,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use compact_str::CompactString;
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
+use std::sync::OnceLock;
 use std::{io::Write, net::SocketAddr, path::PathBuf};
 
 const GROK_SOURCE: &str = "grok-cli";
@@ -232,6 +233,7 @@ fn parse_usage_record(
 
     Some(TokenRecord {
         date: compact_str::format_compact!("{}", recorded_at.format("%Y-%m-%d")),
+        parsed_time: OnceLock::new(),
         time: recorded_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         api_key_prefix: CompactString::default(),
         provider: provider.into(),
@@ -451,11 +453,10 @@ async fn proxy_response(config: ProxyConfig, request: Request<Body>) -> Response
                             std::str::from_utf8(captured.get(..64).unwrap_or(&captured))
                                 .unwrap_or("<non-utf8>")
                         );
-                        if let Some(record) = record {
-                            if let Err(error) = append_usage_record(&config.usage_log_path, &record)
-                            {
-                                tracing::warn!("Could not append Grok usage record: {error}");
-                            }
+                        if let Some(record) = record
+                            && let Err(error) = append_usage_record(&config.usage_log_path, &record)
+                        {
+                            tracing::warn!("Could not append Grok usage record: {error}");
                         }
                         None
                     }
@@ -702,6 +703,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn routes_bare_grok_4_6_to_xai_and_records_usage() {
         // DimAgent's grok-build channel sends the bare model name
         // ("grok-4.6") to {baseUrl}/responses. With the provider's base URL
@@ -773,6 +775,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn bare_model_route_injects_dim_grok_build_token() {
         // DimAgent's xai-grok-build driver refuses to send OAuth credentials
         // to non-*.x.ai hosts, so the proxy must replace the placeholder
@@ -934,6 +937,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn routes_bare_grok_4_7_to_xai_and_records_usage() {
         let _lk = lock_dim_home();
         let empty_home = tempdir().unwrap();

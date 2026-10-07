@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[derive(Default)]
 pub struct CodeBuddySource;
@@ -201,6 +202,7 @@ impl CodeBuddySource {
 
                 records.push(TokenRecord {
                     date: date.into(),
+                    parsed_time: OnceLock::new(),
                     time,
                     api_key_prefix: "N/A".into(),
                     provider: "codebuddy".into(),

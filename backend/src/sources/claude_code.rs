@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Claude Code project source: reads `~/.claude/projects/*/*.jsonl`.
 #[derive(Default)]
@@ -172,6 +173,7 @@ impl ClaudeCodeSource {
 
                     records.push(TokenRecord {
                         date: date.into(),
+                        parsed_time: OnceLock::new(),
                         time,
                         api_key_prefix: "N/A".into(),
                         provider: provider.into(),
