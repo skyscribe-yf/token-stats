@@ -8,7 +8,7 @@
 use super::types::{FennoQuotaData, FennoQuotaStatus, FennoSubscription};
 use fs2::FileExt;
 use reqwest::{Client, StatusCode};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -85,10 +85,10 @@ impl FennoAuthManager {
 
     async fn access_token(&self) -> Result<String, String> {
         let now = unix_now();
-        if let Some(credentials) = self.credentials.read().await.clone() {
-            if credentials.is_valid_for(now) {
-                return Ok(credentials.access_token);
-            }
+        if let Some(credentials) = self.credentials.read().await.clone()
+            && credentials.is_valid_for(now)
+        {
+            return Ok(credentials.access_token);
         }
 
         self.refresh(None).await
@@ -98,32 +98,30 @@ impl FennoAuthManager {
         let _refresh_guard = self.refresh_lock.lock().await;
 
         if let Some(failed_access_token) = failed_access_token {
-            if let Some(credentials) = self.credentials.read().await.clone() {
-                if credentials.access_token != failed_access_token
-                    && credentials.is_valid_for(unix_now())
-                {
-                    return Ok(credentials.access_token);
-                }
-            }
-        } else if let Some(credentials) = self.credentials.read().await.clone() {
-            if credentials.is_valid_for(unix_now()) {
+            if let Some(credentials) = self.credentials.read().await.clone()
+                && credentials.access_token != failed_access_token
+                && credentials.is_valid_for(unix_now())
+            {
                 return Ok(credentials.access_token);
             }
+        } else if let Some(credentials) = self.credentials.read().await.clone()
+            && credentials.is_valid_for(unix_now())
+        {
+            return Ok(credentials.access_token);
         }
 
         let _state_lock = StateFileLock::acquire(&self.state_path)?;
 
         // Another backend instance may have refreshed while this instance was
         // waiting for the process-wide file lock.
-        if let Some(credentials) = load_state(&self.state_path) {
-            if failed_access_token.is_some_and(|failed| {
+        if let Some(credentials) = load_state(&self.state_path)
+            && (failed_access_token.is_some_and(|failed| {
                 credentials.access_token != failed && credentials.is_valid_for(unix_now())
-            }) || failed_access_token.is_none() && credentials.is_valid_for(unix_now())
-            {
-                let access_token = credentials.access_token.clone();
-                *self.credentials.write().await = Some(credentials);
-                return Ok(access_token);
-            }
+            }) || failed_access_token.is_none() && credentials.is_valid_for(unix_now()))
+        {
+            let access_token = credentials.access_token.clone();
+            *self.credentials.write().await = Some(credentials);
+            return Ok(access_token);
         }
 
         let credentials = self.credentials.read().await.clone().ok_or_else(|| {
@@ -285,10 +283,10 @@ fn load_bootstrap_credentials(suffix: &str) -> Option<FennoCredentials> {
 
 fn get_state_path(suffix: &str) -> PathBuf {
     let env_key = format!("FENNO_AUTH_STATE_PATH{suffix}");
-    if let Ok(path) = std::env::var(&env_key) {
-        if !path.trim().is_empty() {
-            return PathBuf::from(path);
-        }
+    if let Ok(path) = std::env::var(&env_key)
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let filename = if suffix.is_empty() {
@@ -422,13 +420,13 @@ fn decode_base64(value: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::FennoCredentials;
-    use super::{fetch_fenno_quota, FennoAuthManager, FennoQuotaData};
+    use super::{FennoAuthManager, FennoQuotaData, fetch_fenno_quota};
     use reqwest::Client;
     use serde_json::json;
     use std::fs;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use std::time::{SystemTime, UNIX_EPOCH};
     use tempfile::tempdir;

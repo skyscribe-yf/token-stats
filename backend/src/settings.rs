@@ -25,12 +25,12 @@ pub fn advanced_models_path() -> PathBuf {
         return PathBuf::from(p);
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("advanced_models.json");
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("advanced_models.json");
+        if candidate.exists() {
+            return candidate;
         }
     }
 
@@ -159,12 +159,12 @@ pub fn subscription_settings_path() -> PathBuf {
         return PathBuf::from(p);
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("subscription_settings.json");
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("subscription_settings.json");
+        if candidate.exists() {
+            return candidate;
         }
     }
 
@@ -206,25 +206,25 @@ fn load_subscription_settings_from_path(path: &Path) -> SubscriptionSettings {
     };
 
     // Validate kimi_monthly_start_day is in 1..=28 if set
-    if let Some(day) = settings.kimi_monthly_start_day {
-        if !(1..=28).contains(&day) {
-            tracing::warn!(
-                "Invalid kimi_monthly_start_day {} in settings file, ignoring",
-                day
-            );
-            settings.kimi_monthly_start_day = None;
-        }
+    if let Some(day) = settings.kimi_monthly_start_day
+        && !(1..=28).contains(&day)
+    {
+        tracing::warn!(
+            "Invalid kimi_monthly_start_day {} in settings file, ignoring",
+            day
+        );
+        settings.kimi_monthly_start_day = None;
     }
 
     // Validate kimi_ex_monthly_start_day is in 1..=28 if set
-    if let Some(day) = settings.kimi_ex_monthly_start_day {
-        if !(1..=28).contains(&day) {
-            tracing::warn!(
-                "Invalid kimi_ex_monthly_start_day {} in settings file, ignoring",
-                day
-            );
-            settings.kimi_ex_monthly_start_day = None;
-        }
+    if let Some(day) = settings.kimi_ex_monthly_start_day
+        && !(1..=28).contains(&day)
+    {
+        tracing::warn!(
+            "Invalid kimi_ex_monthly_start_day {} in settings file, ignoring",
+            day
+        );
+        settings.kimi_ex_monthly_start_day = None;
     }
 
     if !settings.kimi_subscription_multiplier.is_finite()

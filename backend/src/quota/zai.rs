@@ -32,9 +32,7 @@ const HTTP_TIMEOUT_SECS: u64 = 15;
 
 /// Read `ZAI_API_KEY` from the environment.
 pub fn get_api_key() -> Option<String> {
-    std::env::var("ZAI_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    std::env::var("ZAI_API_KEY").ok().filter(|k| !k.is_empty())
 }
 
 /// Fetch ZAI balance and usage.
@@ -327,7 +325,10 @@ mod tests {
             -2.674,
         );
         let d = parse_zai_data(&info, &serde_json::Value::Null, None).unwrap();
-        assert!(d.cards.is_empty(), "debt carry must not be listed as a card");
+        assert!(
+            d.cards.is_empty(),
+            "debt carry must not be listed as a card"
+        );
         assert_eq!(d.balance, -2.674);
         assert_eq!(d.expires_at, "", "Go zero time must not become an expiry");
         // granted = used + remaining, recovering the consumed grants.

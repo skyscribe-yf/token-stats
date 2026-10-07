@@ -244,11 +244,11 @@ fn discover_cli_bin() -> Result<PathBuf, String> {
                     continue;
                 }
                 let ver = entry.file_name().to_string_lossy().to_string();
-                let parts: Vec<u32> =
-                    ver.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
-                if parts.len() == 3
-                    && best.as_ref().is_none_or(|(v, _)| parts > *v)
-                {
+                let parts: Vec<u32> = ver
+                    .split('.')
+                    .filter_map(|s| s.parse::<u32>().ok())
+                    .collect();
+                if parts.len() == 3 && best.as_ref().is_none_or(|(v, _)| parts > *v) {
                     best = Some((parts, bin));
                 }
             }
@@ -285,7 +285,11 @@ async fn run_cli_usage() -> Result<CliUsageOutput, String> {
         return Err(format!(
             "dim usage exited with {:?}: {}",
             output.status.code(),
-            if stderr.is_empty() { "(no stderr)".to_string() } else { stderr }
+            if stderr.is_empty() {
+                "(no stderr)".to_string()
+            } else {
+                stderr
+            }
         ));
     }
 
@@ -344,8 +348,12 @@ async fn fetch_via_api(client: &Client) -> Result<DimAgentQuotaData, String> {
     .await?;
     let credits: ApiEnvelope<CreditsPayload> =
         get_json(client, &format!("{CONSOLE_API_BASE}/me/credits"), &cookie).await?;
-    let meters: ApiEnvelope<Vec<FeatureMeter>> =
-        get_json(client, &format!("{CONSOLE_API_BASE}/me/feature-meters"), &cookie).await?;
+    let meters: ApiEnvelope<Vec<FeatureMeter>> = get_json(
+        client,
+        &format!("{CONSOLE_API_BASE}/me/feature-meters"),
+        &cookie,
+    )
+    .await?;
 
     let term_match = subscription
         .data
@@ -361,11 +369,7 @@ async fn fetch_via_api(client: &Client) -> Result<DimAgentQuotaData, String> {
         .or(credits.data.subscription_bucket.as_ref());
 
     let (total, used, remaining) = match bucket {
-        Some(b) => (
-            b.total_units,
-            b.used_units,
-            b.remaining_units,
-        ),
+        Some(b) => (b.total_units, b.used_units, b.remaining_units),
         None => (
             credits.data.total_units,
             credits.data.used_units,
@@ -424,7 +428,10 @@ async fn get_json<T: serde::de::DeserializeOwned>(
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("GET {url}: HTTP {status}: {}", super::truncate_error_body(&body)));
+        return Err(format!(
+            "GET {url}: HTTP {status}: {}",
+            super::truncate_error_body(&body)
+        ));
     }
     serde_json::from_str(&body).map_err(|e| format!("parse {url}: {e}"))
 }
@@ -491,7 +498,9 @@ struct DailyStat {
 // ─── Mapping ─────────────────────────────────────────────────────────────────
 
 fn parsed_to_card(out: CliUsageOutput) -> Result<DimAgentQuotaData, String> {
-    let sub = out.subscription.ok_or("no subscription in dim usage output")?;
+    let sub = out
+        .subscription
+        .ok_or("no subscription in dim usage output")?;
     let credits = out.credits.unwrap_or(CreditsPayload {
         subscription_buckets: Vec::new(),
         subscription_bucket: None,
@@ -527,12 +536,19 @@ fn card_from_parts(
         .ok_or_else(|| "no current_term in subscription payload".to_string())?;
     // The console API reports units in milli-units; the CLI reports whole
     // units. Normalize both to whole units.
-    let scale = if total_units_raw >= 1_000_000.0 { API_UNIT_SCALE } else { 1.0 };
+    let scale = if total_units_raw >= 1_000_000.0 {
+        API_UNIT_SCALE
+    } else {
+        1.0
+    };
     let total = (total_units_raw / scale).round() as i64;
     let used = (used_units_raw / scale).round() as i64;
     let remaining = (remaining_units_raw / scale).round() as i64;
 
-    let product = sub.product.unwrap_or(Product { name: String::new(), description: None });
+    let product = sub.product.unwrap_or(Product {
+        name: String::new(),
+        description: None,
+    });
     let price = sub.price.unwrap_or(Price {
         billing_interval: String::new(),
         amount: 0.0,
@@ -607,8 +623,7 @@ mod tests {
 
     #[test]
     fn maps_cli_units() {
-        let card = card_from_parts(sample_sub(), 1500.0, 110.0, 1390.0, vec![], None, 0)
-            .unwrap();
+        let card = card_from_parts(sample_sub(), 1500.0, 110.0, 1390.0, vec![], None, 0).unwrap();
         assert_eq!(card.plan_name, "Nano套餐");
         assert_eq!(card.price_cny, 9.9);
         assert_eq!(card.total_units, 1500);

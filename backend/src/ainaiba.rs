@@ -99,7 +99,7 @@ pub async fn fetch_ainaiba_credit() -> AinaibaCreditResponse {
     let client = &*HTTP_CLIENT;
 
     let info_fut = fetch_dashboard(client, &api_key, "/dashboard/info");
-    let live_fut = fetch_dashboard(&client, &api_key, "/dashboard/live");
+    let live_fut = fetch_dashboard(client, &api_key, "/dashboard/live");
 
     let (info_json, live_json) = tokio::join!(info_fut, live_fut);
 

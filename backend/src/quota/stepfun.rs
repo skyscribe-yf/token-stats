@@ -114,10 +114,10 @@ impl StepFunAuthManager {
 
     async fn session(&self) -> Result<ConsoleSession, String> {
         let now = unix_now();
-        if let Some(session) = self.session.read().await.clone() {
-            if session.is_valid_for(now) {
-                return Ok(session);
-            }
+        if let Some(session) = self.session.read().await.clone()
+            && session.is_valid_for(now)
+        {
+            return Ok(session);
         }
         self.refresh(None).await
     }
@@ -126,27 +126,26 @@ impl StepFunAuthManager {
         let _refresh_guard = self.refresh_lock.lock().await;
 
         if let Some(failed_access_token) = failed_access_token {
-            if let Some(session) = self.session.read().await.clone() {
-                if session.access_token != failed_access_token && session.is_valid_for(unix_now())
-                {
-                    return Ok(session);
-                }
-            }
-        } else if let Some(session) = self.session.read().await.clone() {
-            if session.is_valid_for(unix_now()) {
+            if let Some(session) = self.session.read().await.clone()
+                && session.access_token != failed_access_token
+                && session.is_valid_for(unix_now())
+            {
                 return Ok(session);
             }
+        } else if let Some(session) = self.session.read().await.clone()
+            && session.is_valid_for(unix_now())
+        {
+            return Ok(session);
         }
 
         let _state_lock = StateFileLock::acquire(&self.state_path)?;
-        if let Some(session) = load_state(&self.state_path) {
-            if failed_access_token.is_some_and(|failed| {
+        if let Some(session) = load_state(&self.state_path)
+            && (failed_access_token.is_some_and(|failed| {
                 session.access_token != failed && session.is_valid_for(unix_now())
-            }) || (failed_access_token.is_none() && session.is_valid_for(unix_now()))
-            {
-                *self.session.write().await = Some(session.clone());
-                return Ok(session);
-            }
+            }) || (failed_access_token.is_none() && session.is_valid_for(unix_now())))
+        {
+            *self.session.write().await = Some(session.clone());
+            return Ok(session);
         }
 
         let current = self
@@ -389,10 +388,22 @@ async fn fetch_plan_quota(
     auth: &StepFunAuthManager,
 ) -> Result<StepFunPlanQuota, String> {
     let mut session = auth.session().await?;
-    let mut rate = console_rpc(client, &auth.console_origin, &session, "QueryStepPlanRateLimit").await;
+    let mut rate = console_rpc(
+        client,
+        &auth.console_origin,
+        &session,
+        "QueryStepPlanRateLimit",
+    )
+    .await;
     if rate.as_ref().is_err_and(|error| error.contains("HTTP 401")) {
         session = auth.refresh(Some(&session.access_token)).await?;
-        rate = console_rpc(client, &auth.console_origin, &session, "QueryStepPlanRateLimit").await;
+        rate = console_rpc(
+            client,
+            &auth.console_origin,
+            &session,
+            "QueryStepPlanRateLimit",
+        )
+        .await;
     }
     let rate = rate?;
     if as_i64(&rate["status"]) != 1 {
@@ -415,7 +426,10 @@ async fn fetch_plan_quota(
         .ok_or_else(|| "Step Plan response has no credit bucket".to_string())?;
 
     let mut status = console_rpc(client, &auth.console_origin, &session, "GetStepPlanStatus").await;
-    if status.as_ref().is_err_and(|error| error.contains("HTTP 401")) {
+    if status
+        .as_ref()
+        .is_err_and(|error| error.contains("HTTP 401"))
+    {
         session = auth.refresh(Some(&session.access_token)).await?;
         status = console_rpc(client, &auth.console_origin, &session, "GetStepPlanStatus").await;
     }
@@ -438,10 +452,10 @@ async fn fetch_plan_quota(
 }
 
 fn state_path_from_env() -> PathBuf {
-    if let Ok(path) = std::env::var("STEPFUN_AUTH_STATE_PATH") {
-        if !path.trim().is_empty() {
-            return PathBuf::from(path);
-        }
+    if let Ok(path) = std::env::var("STEPFUN_AUTH_STATE_PATH")
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
@@ -514,8 +528,8 @@ fn persist_state(path: &Path, session: &ConsoleSession) -> Result<(), String> {
         expires_at: session.expires_at,
     };
     let temp_path = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    let content =
-        serde_json::to_vec_pretty(&persisted).map_err(|e| format!("serialize StepFun auth: {e}"))?;
+    let content = serde_json::to_vec_pretty(&persisted)
+        .map_err(|e| format!("serialize StepFun auth: {e}"))?;
     fs::write(&temp_path, content).map_err(|e| format!("write StepFun auth state: {e}"))?;
     set_private_file_permissions(&temp_path)?;
     fs::rename(&temp_path, path).map_err(|e| format!("replace StepFun auth state: {e}"))
@@ -548,7 +562,8 @@ struct StateFileLock(std::fs::File);
 impl StateFileLock {
     fn acquire(state_path: &Path) -> Result<Self, String> {
         if let Some(parent) = state_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create StepFun auth directory: {e}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("create StepFun auth directory: {e}"))?;
             set_private_directory_permissions(parent)?;
         }
         let lock_path = state_path.with_extension("lock");
@@ -596,8 +611,7 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn decode_base64(value: &str) -> Option<Vec<u8>> {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len() * 3 / 4);
     let mut buffer = 0u32;
@@ -634,8 +648,8 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use tempfile::tempdir;
     use wiremock::matchers::{header, method, path};
@@ -692,14 +706,21 @@ mod tests {
     async fn uses_persisted_session_before_bootstrap() {
         let dir = tempdir().expect("tempdir");
         let state_path = dir.path().join("stepfun-auth.json");
-        persist_state(&state_path, &session("persisted-access", "persisted-refresh", future_expiry()))
-            .expect("persist");
+        persist_state(
+            &state_path,
+            &session("persisted-access", "persisted-refresh", future_expiry()),
+        )
+        .expect("persist");
 
         let manager = StepFunAuthManager::with_test_config(
             Client::new(),
             "http://127.0.0.1:1",
             state_path,
-            Some(session("bootstrap-access", "bootstrap-refresh", future_expiry())),
+            Some(session(
+                "bootstrap-access",
+                "bootstrap-refresh",
+                future_expiry(),
+            )),
         );
 
         assert_eq!(
@@ -713,10 +734,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path(REFRESH_PATH))
-            .and(header(
-                "Oasis-Token",
-                "expired-access...initial-refresh",
-            ))
+            .and(header("Oasis-Token", "expired-access...initial-refresh"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "accessToken": {"raw": "rotated-access", "duration": 1800, "mode": 2},
                 "refreshToken": {"raw": "rotated-refresh", "duration": 1800, "mode": 1}
@@ -758,9 +776,7 @@ mod tests {
         let rate_hits = Arc::new(AtomicUsize::new(0));
         let rate_hits_for_responder = Arc::clone(&rate_hits);
         Mock::given(method("POST"))
-            .and(path(&format!(
-                "{CONSOLE_RPC_PATH}/QueryStepPlanRateLimit"
-            )))
+            .and(path(format!("{CONSOLE_RPC_PATH}/QueryStepPlanRateLimit")))
             .respond_with(move |request: &wiremock::Request| {
                 let token = request
                     .headers
@@ -779,7 +795,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path(&format!("{CONSOLE_RPC_PATH}/GetStepPlanStatus")))
+            .and(path(format!("{CONSOLE_RPC_PATH}/GetStepPlanStatus")))
             .respond_with(ResponseTemplate::new(200).set_body_json(plan_status_body()))
             .expect(1)
             .mount(&server)

@@ -16,7 +16,7 @@
 
 use super::types::*;
 use reqwest::Client;
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use std::fmt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -81,12 +81,11 @@ pub fn load_accounts() -> (Option<CommandCodeAccount>, Vec<CommandCodeAccount>) 
     let now = Instant::now();
     {
         let guard = ACCOUNTS_CACHE.lock().unwrap();
-        if let Some(cache) = guard.as_ref() {
-            if cache.dir.as_deref() == Some(dir.as_path())
-                && now.duration_since(cache.fetched_at) < ACCOUNTS_CACHE_TTL
-            {
-                return cache.value.clone();
-            }
+        if let Some(cache) = guard.as_ref()
+            && cache.dir.as_deref() == Some(dir.as_path())
+            && now.duration_since(cache.fetched_at) < ACCOUNTS_CACHE_TTL
+        {
+            return cache.value.clone();
         }
     }
     let value = load_accounts_inner();
@@ -134,9 +133,7 @@ fn load_accounts_inner() -> (Option<CommandCodeAccount>, Vec<CommandCodeAccount>
         paths.sort();
         for path in paths {
             if let Some(account) = read_auth_file(&path) {
-                let duplicate = primary
-                    .as_ref()
-                    .is_some_and(|p| same_account(p, &account))
+                let duplicate = primary.as_ref().is_some_and(|p| same_account(p, &account))
                     || extras.iter().any(|e| same_account(e, &account));
                 if duplicate {
                     info!(
@@ -301,8 +298,7 @@ fn epoch_ms_to_rfc3339(ms: i64) -> Option<String> {
     if ms <= 0 {
         return None;
     }
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
-        .map(|dt| dt.to_rfc3339())
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
 }
 
 // ─── Fetch ───────────────────────────────────────────────────────────────────
@@ -321,7 +317,13 @@ pub async fn fetch_commandcode_quota(client: &Client) -> CommandCodeQuotaStatus 
         )
         .await
     } else if let Some(token) = get_session_token() {
-        fetch_quota_with(client, Auth::SessionCookie(token), String::new(), String::new()).await
+        fetch_quota_with(
+            client,
+            Auth::SessionCookie(token),
+            String::new(),
+            String::new(),
+        )
+        .await
     } else {
         warn!("no CommandCode auth file and COMMANDCODE_SESSION_TOKEN not set");
         CommandCodeQuotaStatus {
@@ -745,6 +747,9 @@ mod tests {
         let bearer = Auth::Bearer("k".to_string());
         assert_eq!(bearer.route("/billing/credits"), "/alpha/billing/credits");
         let cookie = Auth::SessionCookie("t".to_string());
-        assert_eq!(cookie.route("/billing/credits"), "/internal/billing/credits");
+        assert_eq!(
+            cookie.route("/billing/credits"),
+            "/internal/billing/credits"
+        );
     }
 }

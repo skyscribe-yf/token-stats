@@ -86,18 +86,18 @@ pub async fn fetch_xiaomi_mimo_quota(client: &Client) -> XiaomiMiMoQuotaStatus {
     };
 
     // Check for API error
-    if let Some(code) = body.get("code").and_then(|c| c.as_i64()) {
-        if code != 0 {
-            let msg = body
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Unknown error");
-            return XiaomiMiMoQuotaStatus {
-                available: false,
-                data: None,
-                error: Some(format!("API error {}: {}", code, msg)),
-            };
-        }
+    if let Some(code) = body.get("code").and_then(|c| c.as_i64())
+        && code != 0
+    {
+        let msg = body
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown error");
+        return XiaomiMiMoQuotaStatus {
+            available: false,
+            data: None,
+            error: Some(format!("API error {}: {}", code, msg)),
+        };
     }
 
     let data = match body.get("data") {
@@ -118,26 +118,26 @@ pub async fn fetch_xiaomi_mimo_quota(client: &Client) -> XiaomiMiMoQuotaStatus {
     let mut entries = Vec::new();
 
     // Parse overall usage
-    if let Some(usage) = usage {
-        if let Some(items) = usage.get("items").and_then(|i| i.as_array()) {
-            for item in items {
-                let name = item
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let used = item.get("used").and_then(|u| u.as_i64()).unwrap_or(0);
-                let limit = item.get("limit").and_then(|l| l.as_i64()).unwrap_or(0);
-                let percent = item.get("percent").and_then(|p| p.as_f64()).unwrap_or(0.0);
+    if let Some(usage) = usage
+        && let Some(items) = usage.get("items").and_then(|i| i.as_array())
+    {
+        for item in items {
+            let name = item
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let used = item.get("used").and_then(|u| u.as_i64()).unwrap_or(0);
+            let limit = item.get("limit").and_then(|l| l.as_i64()).unwrap_or(0);
+            let percent = item.get("percent").and_then(|p| p.as_f64()).unwrap_or(0.0);
 
-                if limit > 0 {
-                    entries.push(XiaomiMiMoUsageEntry {
-                        name,
-                        used,
-                        limit,
-                        percent,
-                    });
-                }
+            if limit > 0 {
+                entries.push(XiaomiMiMoUsageEntry {
+                    name,
+                    used,
+                    limit,
+                    percent,
+                });
             }
         }
     }

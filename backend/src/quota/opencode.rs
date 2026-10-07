@@ -48,11 +48,7 @@ fn parse_resets_in(resets_in: &str) -> Option<Duration> {
         }
     }
 
-    if found {
-        Some(total)
-    } else {
-        None
-    }
+    if found { Some(total) } else { None }
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────

@@ -58,11 +58,11 @@ fn read_kimi_access_token(path: &std::path::Path) -> Option<String> {
     let now = Instant::now();
     {
         let guard = KIMI_TOKEN_CACHE.lock().unwrap();
-        if let Some(cache) = guard.as_ref() {
-            if cache.path.as_path() == path && now.duration_since(cache.fetched_at) < KIMI_TOKEN_CACHE_TTL
-            {
-                return cache.token.clone();
-            }
+        if let Some(cache) = guard.as_ref()
+            && cache.path.as_path() == path
+            && now.duration_since(cache.fetched_at) < KIMI_TOKEN_CACHE_TTL
+        {
+            return cache.token.clone();
         }
     }
     let token = read_kimi_access_token_inner(path);

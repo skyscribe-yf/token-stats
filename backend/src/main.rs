@@ -24,9 +24,9 @@ mod xunfei;
 
 use clap::Parser;
 use flexi_logger::{
-    trc::{setup_tracing, FormatConfig},
-    writers::FileLogWriter,
     Cleanup, Criterion, FileSpec, LogSpecification, Naming, WriteMode,
+    trc::{FormatConfig, setup_tracing},
+    writers::FileLogWriter,
 };
 
 /// Route every heap allocation through mimalloc instead of glibc malloc.
@@ -59,37 +59,6 @@ struct Args {
     /// Run only the loopback GLM usage proxy for Paseo's glm-acp-agent.
     #[arg(long)]
     glm_proxy_only: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use clap::Parser;
-
-    use super::Args;
-
-    #[test]
-    fn parses_grok_proxy_only_mode() {
-        let args = Args::try_parse_from(["token-stats-backend", "--grok-proxy-only"])
-            .expect("proxy-only flag should parse");
-
-        assert!(args.grok_proxy_only);
-    }
-
-    #[test]
-    fn parses_cc_proxy_only_mode() {
-        let args = Args::try_parse_from(["token-stats-backend", "--cc-proxy-only"])
-            .expect("cc-proxy-only flag should parse");
-
-        assert!(args.cc_proxy_only);
-    }
-
-    #[test]
-    fn parses_glm_proxy_only_mode() {
-        let args = Args::try_parse_from(["token-stats-backend", "--glm-proxy-only"])
-            .expect("glm-proxy-only flag should parse");
-
-        assert!(args.glm_proxy_only);
-    }
 }
 
 fn init_logging(log_level: &str) {
@@ -159,4 +128,35 @@ async fn main() {
 
     let router = app::build_router(state.clone());
     app::serve(router, state, refresh_task, flush_task).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Args;
+
+    #[test]
+    fn parses_grok_proxy_only_mode() {
+        let args = Args::try_parse_from(["token-stats-backend", "--grok-proxy-only"])
+            .expect("proxy-only flag should parse");
+
+        assert!(args.grok_proxy_only);
+    }
+
+    #[test]
+    fn parses_cc_proxy_only_mode() {
+        let args = Args::try_parse_from(["token-stats-backend", "--cc-proxy-only"])
+            .expect("cc-proxy-only flag should parse");
+
+        assert!(args.cc_proxy_only);
+    }
+
+    #[test]
+    fn parses_glm_proxy_only_mode() {
+        let args = Args::try_parse_from(["token-stats-backend", "--glm-proxy-only"])
+            .expect("glm-proxy-only flag should parse");
+
+        assert!(args.glm_proxy_only);
+    }
 }

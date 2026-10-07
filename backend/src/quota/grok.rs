@@ -77,10 +77,10 @@ fn build_xai_client() -> Client {
 /// Resolve the xAI API key from environment or auth.json
 pub fn get_api_key() -> Option<String> {
     // 1. GROK_XAI_API_KEY env var
-    if let Ok(key) = std::env::var("GROK_XAI_API_KEY") {
-        if !key.is_empty() {
-            return Some(key);
-        }
+    if let Ok(key) = std::env::var("GROK_XAI_API_KEY")
+        && !key.is_empty()
+    {
+        return Some(key);
     }
 
     // 2. Fallback: read from ~/.grok/auth.json
@@ -162,7 +162,7 @@ pub async fn fetch_grok_quota(_client: &Client, grok_records: &[TokenRecord]) ->
         }
     };
 
-    let weekly = match fetch_weekly_credits(&client, &api_key).await {
+    let weekly = match fetch_weekly_credits(client, &api_key).await {
         Ok(quota) => quota,
         Err(e) => {
             warn!("Grok weekly SuperGrok quota failed: {e}");
@@ -372,10 +372,7 @@ fn skip_field(data: &[u8], offset: &mut usize, wire_type: u8) -> Result<(), Stri
     Ok(())
 }
 
-fn first_length_delimited_field<'a>(
-    data: &'a [u8],
-    wanted_field: u32,
-) -> Result<Option<&'a [u8]>, String> {
+fn first_length_delimited_field(data: &[u8], wanted_field: u32) -> Result<Option<&[u8]>, String> {
     let mut offset = 0;
     while offset < data.len() {
         let tag = read_varint(data, &mut offset)?;
@@ -401,7 +398,7 @@ fn first_length_delimited_field<'a>(
     Ok(None)
 }
 
-fn length_delimited_fields<'a>(data: &'a [u8], wanted_field: u32) -> Result<Vec<&'a [u8]>, String> {
+fn length_delimited_fields(data: &[u8], wanted_field: u32) -> Result<Vec<&[u8]>, String> {
     let mut fields = Vec::new();
     let mut offset = 0;
     while offset < data.len() {

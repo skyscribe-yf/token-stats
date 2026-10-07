@@ -40,14 +40,13 @@ fn resolve_xunfei_sso_session_inner(env_key: &str, file_name: &str) -> Option<St
         .join("token-stats")
         .join(file_name);
 
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(session) = config.get("ssoSessionId").and_then(|v| v.as_str()) {
-                let trimmed = session.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
+    if let Ok(content) = std::fs::read_to_string(&config_path)
+        && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+        && let Some(session) = config.get("ssoSessionId").and_then(|v| v.as_str())
+    {
+        let trimmed = session.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
 

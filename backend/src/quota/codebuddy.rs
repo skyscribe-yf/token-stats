@@ -14,19 +14,23 @@
 //! correctly. Re-login at www.codebuddy.cn, then run
 //! `scripts/refresh-codebuddy-cookies.sh`.
 
-use super::types::{CodeBuddyPackage, CodeBuddyQuotaData, CodeBuddyQuotaStatus};
 use super::deserialize_flexible_number;
+use super::types::{CodeBuddyPackage, CodeBuddyQuotaData, CodeBuddyQuotaStatus};
 use reqwest::Client;
 use serde::Deserialize;
 
 const BASE_URL: &str = "https://www.codebuddy.cn";
 
 fn get_session_cookie() -> Option<String> {
-    std::env::var("CODEBUDDY_SESSION_COOKIE").ok().filter(|s| !s.is_empty())
+    std::env::var("CODEBUDDY_SESSION_COOKIE")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 fn get_session_cookie_2() -> Option<String> {
-    std::env::var("CODEBUDDY_SESSION_COOKIE_2").ok().filter(|s| !s.is_empty())
+    std::env::var("CODEBUDDY_SESSION_COOKIE_2")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 fn unavailable(error: Option<String>) -> CodeBuddyQuotaStatus {
@@ -129,7 +133,11 @@ async fn post_meter<T: for<'de> Deserialize<'de>>(
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("HTTP {}: {}", status, super::truncate_error_body(&text)));
+        return Err(format!(
+            "HTTP {}: {}",
+            status,
+            super::truncate_error_body(&text)
+        ));
     }
 
     let envelope: MeterEnvelope<T> =
@@ -141,7 +149,9 @@ async fn post_meter<T: for<'de> Deserialize<'de>>(
             envelope.msg.unwrap_or_else(|| "Unknown error".to_string())
         ));
     }
-    envelope.data.ok_or_else(|| "No data in response".to_string())
+    envelope
+        .data
+        .ok_or_else(|| "No data in response".to_string())
 }
 
 /// Fetch CodeBuddy (codebuddy.cn) subscription / package quota.
@@ -183,7 +193,11 @@ pub async fn fetch_codebuddy_quota(client: &Client) -> CodeBuddyQuotaStatus {
     // Latest account entry per package (name / cycle info); resource is
     // best-effort — summary numbers still display when it fails.
     let accounts = match resource_res {
-        Ok(r) => r.response.and_then(|x| x.data).map(|d| d.accounts).unwrap_or_default(),
+        Ok(r) => r
+            .response
+            .and_then(|x| x.data)
+            .map(|d| d.accounts)
+            .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
     let latest_account = |package_code: &str| -> Option<&ResourceAccount> {
@@ -193,7 +207,10 @@ pub async fn fetch_codebuddy_quota(client: &Client) -> CodeBuddyQuotaStatus {
             .max_by_key(|a| a.deduction_end_time.unwrap_or(0))
     };
 
-    let subscription_code = summary.subscription_package_code.clone().unwrap_or_default();
+    let subscription_code = summary
+        .subscription_package_code
+        .clone()
+        .unwrap_or_default();
     let mut packages: Vec<CodeBuddyPackage> = summary
         .packages
         .into_iter()
@@ -217,9 +234,11 @@ pub async fn fetch_codebuddy_quota(client: &Client) -> CodeBuddyQuotaStatus {
 
     // Subscription package first, then by remaining credits desc.
     packages.sort_by(|a, b| {
-        b.is_subscription
-            .cmp(&a.is_subscription)
-            .then(b.remain.partial_cmp(&a.remain).unwrap_or(std::cmp::Ordering::Equal))
+        b.is_subscription.cmp(&a.is_subscription).then(
+            b.remain
+                .partial_cmp(&a.remain)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
     });
 
     CodeBuddyQuotaStatus {

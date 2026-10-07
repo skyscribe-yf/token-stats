@@ -362,31 +362,33 @@ pub fn rate_for(table: &RateTable, model: &str, record_time: &str) -> f64 {
 pub fn table_view(table: &RateTable) -> serde_json::Value {
     let mut models: Vec<&String> = table.keys().collect();
     models.sort();
-    serde_json::json!(models
-        .into_iter()
-        .map(|model| {
-            let segments = table
-                .get(model)
-                .map(|segments| {
-                    segments
-                        .iter()
-                        .map(|s| {
-                            serde_json::json!({
-                                "effective_from": s.effective_from,
-                                "rate": s.rate,
-                                "windows": s.windows.iter().map(|w| serde_json::json!({
-                                    "start": format_clock(w.start_min),
-                                    "end": format_clock(w.end_min),
-                                    "rate": w.rate,
-                                })).collect::<Vec<_>>(),
+    serde_json::json!(
+        models
+            .into_iter()
+            .map(|model| {
+                let segments = table
+                    .get(model)
+                    .map(|segments| {
+                        segments
+                            .iter()
+                            .map(|s| {
+                                serde_json::json!({
+                                    "effective_from": s.effective_from,
+                                    "rate": s.rate,
+                                    "windows": s.windows.iter().map(|w| serde_json::json!({
+                                        "start": format_clock(w.start_min),
+                                        "end": format_clock(w.end_min),
+                                        "rate": w.rate,
+                                    })).collect::<Vec<_>>(),
+                                })
                             })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            (model.clone(), segments)
-        })
-        .collect::<serde_json::Value>())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                (model.clone(), segments)
+            })
+            .collect::<serde_json::Value>()
+    )
 }
 
 /// TTL-guarded refresh of the entitlement rates, driven from the background
@@ -451,7 +453,10 @@ mod tests {
         assert_eq!(glm.windows.len(), 1);
         assert_eq!(glm.windows[0].start, "20:00");
         // Unrated models come back as 1.0 so a revoked discount is recorded.
-        let flash = observed.iter().find(|o| o.model == "deepseek-v4-flash").unwrap();
+        let flash = observed
+            .iter()
+            .find(|o| o.model == "deepseek-v4-flash")
+            .unwrap();
         assert_eq!(flash.rate, 1.0);
     }
 
@@ -477,7 +482,10 @@ mod tests {
             0.35,
             "21:00 CST falls in the night window"
         );
-        assert_eq!(rate_for(&table, "unlisted-model", "2026-09-21T13:00:00Z"), 1.0);
+        assert_eq!(
+            rate_for(&table, "unlisted-model", "2026-09-21T13:00:00Z"),
+            1.0
+        );
 
         // Re-observing identical rates changes nothing.
         assert!(apply_observation(&path, &observed, at("2026-09-21T04:00:00Z")).is_none());
