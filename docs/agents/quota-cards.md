@@ -12,7 +12,7 @@
 | Xiaomi MiMo | MiMo token 计划 API | `XIAOMI_MIMO_SERVICE_TOKEN` + `XIAOMI_MIMO_USER_ID` |
 | Command Code | `https://api.commandcode.ai`（`/alpha/billing/subscriptions`、`/alpha/billing/credits`、`/alpha/usage/summary`）；主账号从 `~/.commandcode/auth.json` 的 `apiKey`（Bearer），第二账号（EX）从 `auth*.json`（如 `auth_frank.json`）——与主账号 apiKey/userId 相同的重复 auth*.json 会被跳过（否则 EX 卡会显示主账号）；无 auth 文件时回退 `COMMANDCODE_SESSION_TOKEN` cookie（`/internal/*` 旧路由） | `COMMANDCODE_SESSION_TOKEN` 作为 `__Secure-commandcode_prod_.session_token` cookie（仅回退） |
 | CodeBuddy 套餐 | `www.codebuddy.cn` billing meter API（`POST /billing/meter/get-user-resource-summary` 取各套餐包周期总量/剩余，`POST /billing/meter/get-user-resource` 取套餐名与周期；即 `/profile/plans-usage` 页同源接口）。**必需 `session` + `session_2` 两个 cookie**（单 `session` 返回 401）；边缘 WAF 拒绝过旧 Chrome UA（Chrome/126 被拦、152 可过）。cookie 从 Chrome 提取：`scripts/extract-codebuddy-cookies.sh`（约 30 天过期需重取） | `CODEBUDDY_SESSION_COOKIE` + `CODEBUDDY_SESSION_COOKIE_2`（仅 cookie 值） |
-| Ollama Cloud | **主路径**：JSON API `POST https://ollama.com/api/me`（`Plan`、`CreatedAt`）+ `GET https://ollama.com/api/usage`（`limits.session.usage` / `limits.weekly.usage`，**分数**：`0.293` → 29.3%；响应内**无重置时间**）。鉴权用 `OLLAMA_API_KEY` —— **与 CPA `ollama-cloud` 上游同一 key**，因此卡片显示的必然是实际跑流量的那个账号。踩坑：本仓库 `reqwest` 没开 `http2` feature（HTTP/1.1），ollama 的 Go 服务对无 body 的 POST 返回 `411 Length Required`，必须显式带 `Content-Length: 0`。**回退**：`GET /settings/billing` + `/settings` 抓 HTML（`OLLAMA_AUTH_COOKIE`）——只认「Current Plan: X」和「Session usage / Weekly usage」标签，ollama 改版（`Included usage` + `free`/`pro` badge、单个 `Free usage` 表）后会退化为 `plan_name: "Unknown"` + 空用量；且 cookie 属于**哪个账号就显示哪个账号**（实测浏览器 cookie 指向免费号、API key 指向 Pro 号时会误导） | `OLLAMA_API_KEY`（主，`~/.bash_env`，deploy.sh 注入 drop-in）；`OLLAMA_AUTH_COOKIE`（仅回退） |
+| Ollama Cloud | **主路径**：JSON API `POST https://ollama.com/api/me`（`Plan`、`CreatedAt`）+ `GET https://ollama.com/api/usage`（原返回 `limits.session.usage` / `limits.weekly.usage`，**分数**：`0.293` → 29.3%；**2026-10-07 起该端点改为 `range/totals/buckets` 的按日请求数，`limits` 字段消失** —— session/weekly 百分比因此改从 `/settings` 页面抓取（与重置时间同一次请求，API 值若回归仍优先）；响应内始终**无重置时间**）。鉴权用 `OLLAMA_API_KEY` —— **与 CPA `ollama-cloud` 上游同一 key**，因此卡片显示的必然是实际跑流量的那个账号。踩坑：本仓库 `reqwest` 没开 `http2` feature（HTTP/1.1），ollama 的 Go 服务对无 body 的 POST 返回 `411 Length Required`，必须显式带 `Content-Length: 0`。**回退**：`GET /settings/billing` + `/settings` 抓 HTML（`OLLAMA_AUTH_COOKIE`）——只认「Current Plan: X」和「Session usage / Weekly usage」标签，ollama 改版（`Included usage` + `free`/`pro` badge、单个 `Free usage` 表）后会退化为 `plan_name: "Unknown"` + 空用量；且 cookie 属于**哪个账号就显示哪个账号**（实测浏览器 cookie 指向免费号、API key 指向 Pro 号时会误导） | `OLLAMA_API_KEY`（主，`~/.bash_env`，deploy.sh 注入 drop-in）；`OLLAMA_AUTH_COOKIE`（仅回退） |
 | Meituan LongCat | 美团 API | `MEITUAN_AUTH_COOKIE`（`passport_token_key`） |
 | Fenno / Fenno EX | `https://api.fenno.ai/api/v1/subscriptions/active` | `FENNO_AUTH_TOKEN` + `FENNO_REFRESH_TOKEN` 引导凭据管理器；轮换凭据持久化到 `FENNO_AUTH_STATE_PATH`（默认 `~/.config/token-stats/fenno-auth.json`）并自动刷新 |
 | Grok | `POST grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig`（gRPC-web protobuf）取 SuperGrok 周池百分比 + `grok-cli` 记录作诊断 | `GROK_XAI_API_KEY` / `~/.grok/auth.json`。config field 1 = 已用%；**proto3 省略默认 0.0**，周重置后缺该字段应视为 0% 而非错误（`quota/grok.rs`） |
@@ -26,13 +26,17 @@
 
 `quota/ollama.rs` 的卡片数据分三块：
 
-1. **百分比** —— `/api/usage` 直接给（`limits.session.usage` / `limits.weekly.usage`）。
+1. **百分比** —— 2026-10-07 前由 `/api/usage` 直接给（`limits.session.usage` /
+   `limits.weekly.usage`）；该端点改版后 `limits` 消失（改为按日请求数桶），改抓 `/settings`
+   页面渲染的「Session usage X% used / Weekly usage Y% used」（与重置时间同一次抓取；API 值
+   一旦恢复仍优先）。
 2. **重置时间** —— API 不给，**以网页端 `/settings` 为准**：每个用量区块各渲染一个
    `.local-time[data-time]`（如 `Resets in 2 days.` / 周预算耗尽时 Session 区块显示
    `Sessions resume in 2 days.`），代码按「Session usage / Weekly usage」标签切分区块、
    取各自区块内第一个 `.local-time`（`parse_web_reset_times`）。抓取需要
-   `OLLAMA_AUTH_COOKIE` 且指向与 API key 相同的账号（页面模型明细 `models[].request_count`
-   与 API 完全一致，可用来核对）。**为什么不能本地推算**：weekly 窗口是**日历对齐**的
+   `OLLAMA_AUTH_COOKIE` 且指向与 API key 相同的账号（旧 API 的 `limits.*.models`
+   明细与页面模型列表一致，可用作核对；该明细已随 2026-10-07 改版消失，按 `request_count`
+   反推窗口起点的 bootstrap 也随之失效，只剩网页回锚与观测翻转两条路径）。**为什么不能本地推算**：weekly 窗口是**日历对齐**的
    （2026-09-25 实测页面给出 `2026-09-28T00:00:00Z` = 周一 00:00 UTC），不是「首个请求锚定
    的 7d 网格」——旧实现从计量记录回数 `request_count` 反推相位，bootstrap 偏早（非 CPA
    流量计入 API 计数）+ 本周用量顶格 100% 使「用量骤降」翻转检测永不触发，错误相位持续

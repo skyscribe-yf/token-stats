@@ -5,10 +5,13 @@
 //! uses, so the plan/limits always describe the account that serves the
 //! metered traffic.
 //!
-//! The JSON API reports session/weekly usage as **fractions of a dollar
-//! budget** (`limits.session.usage = 0.119` → 11.9% of a $10 session window,
-//! `limits.weekly.usage` → a $60 weekly window) but carries **no reset
-//! timestamps**. The web UI (`/settings`) does — one `.local-time[data-time]`
+//! The JSON API **used to** report session/weekly usage as fractions of a
+//! dollar budget (`limits.session.usage = 0.119` → 11.9% of a $10 session
+//! window, `limits.weekly.usage` → a $60 weekly window) but never carried
+//! reset timestamps; since 2026-10-07 it returns per-day request buckets
+//! instead, so the percentages come from the settings page too (API values win
+//! whenever they are present).
+//! The web UI (`/settings`) has both — one `.local-time[data-time]`
 //! element per meter — and is the authoritative source: the weekly window is
 //! calendar-aligned (observed: Monday 00:00 UTC), *not* a per-account 7-day
 //! grid anchored on the first request, so deriving it from request history
@@ -537,28 +540,31 @@ async fn fetch_via_api(
     api_key: &str,
     records: &[TokenRecord],
 ) -> Result<OllamaQuotaData, String> {
-    let (me_result, usage_result, web) = tokio::join!(
+    let (me_result, usage_result, (web, web_usage)) = tokio::join!(
         fetch_api_json(client, api_key, reqwest::Method::POST, "/api/me"),
         fetch_api_json(client, api_key, reqwest::Method::GET, "/api/usage"),
-        web_reset_times(client),
+        web_settings(client),
     );
     let me = me_result?;
     let usage = usage_result?;
-    parse_api_quota(&me, &usage, records, &web, Utc::now())
+    parse_api_quota(&me, &usage, records, &web, &web_usage, Utc::now())
 }
 
-/// Best-effort scrape of the web UI's reset timestamps. Requires
-/// `OLLAMA_AUTH_COOKIE`; an empty result makes every consumer fall back to the
-/// local phase model.
-async fn web_reset_times(client: &Client) -> WebResetTimes {
+/// Best-effort scrape of `/settings`: reset timestamps **and** the usage
+/// percentages next to each meter. Requires `OLLAMA_AUTH_COOKIE`; an empty
+/// result makes every consumer fall back to the local phase model.
+async fn web_settings(client: &Client) -> (WebResetTimes, Vec<OllamaUsageEntry>) {
     let Some(cookie) = get_auth_cookie() else {
-        return WebResetTimes::default();
+        return (WebResetTimes::default(), Vec::new());
     };
     match fetch_page(client, &cookie, "/settings").await {
-        Ok(html) => parse_web_reset_times(&html),
+        Ok(html) => (parse_web_reset_times(&html), parse_usage_from_html(&html)),
         Err(e) => {
-            warn!("Ollama /settings scrape failed ({e}); reset times fall back to the local phase");
-            WebResetTimes::default()
+            warn!(
+                "Ollama /settings scrape failed ({e}); reset times and percentages fall back \
+                 to the local phase"
+            );
+            (WebResetTimes::default(), Vec::new())
         }
     }
 }
@@ -592,12 +598,15 @@ async fn fetch_api_json(
 /// Build the card payload from `/api/me` + `/api/usage` responses.
 ///
 /// `web` carries the reset timestamps scraped from `/settings`; the phase
-/// model only fills windows the page could not date.
+/// model only fills windows the page could not date. `web_usage` carries that
+/// page's percentages, used when the API reports no `limits` (its shape as of
+/// 2026-10-07).
 fn parse_api_quota(
     me_json: &str,
     usage_json: &str,
     records: &[TokenRecord],
     web: &WebResetTimes,
+    web_usage: &[OllamaUsageEntry],
     now: DateTime<Utc>,
 ) -> Result<OllamaQuotaData, String> {
     let me: ApiMe = serde_json::from_str(me_json).map_err(|e| format!("Bad /api/me: {e}"))?;
@@ -634,10 +643,14 @@ fn parse_api_quota(
             web.weekly.map(|w| w.at).or(windows.weekly_reset),
         ),
     ] {
-        if let Some(pct) = limit.and_then(|l| l.usage) {
+        let pct = limit
+            .and_then(|l| l.usage)
+            .map(|u| u * 100.0)
+            .or_else(|| web_percentage(web_usage, label));
+        if let Some(pct) = pct {
             usage_entries.push(OllamaUsageEntry {
                 usage_type: label.to_string(),
-                percentage: pct * 100.0,
+                percentage: pct,
                 reset_time: reset.map(|t| t.to_rfc3339_opts(SecondsFormat::Secs, true)),
             });
         }
@@ -661,6 +674,14 @@ fn parse_api_quota(
         weekly_cost_cny: weekly_usage.as_ref().map(|u| u.cost_cny),
         weekly_calls: weekly_usage.as_ref().map(|u| u.calls),
     })
+}
+
+/// Percentage the settings page rendered for `usage_type`, when scraped.
+fn web_percentage(entries: &[OllamaUsageEntry], usage_type: &str) -> Option<f64> {
+    entries
+        .iter()
+        .find(|e| e.usage_type == usage_type)
+        .map(|e| e.percentage)
 }
 
 // ─── Usage windows (session 5h / weekly 7d) ─────────────────────────────────
@@ -1276,6 +1297,82 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_api_quota_falls_back_to_settings_page_percentages() {
+        with_state_path("api-web-fallback", || {
+            // 2026-10-07: `/api/usage` stopped returning `limits` (now per-day
+            // request buckets). The settings page still renders the meters, so
+            // the card must use those percentages instead of dropping them.
+            let usage =
+                r#"{"range":"7d","scope":"self","totals":{"request_count":14671},"buckets":[]}"#;
+            let web = WebResetTimes {
+                session: Some(WebWindowReset {
+                    at: ts("2026-10-07T03:00:00Z"),
+                    is_resume: false,
+                }),
+                weekly: Some(WebWindowReset {
+                    at: ts("2026-10-12T00:00:00Z"),
+                    is_resume: false,
+                }),
+            };
+            let web_usage = vec![
+                OllamaUsageEntry {
+                    usage_type: "Session".into(),
+                    percentage: 3.1,
+                    reset_time: None,
+                },
+                OllamaUsageEntry {
+                    usage_type: "Weekly".into(),
+                    percentage: 18.8,
+                    reset_time: None,
+                },
+            ];
+
+            let data = parse_api_quota(
+                r#"{"Plan":"pro","CreatedAt":"2026-06-26T00:06:33.377399Z"}"#,
+                usage,
+                &[],
+                &web,
+                &web_usage,
+                ts("2026-10-07T02:40:00Z"),
+            )
+            .unwrap();
+
+            assert_eq!(data.usage_entries.len(), 2);
+            assert_eq!(data.usage_entries[0].usage_type, "Session");
+            assert!((data.usage_entries[0].percentage - 3.1).abs() < 0.001);
+            assert_eq!(
+                data.usage_entries[0].reset_time.as_deref(),
+                Some("2026-10-07T03:00:00Z")
+            );
+            assert_eq!(data.usage_entries[1].usage_type, "Weekly");
+            assert!((data.usage_entries[1].percentage - 18.8).abs() < 0.001);
+        });
+    }
+
+    #[test]
+    fn test_parse_api_quota_prefers_api_percentages() {
+        with_state_path("api-web-priority", || {
+            // When `limits` does come back, its fractions win over the page.
+            let web_usage = vec![OllamaUsageEntry {
+                usage_type: "Session".into(),
+                percentage: 3.1,
+                reset_time: None,
+            }];
+            let data = parse_api_quota(
+                r#"{"Plan":"pro"}"#,
+                r#"{"limits":{"session":{"usage":0.293}}}"#,
+                &[],
+                &WebResetTimes::default(),
+                &web_usage,
+                ts("2026-10-07T02:40:00Z"),
+            )
+            .unwrap();
+            assert_eq!(data.usage_entries.len(), 1);
+            assert!((data.usage_entries[0].percentage - 29.3).abs() < 0.001);
+        });
+    }
+
+    #[test]
     fn test_extract_text_after() {
         let html = r#"<html><body>
             <div>Current Plan: Pro</div>
@@ -1412,6 +1509,7 @@ mod tests {
             usage_json,
             records,
             &WebResetTimes::default(),
+            &[],
             now,
         )
     }
@@ -1786,6 +1884,7 @@ mod tests {
                 usage,
                 &[record_at("2026-09-21T05:00:00Z", 10)],
                 &web,
+                &[],
                 ts("2026-09-25T06:35:00Z"),
             )
             .unwrap();
