@@ -199,7 +199,15 @@ pub struct SpecialPricing {
     /// normal per-model peak behaviour, so a past holiday never rewrites history
     /// and an unfinished one only affects the days it actually covers.
     #[serde(default)]
-    pub dim_offpeak_windows: Vec<DimOffpeakWindow>,
+    pub dim_offpeak_windows: Vec<OffPeakWindow>,
+    /// ZCode BigModel 双节「取消高峰期」窗口（官方 2026-09-25 ~ 10-07）。
+    ///
+    /// 官方公告：那 13 天套餐全天按非高峰倍率（0.5×）消耗，工作日 14:00–18:00 不再
+    /// 按 1× 计。窗口内的 zcode / glm-acp 记录直接把 `zcode_peak_hours_cst` 抑制掉。
+    /// 半开区间语义与 `dim_offpeak_windows` 相同；`to` **故意写死**——留空会让窗口
+    /// 一直生效，之后每个忙时段少算一半且不报错。
+    #[serde(default)]
+    pub zcode_peak_suspend_windows: Vec<OffPeakWindow>,
     /// ZCode BigModel GLM Coding Plan: CNY price per 积分 (credit).
     /// 0 = disabled (zcode records fall through to model-price pricing).
     /// 实付分摊口径（2026-09-12）：3 个月实付 ¥188.04 = 13 周 × 10000 积分 =
@@ -361,14 +369,17 @@ pub struct XunfeiOffPeakConfig {
     pub holidays: Vec<String>,
 }
 
-/// A platform-wide off-peak window for the DimAgent source (`source == "dim"`).
+/// A window during which the platform suspends busy-hour (高峰/忙时) pricing.
+///
+/// Shared by `dim_offpeak_windows` (DimAgent holiday 闲时, whole catalogue) and
+/// `zcode_peak_suspend_windows` (BigModel 双节「取消高峰期」, zcode + glm-acp).
 ///
 /// Half-open `[from, to)`. `YYYY-MM-DD` is read as 00:00 China Standard Time so a
 /// whole-holiday entry can be written without an explicit offset; RFC3339 pins the
 /// instant for the sub-day cutoffs the platform actually announces (see
 /// `pricing.toml` for the measured National Day switchover).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DimOffpeakWindow {
+pub struct OffPeakWindow {
     pub from: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
@@ -525,6 +536,7 @@ impl Default for PricingConfig {
                 stepfun_plan_divisor: default_stepfun_plan_divisor(),
                 xunfei_off_peak: None,
                 dim_offpeak_windows: Vec::new(),
+                zcode_peak_suspend_windows: Vec::new(),
                 zcode_cny_per_credit: 0.0,
                 zcode_credit_rates: HashMap::new(),
                 zcode_peak_hours_cst: default_zcode_peak_hours(),
@@ -882,7 +894,7 @@ fn parse_rate_effective_from(s: &str) -> Option<DateTime<FixedOffset>> {
 
 /// Same accepted formats as [`parse_rate_effective_from`]: RFC3339 verbatim, or a
 /// bare `YYYY-MM-DD` read as midnight China Standard Time. Used for the bounds of
-/// [`DimOffpeakWindow`], which are calendar-day-ish instants rather than model
+/// [`OffPeakWindow`], which are calendar-day-ish instants rather than model
 /// price cutoffs.
 fn parse_cst_or_rfc3339(s: &str) -> Option<DateTime<FixedOffset>> {
     parse_rate_effective_from(s)
@@ -895,7 +907,7 @@ fn parse_cst_or_rfc3339(s: &str) -> Option<DateTime<FixedOffset>> {
 /// A window with no `to` is open-ended, so a holiday still in progress keeps
 /// covering new records without touching anything after it.
 pub(super) fn in_offpeak_window(
-    windows: &[DimOffpeakWindow],
+    windows: &[OffPeakWindow],
     record_time: Option<&DateTime<FixedOffset>>,
 ) -> bool {
     let Some(record_time) = record_time else {
@@ -1874,7 +1886,20 @@ fn compute_plan_credit_cost(
             .zcode_night_free_models
             .iter()
             .any(|m| *m == model_key);
-        let date = cst.format("%Y-%m-%d").to_string();
+        // 窗口跨午夜（23:00–次日 09:00），午夜之后那半段属于**前一天开始的那一晚**，
+        // 故日期边界按窗口起始日判定：落在以 0 起始的后半段时退回一天。否则活动末日
+        // 只有 23:00–24:00 免扣，次日 00:00–09:00 会被误判成「活动已结束」而照常扣积分
+        // （实测 2026-10-08 00:00–09:00 平台仍 free——配额接口 5h 窗口计数器为 0，
+        // 而本函数当时已在收费）。
+        let after_midnight = special
+            .zcode_night_free_hours_cst
+            .iter()
+            .any(|[s, e]| *s == 0 && hour < *e);
+        let mut window_day = cst.date_naive();
+        if after_midnight {
+            window_day = window_day.pred_opt().unwrap_or(window_day);
+        }
+        let date = window_day.format("%Y-%m-%d").to_string();
         if promo_live && model_eligible && date.as_str() >= from && date.as_str() <= until {
             let in_free = special.zcode_night_free_hours_cst.iter().any(|[s, e]| {
                 if s <= e {
@@ -1904,7 +1929,9 @@ fn compute_plan_credit_cost(
             | chrono::Weekday::Thu
             | chrono::Weekday::Fri
     );
+    // 双节「取消高峰期」：窗口内全天按非高峰倍率，工作日 14:00–18:00 不再算 1×。
     let peak = is_weekday
+        && !in_offpeak_window(&special.zcode_peak_suspend_windows, Some(&rt))
         && special
             .zcode_peak_hours_cst
             .iter()
@@ -3746,6 +3773,27 @@ cache_write_cny = 0.0
             after_cost
         );
 
+        // 末日的「当晚」跨午夜：00:00–09:00 那半段仍属末日那一晚，必须继续免扣；
+        // 09:00 之后才恢复 0.5×。10-08 01:30 CST = 10-07 17:30 UTC（日期挂在 last_day 上）。
+        let mut tail = record.clone();
+        tail.time = format!("{last_day}T17:30:00Z");
+        assert!(
+            (display_cost(&tail) - 0.0).abs() < 1e-9,
+            "zcode bigmodel night tail ({} 01:30 CST) should still be free",
+            day_after
+        );
+
+        let mut tail_over = record.clone();
+        tail_over.time = format!("{day_after}T01:30:00Z"); // 09:30 CST，窗口已过
+        let tail_over_cost = display_cost(&tail_over);
+        assert!(
+            (tail_over_cost - expected_after).abs() < 1e-9,
+            "zcode bigmodel night tail after 09:00 CST ({}): expected {}, got {}",
+            day_after,
+            expected_after,
+            tail_over_cost
+        );
+
         // 夜间畅用仅限 GLM-5.3-Flash：GLM-5.3 在同一免扣窗口内（活动生效后）
         // 照常按波谷 0.5× 扣积分，系数 6.9/1.7/24。
         let mut nonflash = make_record("zcode", "bigmodel", "GLM-5.3", 0, 0.0);
@@ -4174,13 +4222,52 @@ cache_write_cny = 0.0
     }
 
     #[test]
+    fn zcode_peak_suspended_during_dual_festival_window() {
+        let _guard = pricing_test_guard();
+        let prev_env = std::env::var("PRICING_CONFIG").ok();
+        let _tmp = load_temp_config(include_bytes!("../pricing.toml"));
+
+        let per_credit = get_config().special.zcode_cny_per_credit;
+        assert!(per_credit > 0.0, "zcode_cny_per_credit must be configured");
+        let credits = (1_000_000.0 * 2.3 + 2_000_000.0 * 0.56 + 500_000.0 * 8.0) / 10_000.0;
+        let at = |time: &str| {
+            let mut r = make_record("zcode", "bigmodel", "GLM-5.3-Flash", 0, 0.0);
+            r.input_tokens = 1_000_000;
+            r.output_tokens = 500_000;
+            r.cache_read_tokens = 2_000_000;
+            r.cache_write_tokens = 0;
+            r.time = time.to_string();
+            display_cost(&r)
+        };
+
+        // 2026-10-06（周二）15:00 CST = 07:00 UTC：本属工作日高峰 14–18，
+        // 但双节取消高峰 → 0.5×。
+        let during = at("2026-10-06T07:00:00Z");
+        let expected = credits * 0.5 * per_credit;
+        assert!(
+            (during - expected).abs() < 1e-9,
+            "dual-festival peak suspension should bill 0.5×: expected {expected}, got {during}"
+        );
+
+        // 窗口结束后同一钟点（2026-10-08 周四 15:00 CST）回到 1×。
+        let after = at("2026-10-08T07:00:00Z");
+        let expected_peak = credits * per_credit;
+        assert!(
+            (after - expected_peak).abs() < 1e-9,
+            "peak after the suspension should bill 1×: expected {expected_peak}, got {after}"
+        );
+
+        restore_pricing_env(prev_env);
+    }
+
+    #[test]
     fn dim_offpeak_window_bounds_accept_dates_and_rfc3339() {
         let windows = vec![
-            DimOffpeakWindow {
+            OffPeakWindow {
                 from: "2026-09-30T11:21:00+08:00".to_string(),
                 to: Some("2026-10-08".to_string()),
             },
-            DimOffpeakWindow {
+            OffPeakWindow {
                 from: "2027-02-15".to_string(),
                 to: None,
             },
