@@ -14,11 +14,13 @@ export const DEFAULT_HIDDEN_QUOTA_CARD_KEYS = [
   "opencode-ex",
   "fenno",
   "fenno-ex",
+  "kimi",
+  "meituan",
 ] as const;
 
 /** Bump when DEFAULT_HIDDEN_QUOTA_CARD_KEYS gains entries that existing
  *  browsers should pick up once. A later explicit unhide is preserved. */
-export const HIDDEN_QUOTA_CARDS_VERSION = 1;
+export const HIDDEN_QUOTA_CARDS_VERSION = 2;
 
 export const QUOTA_CARD_DEFS: QuotaCardDef[] = [
   { key: "xunfei", label: "讯飞编程套餐", matches: (id) => id.startsWith("quota-xunfei-") },
