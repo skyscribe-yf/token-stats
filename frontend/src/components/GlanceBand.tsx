@@ -14,6 +14,7 @@ interface GlanceBandProps {
   xunfei: XunfeiMultiStatus | null;
   ainaibaCredit: AinaibaCreditResponse | null;
   quotaLoading: boolean;
+  hiddenCards: Set<string>;
   onChipClick: (cardId: string) => void;
 }
 
@@ -23,6 +24,7 @@ export const GlanceBand = memo(function GlanceBand({
   xunfei,
   ainaibaCredit,
   quotaLoading,
+  hiddenCards,
   onChipClick,
 }: GlanceBandProps) {
   return (
@@ -32,6 +34,7 @@ export const GlanceBand = memo(function GlanceBand({
         xunfei={xunfei}
         ainaibaCredit={ainaibaCredit}
         loading={quotaLoading}
+        hiddenCards={hiddenCards}
         onChipClick={onChipClick}
       />
       <KpiStrip overall={overall} />

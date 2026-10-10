@@ -3,7 +3,7 @@ import type {
   XunfeiMultiStatus,
   AinaibaCreditResponse,
 } from "../api";
-import { zcodeWindowUsage } from "../lib/quotaCards";
+import { isQuotaCardHidden, zcodeWindowUsage } from "../lib/quotaCards";
 
 interface QuotaChip {
   id: string;
@@ -19,6 +19,7 @@ interface QuotaChipsProps {
   xunfei: XunfeiMultiStatus | null;
   ainaibaCredit: AinaibaCreditResponse | null;
   loading: boolean;
+  hiddenCards: Set<string>;
   onChipClick: (cardId: string) => void;
 }
 
@@ -313,9 +314,12 @@ export function QuotaChips({
   xunfei,
   ainaibaCredit,
   loading,
+  hiddenCards,
   onChipClick,
 }: QuotaChipsProps) {
-  const chips = buildQuotaChips(quota, xunfei, ainaibaCredit);
+  const chips = buildQuotaChips(quota, xunfei, ainaibaCredit).filter(
+    (chip) => !isQuotaCardHidden(hiddenCards, chip.cardId)
+  );
 
   if (loading && chips.length === 0) {
     return (

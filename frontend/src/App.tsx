@@ -49,7 +49,11 @@ import {
   getDisplayModelOptions,
   reconcileSelectedModels,
 } from "./lib/pivotTable";
-import { zcodeWindowUsage } from "./lib/quotaCards";
+import {
+  HIDDEN_QUOTA_CARDS_VERSION,
+  seedHiddenQuotaCards,
+  zcodeWindowUsage,
+} from "./lib/quotaCards";
 import {
   buildCsvFilterParam,
   isEmptyAppliedSelection,
@@ -103,6 +107,7 @@ const LS_ACTIVE_SECTION = "token-stats:active-section";
 const LS_VENDOR_METRIC = "token-stats:vendor-breakdown-metric";
 const LS_ALERT_DISMISS = "token-stats:alert-dismiss";
 const LS_HIDDEN_QUOTA_CARDS = "token-stats:hidden-quota-cards";
+const LS_HIDDEN_QUOTA_CARDS_VERSION = "token-stats:hidden-quota-cards-version";
 
 const DISMISS_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -128,16 +133,22 @@ function readDismissedAlerts(): Map<string, number> {
 
 
 
-/** Read hidden subscription card keys from localStorage. */
+/** Read hidden subscription card keys from localStorage, seeding defaults. */
 function readHiddenQuotaCards(): Set<string> {
   try {
     const raw = localStorage.getItem(LS_HIDDEN_QUOTA_CARDS);
-    if (!raw) return new Set();
+    const version = Number(
+      localStorage.getItem(LS_HIDDEN_QUOTA_CARDS_VERSION) || "0"
+    );
+    if (!raw) return seedHiddenQuotaCards(null, version);
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return new Set();
-    return new Set(arr.filter((k) => typeof k === "string"));
+    if (!Array.isArray(arr)) return seedHiddenQuotaCards(null, version);
+    return seedHiddenQuotaCards(
+      arr.filter((k) => typeof k === "string"),
+      version
+    );
   } catch {
-    return new Set();
+    return seedHiddenQuotaCards(null, 0);
   }
 }
 
@@ -332,12 +343,18 @@ export default function App() {
   const [hiddenQuotaCards, setHiddenQuotaCards] = useState<Set<string>>(
     () => readHiddenQuotaCards()
   );
-  // Persist hidden subscription cards to localStorage
+  // Persist hidden subscription cards to localStorage. The version is written
+  // with the set so a one-time default migration is not reapplied after the
+  // user opts a card back in.
   useEffect(() => {
     try {
       localStorage.setItem(
         LS_HIDDEN_QUOTA_CARDS,
         JSON.stringify([...hiddenQuotaCards])
+      );
+      localStorage.setItem(
+        LS_HIDDEN_QUOTA_CARDS_VERSION,
+        String(HIDDEN_QUOTA_CARDS_VERSION)
       );
     } catch {
       /* ignore */
@@ -839,10 +856,14 @@ export default function App() {
         }
       }
     };
-    checkOpenCode(quota?.opencode_go, "primary");
-    checkOpenCode(quota?.opencode_go_ex, "ex");
+    if (!hiddenQuotaCards.has("opencode")) {
+      checkOpenCode(quota?.opencode_go, "primary");
+    }
+    if (!hiddenQuotaCards.has("opencode-ex")) {
+      checkOpenCode(quota?.opencode_go_ex, "ex");
+    }
 
-    if (xunfei?.accounts) {
+    if (!hiddenQuotaCards.has("xunfei") && xunfei?.accounts) {
       for (const acc of xunfei.accounts) {
         const suffix = acc.label === "ex" ? " (EX)" : "";
         if (acc.available && acc.data.length > 0) {
@@ -970,7 +991,7 @@ export default function App() {
     }
 
     return alerts.filter((a) => !dismissedAlerts.has(a.id) && !dismissedPersisted.has(a.id));
-  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts, dismissedPersisted]);
+  }, [quota, xunfei, ainaibaCredit, subscriptionSettings, dismissedAlerts, dismissedPersisted, hiddenQuotaCards]);
 
   const alertItems = computedAlerts;
 
@@ -1313,6 +1334,7 @@ export default function App() {
                 quotaLoading={
                   quotaLoading || xunfeiLoading || ainaibaCreditLoading
                 }
+                hiddenCards={hiddenQuotaCards}
                 onChipClick={handleQuotaChipClick}
               />
 
